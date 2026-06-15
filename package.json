@@ -30,6 +30,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "prepare": "pnpm build",
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
