@@ -27,6 +27,7 @@ import {
     BlobBuilder,
     BLOB_READER_VERSION,
     MacroOp,
+    SystemAction,
     type BehaviorRecord,
     type ComboRecord,
     type ConditionalRecord,
@@ -280,6 +281,15 @@ function lowerAction(
         case 'caps_word':
             // Zero-field: firmware auto-shifts letters until a word boundary.
             return rec({ type: BehaviorType.CapsWord })
+        case 'reset':
+        case 'bootloader':
+        case 'soft_off':
+            // Device action fired on press via the engine's system callback;
+            // the action code rides in `tap`.
+            return rec({
+                type: BehaviorType.System,
+                tap: SystemAction[action.type],
+            })
         default:
             diag.error(
                 `action "${action.type}" not yet supported by the remappr ` +

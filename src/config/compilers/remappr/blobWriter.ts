@@ -48,6 +48,14 @@ export const BehaviorType = {
     KeyToggle: 13,
     KeyRepeat: 14,
     CapsWord: 15,
+    System: 16,
+} as const
+
+// enum remappr_system_action (behavior_table.h) — carried in BH_SYSTEM `tap`.
+export const SystemAction = {
+    reset: 0,
+    bootloader: 1,
+    soft_off: 2,
 } as const
 
 // enum remappr_macro_op (behavior_table.h §43.5).

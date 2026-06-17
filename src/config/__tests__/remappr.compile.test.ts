@@ -266,6 +266,40 @@ const TRILAYER = `{
     ]
 }`
 
+// System behaviors (§44.3): reset / bootloader / soft_off lower to BH_SYSTEM
+// (type 16) with the action code in `tap` (0/1/2).
+const SYSTEM = `{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Sys", "target": "zmk" },
+    "keyboard": { "id": "sys", "name": "Sys",
+        "keys": [{"x":0,"y":0},{"x":1,"y":0},{"x":2,"y":0}] },
+    "layers": [{ "name": "base", "bindings": [
+        { "type": "reset" }, { "type": "bootloader" }, { "type": "soft_off" }
+    ] }]
+}`
+
+describe('remappr system behaviors (BH_SYSTEM)', () => {
+    it('lowers reset/bootloader/soft_off to type-16 records with action codes', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(SYSTEM),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        const recAt = (i: number) => beh[0] + 2 + i * 16
+        const typeOf = (i: number) => b[recAt(i)]
+        const tapOf = (i: number) => u16(b, recAt(i) + 4)
+
+        expect(u16(b, beh[0])).toBe(3) // three distinct records
+        expect(typeOf(0)).toBe(16) // System
+        expect(tapOf(0)).toBe(0) // reset
+        expect(typeOf(1)).toBe(16)
+        expect(tapOf(1)).toBe(1) // bootloader
+        expect(typeOf(2)).toBe(16)
+        expect(tapOf(2)).toBe(2) // soft_off
+    })
+})
+
 describe('remappr conditional layers (TBL_CONDITIONAL)', () => {
     it('emits a conditional table with resolved layer indices', () => {
         const { files, diagnostics } = getCompiler('remappr').compile(
