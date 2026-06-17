@@ -26,10 +26,14 @@ import {
     BehaviorType,
     BlobBuilder,
     BLOB_READER_VERSION,
+    LightingActionCode,
+    LightingTargetCode,
     MacroOp,
     MouseButtonCode,
     MouseDirCode,
     MouseOp,
+    OUTPUT_NO_PROFILE,
+    OutputActionCode,
     SystemAction,
     type BehaviorRecord,
     type ComboRecord,
@@ -312,6 +316,31 @@ function lowerAction(
                 type: BehaviorType.Mouse,
                 tap: MouseOp.scroll,
                 hold: MouseDirCode[action.direction],
+            })
+        case 'output':
+            // action in `tap`, BLE profile in `hold` (0xFF = unspecified).
+            return rec({
+                type: BehaviorType.Output,
+                tap: OutputActionCode[action.action],
+                hold: action.profile ?? OUTPUT_NO_PROFILE,
+            })
+        case 'lighting':
+            // action in `tap`, target in `hold`; COLOR packs hue/sat/val and
+            // SET packs the level into the spare term/quick/prior slots.
+            return rec({
+                type: BehaviorType.Lighting,
+                tap: LightingActionCode[action.action],
+                hold: LightingTargetCode[action.target],
+                tappingTermMs:
+                    action.action === 'color' ? (action.hue ?? 0) : 0,
+                quickTapMs:
+                    action.action === 'color' ? (action.saturation ?? 0) : 0,
+                requirePriorIdleMs:
+                    action.action === 'color'
+                        ? (action.brightness ?? 0)
+                        : action.action === 'set'
+                          ? (action.level ?? 0)
+                          : 0,
             })
         default:
             diag.error(

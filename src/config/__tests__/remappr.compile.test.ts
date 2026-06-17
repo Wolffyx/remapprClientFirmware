@@ -341,6 +341,76 @@ describe('remappr mouse behaviors (BH_MOUSE)', () => {
     })
 })
 
+// Output behaviors (§44.3): output lowers to BH_OUTPUT (type 18), action in
+// `tap`, BLE profile in `hold` (0xFF when unspecified).
+const OUTPUT = `{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Out", "target": "zmk" },
+    "keyboard": { "id": "out", "name": "Out",
+        "keys": [{"x":0,"y":0},{"x":1,"y":0}] },
+    "layers": [{ "name": "base", "bindings": [
+        { "type": "output", "action": "bluetooth", "profile": 1 },
+        { "type": "output", "action": "usb" }
+    ] }]
+}`
+
+describe('remappr output behaviors (BH_OUTPUT)', () => {
+    it('lowers action + profile to type-18 records', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(OUTPUT),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        const recAt = (i: number) => beh[0] + 2 + i * 16
+        expect(b[recAt(0)]).toBe(18) // Output
+        expect(u16(b, recAt(0) + 4)).toBe(1) // action = bluetooth
+        expect(u16(b, recAt(0) + 6)).toBe(1) // profile 1
+        expect(b[recAt(1)]).toBe(18)
+        expect(u16(b, recAt(1) + 4)).toBe(0) // action = usb
+        expect(u16(b, recAt(1) + 6)).toBe(0xff) // no profile
+    })
+})
+
+// Lighting behaviors (§44.3): lighting lowers to BH_LIGHTING (type 19), action
+// in `tap`, target in `hold`; COLOR packs hue/sat/val into term/quick/prior.
+const LIGHTING = `{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Lit", "target": "zmk" },
+    "keyboard": { "id": "lit", "name": "Lit",
+        "keys": [{"x":0,"y":0},{"x":1,"y":0}] },
+    "layers": [{ "name": "base", "bindings": [
+        { "type": "lighting", "target": "underglow", "action": "color",
+          "hue": 200, "saturation": 80, "brightness": 90 },
+        { "type": "lighting", "target": "backlight", "action": "toggle" }
+    ] }]
+}`
+
+describe('remappr lighting behaviors (BH_LIGHTING)', () => {
+    it('lowers action/target + packs HSV for color', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(LIGHTING),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        const recAt = (i: number) => beh[0] + 2 + i * 16
+        // color underglow: type 19, tap=14 (color), hold=0 (underglow),
+        // term=hue(200), quick=sat(80), prior=val(90).
+        expect(b[recAt(0)]).toBe(19)
+        expect(u16(b, recAt(0) + 4)).toBe(14) // color
+        expect(u16(b, recAt(0) + 6)).toBe(0) // underglow
+        expect(u16(b, recAt(0) + 8)).toBe(200) // hue
+        expect(u16(b, recAt(0) + 10)).toBe(80) // saturation
+        expect(u16(b, recAt(0) + 12)).toBe(90) // brightness
+        // backlight toggle: tap=0 (toggle), hold=1 (backlight), no params.
+        expect(b[recAt(1)]).toBe(19)
+        expect(u16(b, recAt(1) + 4)).toBe(0) // toggle
+        expect(u16(b, recAt(1) + 6)).toBe(1) // backlight
+        expect(u16(b, recAt(1) + 8)).toBe(0) // no hue
+    })
+})
+
 describe('remappr conditional layers (TBL_CONDITIONAL)', () => {
     it('emits a conditional table with resolved layer indices', () => {
         const { files, diagnostics } = getCompiler('remappr').compile(

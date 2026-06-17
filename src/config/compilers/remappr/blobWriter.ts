@@ -50,6 +50,8 @@ export const BehaviorType = {
     CapsWord: 15,
     System: 16,
     Mouse: 17,
+    Output: 18,
+    Lighting: 19,
 } as const
 
 // enum remappr_system_action (behavior_table.h) — carried in BH_SYSTEM `tap`.
@@ -81,6 +83,47 @@ export const MouseDirCode = {
     down: 1,
     left: 2,
     right: 3,
+} as const
+
+// enum remappr_output_action — carried in BH_OUTPUT `tap`.
+export const OutputActionCode = {
+    usb: 0,
+    bluetooth: 1,
+    toggle: 2,
+    none: 3,
+    bluetooth_clear: 4,
+    bluetooth_next: 5,
+    bluetooth_prev: 6,
+    bluetooth_disconnect: 7,
+} as const
+export const OUTPUT_NO_PROFILE = 0xff
+
+// enum remappr_lighting_target — carried in BH_LIGHTING `hold`.
+export const LightingTargetCode = {
+    underglow: 0,
+    backlight: 1,
+    per_key: 2,
+} as const
+
+// enum remappr_lighting_action — carried in BH_LIGHTING `tap` (order matches
+// the firmware enum and the canonical LightingAction).
+export const LightingActionCode = {
+    toggle: 0,
+    on: 1,
+    off: 2,
+    brightness_up: 3,
+    brightness_down: 4,
+    hue_up: 5,
+    hue_down: 6,
+    saturation_up: 7,
+    saturation_down: 8,
+    effect_next: 9,
+    effect_previous: 10,
+    speed_up: 11,
+    speed_down: 12,
+    cycle: 13,
+    color: 14,
+    set: 15,
 } as const
 
 // enum remappr_macro_op (behavior_table.h §43.5).
