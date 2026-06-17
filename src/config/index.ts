@@ -165,3 +165,4 @@ export {
 // Side-effect imports: each concrete compiler self-registers on load.
 import './compilers/zmk'
 import './compilers/qmk'
+import './compilers/remappr'
