@@ -300,6 +300,47 @@ describe('remappr system behaviors (BH_SYSTEM)', () => {
     })
 })
 
+// Mouse behaviors (§44.3): mouse_key/move/scroll lower to BH_MOUSE (type 17)
+// with the op in `tap` (key=0, move=1, scroll=2) and the button/direction code
+// in `hold`.
+const MOUSE = `{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Mou", "target": "zmk" },
+    "keyboard": { "id": "mou", "name": "Mou",
+        "keys": [{"x":0,"y":0},{"x":1,"y":0},{"x":2,"y":0}] },
+    "layers": [{ "name": "base", "bindings": [
+        { "type": "mouse_key", "button": "right" },
+        { "type": "mouse_move", "direction": "up" },
+        { "type": "mouse_scroll", "direction": "down" }
+    ] }]
+}`
+
+describe('remappr mouse behaviors (BH_MOUSE)', () => {
+    it('lowers key/move/scroll to type-17 records with op + code', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(MOUSE),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        const recAt = (i: number) => beh[0] + 2 + i * 16
+        const typeOf = (i: number) => b[recAt(i)]
+        const tapOf = (i: number) => u16(b, recAt(i) + 4)
+        const holdOf = (i: number) => u16(b, recAt(i) + 6)
+
+        expect(u16(b, beh[0])).toBe(3)
+        expect(typeOf(0)).toBe(17) // Mouse
+        expect(tapOf(0)).toBe(0) // op=key
+        expect(holdOf(0)).toBe(1) // right button
+        expect(typeOf(1)).toBe(17)
+        expect(tapOf(1)).toBe(1) // op=move
+        expect(holdOf(1)).toBe(0) // up
+        expect(typeOf(2)).toBe(17)
+        expect(tapOf(2)).toBe(2) // op=scroll
+        expect(holdOf(2)).toBe(1) // down
+    })
+})
+
 describe('remappr conditional layers (TBL_CONDITIONAL)', () => {
     it('emits a conditional table with resolved layer indices', () => {
         const { files, diagnostics } = getCompiler('remappr').compile(

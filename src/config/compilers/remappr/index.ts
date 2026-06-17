@@ -27,6 +27,9 @@ import {
     BlobBuilder,
     BLOB_READER_VERSION,
     MacroOp,
+    MouseButtonCode,
+    MouseDirCode,
+    MouseOp,
     SystemAction,
     type BehaviorRecord,
     type ComboRecord,
@@ -289,6 +292,26 @@ function lowerAction(
             return rec({
                 type: BehaviorType.System,
                 tap: SystemAction[action.type],
+            })
+        case 'mouse_key':
+            // op in `tap`, button code in `hold`; engine reports press/release
+            // edges, the app drives the mouse driver.
+            return rec({
+                type: BehaviorType.Mouse,
+                tap: MouseOp.key,
+                hold: MouseButtonCode[action.button],
+            })
+        case 'mouse_move':
+            return rec({
+                type: BehaviorType.Mouse,
+                tap: MouseOp.move,
+                hold: MouseDirCode[action.direction],
+            })
+        case 'mouse_scroll':
+            return rec({
+                type: BehaviorType.Mouse,
+                tap: MouseOp.scroll,
+                hold: MouseDirCode[action.direction],
             })
         default:
             diag.error(

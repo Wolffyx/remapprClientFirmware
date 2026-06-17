@@ -49,6 +49,7 @@ export const BehaviorType = {
     KeyRepeat: 14,
     CapsWord: 15,
     System: 16,
+    Mouse: 17,
 } as const
 
 // enum remappr_system_action (behavior_table.h) — carried in BH_SYSTEM `tap`.
@@ -56,6 +57,30 @@ export const SystemAction = {
     reset: 0,
     bootloader: 1,
     soft_off: 2,
+} as const
+
+// enum remappr_mouse_op (behavior_table.h) — carried in BH_MOUSE `tap`.
+export const MouseOp = {
+    key: 0,
+    move: 1,
+    scroll: 2,
+} as const
+
+// enum remappr_mouse_button — carried in BH_MOUSE `hold` for MouseOp.key.
+export const MouseButtonCode = {
+    left: 0,
+    right: 1,
+    middle: 2,
+    mb4: 3,
+    mb5: 4,
+} as const
+
+// enum remappr_mouse_dir — carried in BH_MOUSE `hold` for move / scroll.
+export const MouseDirCode = {
+    up: 0,
+    down: 1,
+    left: 2,
+    right: 3,
 } as const
 
 // enum remappr_macro_op (behavior_table.h §43.5).
