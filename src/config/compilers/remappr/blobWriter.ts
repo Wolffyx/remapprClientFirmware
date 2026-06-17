@@ -27,6 +27,7 @@ export const TableId = {
     Alias: 10,
     Security: 11,
     Subs: 12,
+    Conditional: 13,
 } as const
 
 // enum remappr_behavior_type (behavior_table.h).
@@ -107,6 +108,13 @@ export interface MacroStep {
 
 export interface MacroRecord {
     steps: MacroStep[]
+}
+
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_CONDITIONAL layout
+/** One conditional (tri-)layer: while every ifLayer is active, thenLayer is on. */
+export interface ConditionalRecord {
+    ifLayers: number[]
+    thenLayer: number
 }
 
 const CRC_TABLE = (() => {
@@ -272,6 +280,19 @@ export class BlobBuilder {
                 this.w.u8(0) // pad
                 this.w.u16(s.arg)
             }
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    conditionalTable(conditionals: ConditionalRecord[]): this {
+        this.tableBegin(TableId.Conditional, 1)
+        this.w.u16(conditionals.length)
+        for (const c of conditionals) {
+            this.w.u8(c.ifLayers.length)
+            this.w.u8(c.thenLayer)
+            for (const l of c.ifLayers) this.w.u8(l)
         }
         this.tableEnd()
         return this

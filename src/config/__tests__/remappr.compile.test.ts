@@ -247,3 +247,39 @@ describe('remappr caps_word (BH_CAPS_WORD)', () => {
         for (let i = 1; i < 16; i++) expect(b[rec + i]).toBe(0)
     })
 })
+
+// Conditional layers (§44.3 tri-layer): TBL_CONDITIONAL (id 13). Wire per
+// conditional: u8 num_if, u8 then_layer, num_if x u8 if_layer. Layer names
+// resolve to indices (base=0, raise=1, lower=2, adjust=3).
+const TRILAYER = `{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Tri", "target": "zmk" },
+    "keyboard": { "id": "tri", "name": "Tri", "keys": [{"x":0,"y":0}] },
+    "layers": [
+        { "name": "base", "bindings": ["A"] },
+        { "name": "raise", "bindings": [{ "type": "transparent" }] },
+        { "name": "lower", "bindings": [{ "type": "transparent" }] },
+        { "name": "adjust", "bindings": [{ "type": "transparent" }] }
+    ],
+    "conditionalLayers": [
+        { "ifLayers": ["raise", "lower"], "thenLayer": "adjust" }
+    ]
+}`
+
+describe('remappr conditional layers (TBL_CONDITIONAL)', () => {
+    it('emits a conditional table with resolved layer indices', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(TRILAYER),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const cond = findTable(b, 13)! // TableId.Conditional
+        let o = cond[0]
+        expect(u16(b, o)).toBe(1) // one conditional
+        o += 2
+        expect(b[o]).toBe(2) // num_if
+        expect(b[o + 1]).toBe(3) // then_layer = adjust (index 3)
+        expect(b[o + 2]).toBe(1) // if[0] = raise (index 1)
+        expect(b[o + 3]).toBe(2) // if[1] = lower (index 2)
+    })
+})

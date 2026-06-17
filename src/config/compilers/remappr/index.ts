@@ -29,6 +29,7 @@ import {
     MacroOp,
     type BehaviorRecord,
     type ComboRecord,
+    type ConditionalRecord,
     type MacroRecord,
     type MacroStep,
 } from './blobWriter'
@@ -361,6 +362,22 @@ function emitBlob(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         ),
     }))
 
+    // Conditional (tri-)layers (optional). Layer names resolve to indices.
+    const resolveLayer = (name: string, ci: number): number => {
+        const i = layerIndex.get(name)
+        if (i === undefined) {
+            diag.error(`unknown layer "${name}"`, ['conditionalLayers', ci])
+            return 0
+        }
+        return i
+    }
+    const conditionals: ConditionalRecord[] = (
+        config.conditionalLayers ?? []
+    ).map((cl, ci) => ({
+        ifLayers: cl.ifLayers.map((n) => resolveLayer(n, ci)),
+        thenLayer: resolveLayer(cl.thenLayer, ci),
+    }))
+
     const defaultTermMs = config.defaults?.tappingTermMs ?? 200
     const releaseMs = 0
 
@@ -370,6 +387,7 @@ function emitBlob(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         .bindingTable(cells)
     if (macroRecords.length > 0) builder.macroTable(macroRecords)
     if (combos.length > 0) builder.comboTable(combos)
+    if (conditionals.length > 0) builder.conditionalTable(conditionals)
 
     const bytes = builder.finalize(config.schemaVersion, BLOB_READER_VERSION, 1)
 
