@@ -13,19 +13,13 @@ import { TransportError } from '../errors'
 import type { KeyboardService } from '../service'
 import { readTransportIds, type Transport } from '../transport'
 import type { DeviceInfo } from '../types'
-import { type ConfigKeymap } from '../config'
-import {
-    decodeRemapprBlob,
-    DecodeCode,
-} from '../config/compilers/remappr/decode'
-
 import { loadOrCreateIdentity, RemapprSession } from './auth'
+import { loadDeviceConfig } from './configRead'
 import { discover, type DiscoveryResult } from './discovery'
-import { fetchPhysicalLayouts } from './geometry'
+import { buildNodesApi } from './nodeView'
 import {
     BLE_CONTROL_CHAR_UUID,
     BLE_SERVICE_UUID,
-    buildReadChunkArg,
     Cmd,
     type DeviceInfo as RawDeviceInfo,
     parseCapabilities,
@@ -39,9 +33,6 @@ import { createRemapprRpc, type RemapprRpc } from './rpc'
 import { RemapprKeyboardService } from './service'
 
 const PROBE_TIMEOUT_MS = 1000
-// Response data shares the 64-byte frame with a 6-byte response header, so a
-// single READ_CONFIG_CHUNK can carry at most 58 blob bytes.
-const READ_CHUNK_WANT = 58
 
 const REMAPPR_DISCOVERY: Discovery = {
     hid: {
@@ -124,53 +115,6 @@ async function establishSession(rpc: RemapprRpc): Promise<RemapprSession> {
     return session
 }
 
-/** Read the full active blob over the plaintext READ_CONFIG_CHUNK loop. */
-async function readConfigBlob(
-    rpc: RemapprRpc,
-    hasActive: boolean,
-): Promise<Uint8Array> {
-    if (!hasActive) return new Uint8Array()
-    const chunks: Uint8Array[] = []
-    let offset = 0
-    let total = 0
-    let guard = 0
-    while (guard++ < 8192) {
-        const r = await rpc.callPlain(
-            Cmd.READ_CONFIG_CHUNK,
-            buildReadChunkArg(offset, READ_CHUNK_WANT),
-        )
-        if (r.status !== Status.OK || r.data.length === 0) break // EOF
-        chunks.push(r.data)
-        offset += r.data.length
-        total += r.data.length
-    }
-    const out = new Uint8Array(total)
-    let off = 0
-    for (const c of chunks) {
-        out.set(c, off)
-        off += c.length
-    }
-    return out
-}
-
-/** A minimal single-layer config for a node with no active blob. */
-function defaultConfig(keyCount: number): ConfigKeymap {
-    return {
-        schemaVersion: 1,
-        kind: 'remappr.keymap',
-        meta: { name: 'Remappr', target: null },
-        keyboard: { id: 'remappr', name: 'Remappr', keys: [] },
-        layers: [
-            {
-                name: 'Base',
-                bindings: Array.from({ length: Math.max(1, keyCount) }, () => ({
-                    type: 'transparent' as const,
-                })),
-            },
-        ],
-    }
-}
-
 export const remapprAdapter: FirmwareAdapter = {
     id: 'remappr',
     displayName: 'Remappr',
@@ -219,45 +163,21 @@ export const remapprAdapter: FirmwareAdapter = {
         try {
             const session = await establishSession(rpc)
 
-            const blob = await readConfigBlob(
-                rpc,
-                discovery.deviceInfo.hasActive,
-            )
-            const decoded =
-                blob.length > 0
-                    ? decodeRemapprBlob(blob)
-                    : { code: DecodeCode.MISSING as number }
-            let config: ConfigKeymap | null = null
-            let configVersion = discovery.deviceInfo.configVersion
-            if (decoded.code === DecodeCode.OK && 'config' in decoded && decoded.config) {
-                config = decoded.config
-                configVersion = decoded.configVersion ?? configVersion
-            }
-
-            const fallbackCount = config?.layers[0]?.bindings.length ?? 0
-            const geometry = await fetchPhysicalLayouts(rpc, {
-                protoMax: discovery.protoMax,
-                fallbackKeyCount: fallbackCount,
-            })
-
-            if (!config) {
-                config = defaultConfig(geometry.layouts[0]?.keys.length ?? 0)
-            }
-
-            const maxLayers = discovery.personality
-                ? Math.max(config.layers.length, 16)
-                : Math.max(config.layers.length, 8)
+            const loaded = await loadDeviceConfig(rpc, discovery)
 
             return new RemapprKeyboardService({
                 rpc,
                 session,
                 deviceInfo,
-                config,
-                configVersion,
-                layouts: geometry.layouts,
-                activeLayoutId: geometry.activeLayoutId,
-                maxLayers,
+                config: loaded.config,
+                configVersion: loaded.configVersion,
+                layouts: loaded.layouts,
+                activeLayoutId: loaded.activeLayoutId,
+                maxLayers: loaded.maxLayers,
                 limits: discovery.limits,
+                // A dongle relays to bonded nodes; a direct keyboard returns an
+                // empty roster. Read-only views today (relayed-write HW-pending).
+                nodes: buildNodesApi(rpc),
             })
         } catch (err) {
             await rpc.close({ abortTransport: true }).catch(() => undefined)

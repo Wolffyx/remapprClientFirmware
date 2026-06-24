@@ -6,7 +6,12 @@
 // compiles → seals the blob back.
 import { filterCatalogByCodec } from '../catalog/filter'
 import type { KeyCatalog } from '../catalog/types'
-import type { Capabilities, KeyboardService, KeyTestApi } from '../service'
+import type {
+    Capabilities,
+    KeyboardService,
+    KeyTestApi,
+    NodesApi,
+} from '../service'
 import type {
     ActionType,
     AdapterNotification,
@@ -48,7 +53,9 @@ type ClosedHandler = (reason?: unknown) => void
 
 export interface RemapprServiceDeps {
     rpc: RemapprRpc
-    session: RemapprSession
+    /** Control-auth session for sealed writes. Omitted for read-only node views,
+     *  which never seal. */
+    session?: RemapprSession
     deviceInfo: DeviceInfo
     /** Decoded active config (source of truth); the editing buffer lowers from it. */
     config: ConfigKeymap
@@ -59,6 +66,12 @@ export interface RemapprServiceDeps {
     /** Max layer slots the blob reader accepts (from GET_KEYMAP_BOUNDS / default). */
     maxLayers: number
     limits?: Limits
+    /** Whole-device read-only (behind-dongle node view): every edit throws, no
+     *  keyTest, and disconnect leaves the shared dongle RPC alone. */
+    readOnly?: boolean
+    /** Behind-dongle roster facade — set on the dongle's own service, omitted on a
+     *  node view (no nesting). */
+    nodes?: NodesApi
 }
 
 /** Round `b` up to a multiple of `align` with zero padding (flash alignment). */
@@ -74,10 +87,16 @@ export class RemapprKeyboardService implements KeyboardService {
     public readonly deviceInfo: DeviceInfo
     public readonly capabilities: Capabilities
     public readonly codec = remapprCodec
-    public readonly keyTest: KeyTestApi
+    /** Live matrix readout — direct devices only; a node's relayed input plane is
+     *  unsupported, so read-only views omit it. */
+    public readonly keyTest?: KeyTestApi
+    /** Behind-dongle roster — present on the dongle's own service, omitted on a
+     *  node view (a node has no nodes of its own). */
+    public readonly nodes?: NodesApi
 
     private readonly rpc: RemapprRpc
-    private readonly session: RemapprSession
+    private readonly session?: RemapprSession
+    private readonly readOnly: boolean
     /** Decoded config = source of truth; updated only on a successful commit. */
     private config: ConfigKeymap
     private configVersion: number
@@ -99,6 +118,8 @@ export class RemapprKeyboardService implements KeyboardService {
     constructor(deps: RemapprServiceDeps) {
         this.rpc = deps.rpc
         this.session = deps.session
+        this.readOnly = deps.readOnly ?? false
+        this.nodes = deps.nodes
         this.deviceInfo = deps.deviceInfo
         this.config = deps.config
         this.configVersion = deps.configVersion
@@ -112,29 +133,52 @@ export class RemapprKeyboardService implements KeyboardService {
 
         this.capabilities = {
             lock: false,
-            rename: true,
+            rename: !this.readOnly,
             notifications: false,
-            reorderLayers: true,
-            variableLayerCount: true,
+            reorderLayers: !this.readOnly,
+            variableLayerCount: !this.readOnly,
             exportFormats: ['remappr.keymap.json'],
             maxLayers: this.maxLayers,
+            readOnly: this.readOnly,
         }
 
         this.seedLayersFromConfig()
 
-        // Key-Test: legacy 0xE0 INPUT events → the set of pressed positions.
-        this.keyTest = {
-            onMatrixState: (cb) => {
-                const pressed = new Set<number>()
-                return this.rpc.subscribeInput((ie) => {
-                    if (ie.pressed) pressed.add(ie.inputId)
-                    else pressed.delete(ie.inputId)
-                    cb(new Set(pressed))
-                })
-            },
+        // Key-Test: legacy 0xE0 INPUT events → the set of pressed positions. Direct
+        // devices only — the rpc here is the shared dongle channel, so a relayed
+        // node view omits keyTest (a node's input events don't ride it).
+        if (!this.readOnly) {
+            this.keyTest = {
+                onMatrixState: (cb) => {
+                    const pressed = new Set<number>()
+                    return this.rpc.subscribeInput((ie) => {
+                        if (ie.pressed) pressed.add(ie.inputId)
+                        else pressed.delete(ie.inputId)
+                        cb(new Set(pressed))
+                    })
+                },
+            }
         }
 
         this.rpc.onClosed((reason) => this.fireClosed(reason))
+    }
+
+    /** Reject every edit on a read-only (behind-dongle node) view. */
+    private assertWritable(): void {
+        if (this.readOnly) {
+            throw new ProtocolError(
+                'Read-only node view: editing a behind-dongle node is not yet ' +
+                    'supported (relayed-write is HW-proof-pending).',
+            )
+        }
+    }
+
+    /** The sealed-write session, guaranteed present on a writable service. */
+    private requireSession(): RemapprSession {
+        if (!this.session) {
+            throw new ProtocolError('No control-auth session for this service')
+        }
+        return this.session
     }
 
     /* ── editing buffer ─────────────────────────────────────────────────── */
@@ -230,6 +274,7 @@ export class RemapprKeyboardService implements KeyboardService {
         position: number,
         action: KeyAction,
     ): Promise<void> {
+        this.assertWritable()
         const idx = this.layerIndexById(layerId)
         if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
         if (position < 0 || position >= this.keyCount) {
@@ -252,6 +297,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async addLayer(): Promise<Layer> {
+        this.assertWritable()
         if (this.layers.length >= this.maxLayers) {
             throw new ProtocolError('Max layers reached')
         }
@@ -266,6 +312,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async removeLayer(layerId: number): Promise<void> {
+        this.assertWritable()
         const idx = this.layerIndexById(layerId)
         if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
         if (this.layers.length <= 1) {
@@ -276,6 +323,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async renameLayer(layerId: number, name: string): Promise<void> {
+        this.assertWritable()
         const idx = this.layerIndexById(layerId)
         if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
         this.layers[idx] = { ...this.layers[idx], name }
@@ -283,6 +331,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async moveLayer(startIndex: number, destIndex: number): Promise<void> {
+        this.assertWritable()
         if (
             startIndex < 0 ||
             startIndex >= this.layers.length ||
@@ -299,6 +348,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async restoreLayer(layerId: number, atIndex: number): Promise<Layer> {
+        this.assertWritable()
         const layer: Layer = {
             id: layerId,
             name: `Restored ${layerId}`,
@@ -322,6 +372,8 @@ export class RemapprKeyboardService implements KeyboardService {
     /* ── commit / discard (sealed config push) ──────────────────────────── */
 
     async commit(): Promise<void> {
+        this.assertWritable()
+        const session = this.requireSession()
         const next = raiseNeutralToConfig(this.layers, this.config)
         const version = this.configVersion + 1
         const { blob } = buildRemapprBlob(next, { configVersion: version })
@@ -335,13 +387,10 @@ export class RemapprKeyboardService implements KeyboardService {
             )
             await this.sealedOk(Cmd.WRITE_CONFIG_CHUNK, slice, 'WRITE_CONFIG_CHUNK')
         }
-        const validate = await this.rpc.callSealed(
-            this.session,
-            Cmd.VALIDATE_CONFIG,
-        )
+        const validate = await this.rpc.callSealed(session, Cmd.VALIDATE_CONFIG)
         if (validate.status !== Status.OK) {
             await this.rpc
-                .callSealed(this.session, Cmd.ROLLBACK_CONFIG)
+                .callSealed(session, Cmd.ROLLBACK_CONFIG)
                 .catch(() => undefined)
             throw new ProtocolError(
                 `VALIDATE_CONFIG failed: ${statusName(validate.status)}`,
@@ -359,7 +408,7 @@ export class RemapprKeyboardService implements KeyboardService {
         arg: Uint8Array | undefined,
         label: string,
     ): Promise<void> {
-        const r = await this.rpc.callSealed(this.session, cmd, arg)
+        const r = await this.rpc.callSealed(this.requireSession(), cmd, arg)
         if (r.status !== Status.OK) {
             throw new ProtocolError(`${label} failed: ${statusName(r.status)}`)
         }
@@ -367,10 +416,13 @@ export class RemapprKeyboardService implements KeyboardService {
 
     async discardChanges(): Promise<void> {
         // Abort any staging the device started, then drop the in-memory edits by
-        // re-lowering from the last-known config (source of truth).
-        await this.rpc
-            .callSealed(this.session, Cmd.ROLLBACK_CONFIG)
-            .catch(() => undefined)
+        // re-lowering from the last-known config (source of truth). A read-only
+        // view has no session and never staged anything — just re-seed.
+        if (this.session) {
+            await this.rpc
+                .callSealed(this.session, Cmd.ROLLBACK_CONFIG)
+                .catch(() => undefined)
+        }
         this.seedLayersFromConfig()
         this.markPending(false)
     }
@@ -434,6 +486,10 @@ export class RemapprKeyboardService implements KeyboardService {
     async disconnect(): Promise<void> {
         if (this.closed) return
         this.fireClosed()
-        await this.rpc.close({ abortTransport: true }).catch(() => undefined)
+        // A read-only node view shares the dongle's RPC; never tear down the shared
+        // transport (the dongle service owns it). Direct devices own their RPC.
+        if (!this.readOnly) {
+            await this.rpc.close({ abortTransport: true }).catch(() => undefined)
+        }
     }
 }

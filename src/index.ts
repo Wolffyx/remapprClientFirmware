@@ -37,6 +37,8 @@ export type {
     IndicatorConfig,
     KeyboardService,
     MacroApi,
+    NodesApi,
+    NodeView,
     RgbApi,
     WirelessApi,
     WirelessLpm,

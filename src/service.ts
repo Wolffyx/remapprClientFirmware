@@ -40,6 +40,11 @@ export interface Capabilities {
     macros?: { count: number; bufferSize: number }
     behaviors?: FirmwareBehaviorFlags
     layoutSideloadable?: boolean
+    /** Whole-device read-only: the service serves reads but rejects every edit
+     *  (setKey/commit/addLayer/…). Set for behind-dongle node views, whose
+     *  relayed-write path is HW-proof-pending. The UI gates editing affordances
+     *  on this — never on a firmware name. */
+    readOnly?: boolean
 }
 
 // Pattern check: Facade (Tier 1) — applied — group related optional methods into 3 cohesive feature facades for renderer single-guard reads
@@ -262,6 +267,42 @@ export interface RgbApi {
     setMixedEffect?(payload: Uint8Array): Promise<void>
 }
 
+// Pattern check: Facade (Tier 1) — applied — the behind-dongle node roster behind
+// one optional service member (sibling of keyTest/wireless/rgb). The renderer reads
+// `service.nodes` once instead of threading the relay RPC; the dongle's adapter
+// owns the wire (listNodes + relayed reads), the consumer just sees views.
+
+/** A node reachable through a dongle, as surfaced to the UI. Decoupled from the
+ *  wire NodeRecord so the contract stays firmware-neutral. */
+export interface NodeView {
+    /** Short-id used to address the node over the relay (stable per bond). */
+    id: number
+    /** Adapter-formatted human label (e.g. "Node 0x0007"). */
+    label: string
+    /** Firmware personality byte (board kind); 0 when unknown. */
+    personality: number
+    /** Link is up right now. */
+    online: boolean
+    /** Node is bonded to the dongle (vs. a transient sighting). */
+    bonded: boolean
+    /** Last-seen signal strength in dBm (0 when unknown). */
+    rssi: number
+    /** Mesh hops to reach the node (0 = direct child of the dongle). */
+    hopCount: number
+}
+
+export interface NodesApi {
+    /** Enumerate the nodes reachable through this device. Empty for a
+     *  directly-attached (non-dongle) device. */
+    list(): Promise<NodeView[]>
+
+    /** Open a **read-only** KeyboardService view of one node (relayed read of its
+     *  device-info + active config + geometry). The returned service has
+     *  `capabilities.readOnly === true`; every editing call throws. Editing a
+     *  behind-dongle node is gated on the relayed-write HW-proof. */
+    open(id: number): Promise<KeyboardService>
+}
+
 export interface KeyboardService {
     readonly deviceInfo: DeviceInfo
     readonly capabilities: Capabilities
@@ -307,6 +348,9 @@ export interface KeyboardService {
     /** Hardware default-layer reporting (Keychron Mac/Win DIP). Named `layerControl`
      *  to avoid colliding with adapters' internal keymap `layers`. */
     layerControl?: LayersApi
+    /** Behind-dongle node roster (present on dongle devices; `list()` is empty for
+     *  a directly-attached keyboard). Views are read-only today. */
+    nodes?: NodesApi
 
     addLayer(): Promise<Layer>
 
