@@ -100,6 +100,18 @@ const zmkOnly =
         return 'KC_NO'
     }
 
+// §5.2 Remappr-firmware behaviors have no QMK keycode; warn + KC_NO.
+// pattern-check: skip — shared fallback handler mirroring zmkOnly.
+const remapprOnly =
+    () =>
+    (a: { type: string }, ctx: Ctx, path: Path): string => {
+        ctx.diag.warn(
+            `"${a.type}" is a Remappr-specific behavior; no QMK keycode; emitted KC_NO`,
+            path,
+        )
+        return 'KC_NO'
+    }
+
 const HANDLERS: EmitHandlers = {
     key_press: (a) => kp(a),
     tap_hold: (a, ctx) =>
@@ -208,6 +220,23 @@ const HANDLERS: EmitHandlers = {
     soft_off: zmkOnly(),
     studio_unlock: zmkOnly(),
     ext_power: zmkOnly(),
+    // pattern-check: skip — §5.2 Remappr-only kinds → KC_NO fallback
+    auto_shift: remapprOnly(),
+    alt_repeat: remapprOnly(),
+    layer_lock: remapprOnly(),
+    layer_mod: remapprOnly(),
+    tap_toggle: remapprOnly(),
+    set_base_saved: remapprOnly(),
+    auto_layer: remapprOnly(),
+    gui_lock: remapprOnly(),
+    secure: remapprOnly(),
+    autocorrect: remapprOnly(),
+    tune_tap_term: remapprOnly(),
+    unicode: remapprOnly(),
+    macro_record: remapprOnly(),
+    macro_play: remapprOnly(),
+    leader: remapprOnly(),
+    peripheral: remapprOnly(),
 }
 
 function emitKeycode(a: CanonAction, ctx: Ctx, path: Path): string {

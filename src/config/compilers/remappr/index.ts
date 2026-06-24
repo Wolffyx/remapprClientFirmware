@@ -33,8 +33,10 @@ import {
     MouseButtonCode,
     MouseDirCode,
     MouseOp,
+    LockAction,
     OUTPUT_NO_PROFILE,
     OutputActionCode,
+    PeripheralKind,
     SystemAction,
     type BehaviorRecord,
     type ComboRecord,
@@ -421,6 +423,89 @@ function lowerAction(
                         : action.action === 'set'
                           ? (action.level ?? 0)
                           : 0,
+            })
+        // pattern-check: skip — §5.2 behavior_type 20..36 lowering cases
+        case 'auto_shift': {
+            // tap = key usage, hold = mod mask added on a hold past the term.
+            const usage = keyUsage(action.key, diag, path)
+            if (usage === null) return rec({ type: BehaviorType.None })
+            return rec({
+                type: BehaviorType.AutoShift,
+                tap: usage,
+                hold: modsToMask(action.mods),
+            })
+        }
+        case 'alt_repeat':
+            return rec({ type: BehaviorType.AltRepeat })
+        case 'layer_lock':
+            return rec({ type: BehaviorType.LayerLock })
+        case 'layer_mod': {
+            // hold = layer index, tap = mod mask held while the layer is active.
+            const li = layerIndex.get(action.layer)
+            if (li === undefined) {
+                diag.error(`unknown layer "${action.layer}"`, path)
+                return rec({ type: BehaviorType.None })
+            }
+            return rec({
+                type: BehaviorType.LayerMod,
+                hold: li,
+                tap: modsToMask(action.mods),
+            })
+        }
+        case 'tap_toggle': {
+            const li = layerIndex.get(action.layer)
+            if (li === undefined) {
+                diag.error(`unknown layer "${action.layer}"`, path)
+                return rec({ type: BehaviorType.None })
+            }
+            return rec({ type: BehaviorType.LayerTapToggle, hold: li })
+        }
+        case 'set_base_saved': {
+            const li = layerIndex.get(action.layer)
+            if (li === undefined) {
+                diag.error(`unknown layer "${action.layer}"`, path)
+                return rec({ type: BehaviorType.None })
+            }
+            return rec({ type: BehaviorType.ToSaved, hold: li })
+        }
+        case 'auto_layer': {
+            const li = layerIndex.get(action.layer)
+            if (li === undefined) {
+                diag.error(`unknown layer "${action.layer}"`, path)
+                return rec({ type: BehaviorType.None })
+            }
+            return rec({ type: BehaviorType.AutoLayer, hold: li })
+        }
+        case 'gui_lock':
+            return rec({
+                type: BehaviorType.GuiLock,
+                tap: LockAction[action.action],
+            })
+        case 'secure':
+            return rec({
+                type: BehaviorType.Secure,
+                tap: LockAction[action.action],
+            })
+        case 'autocorrect':
+            return rec({
+                type: BehaviorType.Autocorrect,
+                tap: LockAction[action.action],
+            })
+        case 'tune_tap_term':
+            return rec({ type: BehaviorType.TuneTerm, tap: action.ms })
+        case 'unicode':
+            return rec({ type: BehaviorType.Unicode, tap: action.codepoint })
+        case 'macro_record':
+            return rec({ type: BehaviorType.MacroRecord, tap: action.slot })
+        case 'macro_play':
+            return rec({ type: BehaviorType.MacroPlay, tap: action.slot })
+        case 'leader':
+            return rec({ type: BehaviorType.Leader, tap: action.windowMs ?? 0 })
+        case 'peripheral':
+            return rec({
+                type: BehaviorType.Peripheral,
+                tap: PeripheralKind[action.kind],
+                hold: action.code,
             })
         default:
             diag.error(

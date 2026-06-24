@@ -71,6 +71,25 @@ export const PowerActionSchema = z
     .enum(['toggle', 'on', 'off'])
     .describe('External-power control (e.g. gating peripheral power / LEDs).')
 
+export const LockActionSchema = z
+    .enum(['off', 'on', 'toggle'])
+    .describe('Lock toggle shared by gui_lock / secure / autocorrect.')
+
+export const PeripheralKindSchema = z
+    .enum([
+        'encoder',
+        'dipswitch',
+        'haptic',
+        'audio',
+        'joystick',
+        'midi',
+        'steno',
+        'sequencer',
+        'wpm',
+        'rawhid',
+    ])
+    .describe('Hardware-peripheral verb family (peripheral catch-all).')
+
 export const MouseButtonSchema = z
     .enum(['left', 'right', 'middle', 'mb4', 'mb5'])
     .describe('Pointer button to click.')
@@ -264,6 +283,82 @@ export const ActionObjectSchema = z.discriminatedUnion('type', [
     z
         .object({ type: z.literal('mouse_scroll'), direction: DirectionSchema })
         .describe('Scroll the pointer wheel.'),
+    // pattern-check: skip — §5.2 vocabulary arms, mechanical discriminated-union extension
+    z
+        .object({
+            type: z.literal('auto_shift'),
+            key: KeycodeSchema,
+            mods: z.array(ModifierSchema),
+        })
+        .describe('Tap the key; hold past the term adds the modifiers.'),
+    z
+        .object({ type: z.literal('alt_repeat') })
+        .describe('Emit the directional opposite of the last key.'),
+    z
+        .object({ type: z.literal('layer_lock') })
+        .describe('Pin the current top layer until re-pressed.'),
+    z
+        .object({
+            type: z.literal('layer_mod'),
+            layer: z.string(),
+            mods: z.array(ModifierSchema),
+        })
+        .describe('Momentary layer with the given modifiers held.'),
+    z
+        .object({ type: z.literal('tap_toggle'), layer: z.string() })
+        .describe('Tap toggles the layer; hold makes it momentary.'),
+    z
+        .object({ type: z.literal('set_base_saved'), layer: z.string() })
+        .describe('Switch the base layer and persist it across reboot.'),
+    z
+        .object({ type: z.literal('auto_layer'), layer: z.string() })
+        .describe('Toggle a temporary layer while the pointer is active.'),
+    z
+        .object({ type: z.literal('gui_lock'), action: LockActionSchema })
+        .describe('Mask the GUI/Win modifiers (gaming lock).'),
+    z
+        .object({ type: z.literal('secure'), action: LockActionSchema })
+        .describe('Swallow input until the keyboard is unlocked.'),
+    z
+        .object({ type: z.literal('autocorrect'), action: LockActionSchema })
+        .describe('Toggle on-device autocorrect.'),
+    z
+        .object({
+            type: z.literal('tune_tap_term'),
+            ms: z.number().int().nonnegative(),
+        })
+        .describe('Live-tune the tap/hold term (ms; 0 = keymap default).'),
+    z
+        .object({
+            type: z.literal('unicode'),
+            codepoint: z.number().int().min(0).max(0xffff),
+        })
+        .describe('Emit a BMP Unicode codepoint.'),
+    z
+        .object({
+            type: z.literal('macro_record'),
+            slot: z.number().int().nonnegative(),
+        })
+        .describe('Toggle recording into a dynamic-macro slot.'),
+    z
+        .object({
+            type: z.literal('macro_play'),
+            slot: z.number().int().nonnegative(),
+        })
+        .describe('Replay a recorded dynamic-macro slot.'),
+    z
+        .object({
+            type: z.literal('leader'),
+            windowMs: z.number().int().nonnegative().optional(),
+        })
+        .describe('Start a leader sequence (capture window in ms).'),
+    z
+        .object({
+            type: z.literal('peripheral'),
+            kind: PeripheralKindSchema,
+            code: z.number().int().nonnegative(),
+        })
+        .describe('Fire a hardware-peripheral verb (kind + code).'),
 ])
 
 export const ActionSchema = z.union([KeyTokenSchema, ActionObjectSchema])

@@ -161,6 +161,45 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
         }`)
     })
 
+    // pattern-check: skip — round-trip test data for the §5.2 vocabulary
+    it('round-trips the §5.2 vocabulary (behavior_type 20..36)', () => {
+        const json = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "V52", "target": "zmk" }, ${kb(16)},
+            "layers": [
+                { "name": "base", "bindings": [
+                    { "type": "auto_shift", "key": "A", "mods": ["LEFT_SHIFT"] },
+                    { "type": "alt_repeat" },
+                    { "type": "layer_lock" },
+                    { "type": "layer_mod", "layer": "fn", "mods": ["LEFT_CTRL"] },
+                    { "type": "tap_toggle", "layer": "fn" },
+                    { "type": "set_base_saved", "layer": "base" },
+                    { "type": "auto_layer", "layer": "fn" },
+                    { "type": "gui_lock", "action": "toggle" },
+                    { "type": "secure", "action": "on" },
+                    { "type": "autocorrect", "action": "toggle" },
+                    { "type": "tune_tap_term", "ms": 200 },
+                    { "type": "unicode", "codepoint": 233 },
+                    { "type": "macro_record", "slot": 0 },
+                    { "type": "macro_play", "slot": 1 },
+                    { "type": "leader", "windowMs": 500 },
+                    { "type": "peripheral", "kind": "encoder", "code": 3 }
+                ] },
+                { "name": "fn", "bindings": [{ "type": "transparent" }] }
+            ]
+        }`
+        roundTrips(json)
+        const { config } = decodeRemapprBlob(
+            buildRemapprBlob(parseKeymap(json), { configVersion: 1 }).blob,
+        )
+        expect(config!.layers[0].bindings.map((b) => b.type)).toEqual([
+            'auto_shift', 'alt_repeat', 'layer_lock', 'layer_mod', 'tap_toggle',
+            'set_base_saved', 'auto_layer', 'gui_lock', 'secure', 'autocorrect',
+            'tune_tap_term', 'unicode', 'macro_record', 'macro_play', 'leader',
+            'peripheral',
+        ])
+    })
+
     it('macros, combos, and conditional layers', () => {
         roundTrips(`{
             "schemaVersion": 1, "kind": "remappr.keymap",

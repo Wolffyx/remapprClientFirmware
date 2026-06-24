@@ -165,9 +165,45 @@ export function denormalizeAction(a: CanonAction): Surface {
             return { type: 'mouse_move', direction: a.direction }
         case 'mouse_scroll':
             return { type: 'mouse_scroll', direction: a.direction }
+        // pattern-check: skip — canonical→surface mapping cases for §5.2 kinds
+        case 'auto_shift':
+            return {
+                type: 'auto_shift',
+                key: keyToken(a.key, a._keySrc),
+                mods: [...a.mods],
+            }
+        case 'layer_mod':
+            return { type: 'layer_mod', layer: a.layer, mods: [...a.mods] }
+        case 'tap_toggle':
+            return { type: 'tap_toggle', layer: a.layer }
+        case 'set_base_saved':
+            return { type: 'set_base_saved', layer: a.layer }
+        case 'auto_layer':
+            return { type: 'auto_layer', layer: a.layer }
+        case 'gui_lock':
+            return { type: 'gui_lock', action: a.action }
+        case 'secure':
+            return { type: 'secure', action: a.action }
+        case 'autocorrect':
+            return { type: 'autocorrect', action: a.action }
+        case 'tune_tap_term':
+            return { type: 'tune_tap_term', ms: a.ms }
+        case 'unicode':
+            return { type: 'unicode', codepoint: a.codepoint }
+        case 'macro_record':
+            return { type: 'macro_record', slot: a.slot }
+        case 'macro_play':
+            return { type: 'macro_play', slot: a.slot }
+        case 'leader':
+            return {
+                type: 'leader',
+                ...(a.windowMs !== undefined ? { windowMs: a.windowMs } : {}),
+            }
+        case 'peripheral':
+            return { type: 'peripheral', kind: a.kind, code: a.code }
         default:
-            // soft_off | studio_unlock | grave_escape | key_repeat |
-            // caps_word | transparent | none | bootloader | reset
+            // soft_off | studio_unlock | grave_escape | key_repeat | caps_word |
+            // transparent | none | bootloader | reset | alt_repeat | layer_lock
             return { type: a.type }
     }
 }

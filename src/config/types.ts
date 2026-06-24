@@ -64,6 +64,22 @@ export type MouseButton = 'left' | 'right' | 'middle' | 'mb4' | 'mb5'
 
 export type Direction = 'up' | 'down' | 'left' | 'right'
 
+/** Lock-action argument shared by gui_lock / secure / autocorrect (§5.2). */
+export type LockAction = 'off' | 'on' | 'toggle'
+
+/** Hardware-peripheral verb kind for the `peripheral` catch-all (§5.2-J). */
+export type PeripheralKind =
+    | 'encoder'
+    | 'dipswitch'
+    | 'haptic'
+    | 'audio'
+    | 'joystick'
+    | 'midi'
+    | 'steno'
+    | 'sequencer'
+    | 'wpm'
+    | 'rawhid'
+
 export interface CanonKeyPress {
     type: 'key_press'
     key: CanonicalKeyId
@@ -125,6 +141,23 @@ export type CanonAction =
     | { type: 'tap_dance'; ref: string }
     | { type: 'mod_morph'; ref: string }
     | { type: 'hold_tap'; ref: string; holdParam: string; tapParam: string }
+    // §5.2 vocabulary (firmware behavior_type 20..36) — per-key actions.
+    | { type: 'auto_shift'; key: CanonicalKeyId; mods: Modifier[]; _keySrc?: string }
+    | { type: 'alt_repeat' }
+    | { type: 'layer_lock' }
+    | { type: 'layer_mod'; layer: string; mods: Modifier[] }
+    | { type: 'tap_toggle'; layer: string }
+    | { type: 'set_base_saved'; layer: string }
+    | { type: 'auto_layer'; layer: string }
+    | { type: 'gui_lock'; action: LockAction }
+    | { type: 'secure'; action: LockAction }
+    | { type: 'autocorrect'; action: LockAction }
+    | { type: 'tune_tap_term'; ms: number }
+    | { type: 'unicode'; codepoint: number }
+    | { type: 'macro_record'; slot: number }
+    | { type: 'macro_play'; slot: number }
+    | { type: 'leader'; windowMs?: number }
+    | { type: 'peripheral'; kind: PeripheralKind; code: number }
 
 export interface CanonGeometry {
     x: number

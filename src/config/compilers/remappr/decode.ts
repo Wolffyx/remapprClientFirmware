@@ -31,8 +31,10 @@ import type {
     HoldTapFlavor,
     LightingAction,
     LightingTarget,
+    LockAction as CanonLockAction,
     MouseButton,
     OutputAction,
+    PeripheralKind as CanonPeripheralKind,
 } from '../../types'
 import {
     BehaviorType,
@@ -43,12 +45,14 @@ import {
     Flavor,
     LightingActionCode,
     LightingTargetCode,
+    LockAction,
     MacroOp,
     MouseButtonCode,
     MouseDirCode,
     MouseOp,
     OUTPUT_NO_PROFILE,
     OutputActionCode,
+    PeripheralKind,
     SystemAction,
     TableId,
     type BehaviorRecord,
@@ -328,10 +332,65 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
             }
             return lit
         }
+        // pattern-check: skip — §5.2 behavior_type 20..36 → CanonAction reversal
+        case BehaviorType.AutoShift: {
+            const k = keyOf(rec.tap)
+            return k
+                ? { type: 'auto_shift', key: k, mods: maskToMods(rec.hold) }
+                : { type: 'none' }
+        }
+        case BehaviorType.AltRepeat:
+            return { type: 'alt_repeat' }
+        case BehaviorType.LayerLock:
+            return { type: 'layer_lock' }
+        case BehaviorType.LayerMod:
+            return {
+                type: 'layer_mod',
+                layer: ctx.layerName(rec.hold),
+                mods: maskToMods(rec.tap),
+            }
+        case BehaviorType.LayerTapToggle:
+            return { type: 'tap_toggle', layer: ctx.layerName(rec.hold) }
+        case BehaviorType.ToSaved:
+            return { type: 'set_base_saved', layer: ctx.layerName(rec.hold) }
+        case BehaviorType.AutoLayer:
+            return { type: 'auto_layer', layer: ctx.layerName(rec.hold) }
+        case BehaviorType.GuiLock: {
+            const a = LOCK_BY_CODE.get(rec.tap)
+            return a ? { type: 'gui_lock', action: a } : unmodeled('gui_lock')
+        }
+        case BehaviorType.Secure: {
+            const a = LOCK_BY_CODE.get(rec.tap)
+            return a ? { type: 'secure', action: a } : unmodeled('secure')
+        }
+        case BehaviorType.Autocorrect: {
+            const a = LOCK_BY_CODE.get(rec.tap)
+            return a
+                ? { type: 'autocorrect', action: a }
+                : unmodeled('autocorrect')
+        }
+        case BehaviorType.TuneTerm:
+            return { type: 'tune_tap_term', ms: rec.tap }
+        case BehaviorType.Unicode:
+            return { type: 'unicode', codepoint: rec.tap }
+        case BehaviorType.MacroRecord:
+            return { type: 'macro_record', slot: rec.tap }
+        case BehaviorType.MacroPlay:
+            return { type: 'macro_play', slot: rec.tap }
+        case BehaviorType.Leader:
+            return rec.tap
+                ? { type: 'leader', windowMs: rec.tap }
+                : { type: 'leader' }
+        case BehaviorType.Peripheral: {
+            const kind = PERIPHERAL_BY_CODE.get(rec.tap)
+            return kind
+                ? { type: 'peripheral', kind, code: rec.hold }
+                : unmodeled('peripheral')
+        }
         default:
-            // AUTO_SHIFT(20), LEADER(21), and the 23..36 vocabulary have no
-            // canonical authoring form yet (firmware engine-complete; app model
-            // pending). Decode as none so the keymap still forms.
+            // Composite refs (MOD_MORPH 9, TAP_DANCE 10) and any extended sub-
+            // codes have no standalone canonical form here. Decode as none so the
+            // keymap still forms.
             return unmodeled(`type ${rec.type}`)
     }
 }
@@ -344,6 +403,18 @@ const LIGHTING_TARGET_BY_CODE = new Map<number, string>([
     [LightingTargetCode.backlight, 'backlight'],
     [LightingTargetCode.per_key, 'per_key'],
 ])
+
+// pattern-check: skip — inverse code→name maps mirroring the encoder enums
+const LOCK_BY_CODE = new Map<number, CanonLockAction>(
+    (Object.entries(LockAction) as [CanonLockAction, number][]).map(
+        ([name, code]) => [code, name],
+    ),
+)
+const PERIPHERAL_BY_CODE = new Map<number, CanonPeripheralKind>(
+    (Object.entries(PeripheralKind) as [CanonPeripheralKind, number][]).map(
+        ([name, code]) => [code, name],
+    ),
+)
 
 function tapHold(
     tapKey: CanonicalKeyId,

@@ -96,6 +96,16 @@ type BindingHandlers = {
     ) => string
 }
 
+// §5.2 Remappr-firmware-only behaviors have no ZMK binding; warn + &none so the
+// keymap still builds. pattern-check: skip — shared fallback handler.
+const remapprOnly = (a: { type: string }, ctx: Ctx, path: Path): string => {
+    ctx.diag.warn(
+        `"${a.type}" is a Remappr-specific behavior; no ZMK binding; emitted &none`,
+        path,
+    )
+    return '&none'
+}
+
 const HANDLERS: BindingHandlers = {
     key_press: (a) => kp(a),
     tap_hold: (a, ctx, path) => {
@@ -194,6 +204,23 @@ const HANDLERS: BindingHandlers = {
     mouse_key: (a) => `&mkp ${MOUSE_BTN[a.button]}`,
     mouse_move: (a) => `&mmv ${MOVE[a.direction]}`,
     mouse_scroll: (a) => `&msc ${SCRL[a.direction]}`,
+    // pattern-check: skip — §5.2 Remappr-only kinds → &none fallback
+    auto_shift: remapprOnly,
+    alt_repeat: remapprOnly,
+    layer_lock: remapprOnly,
+    layer_mod: remapprOnly,
+    tap_toggle: remapprOnly,
+    set_base_saved: remapprOnly,
+    auto_layer: remapprOnly,
+    gui_lock: remapprOnly,
+    secure: remapprOnly,
+    autocorrect: remapprOnly,
+    tune_tap_term: remapprOnly,
+    unicode: remapprOnly,
+    macro_record: remapprOnly,
+    macro_play: remapprOnly,
+    leader: remapprOnly,
+    peripheral: remapprOnly,
 }
 
 export function emitBinding(a: CanonAction, ctx: Ctx, path: Path): string {

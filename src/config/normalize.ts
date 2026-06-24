@@ -288,9 +288,46 @@ export function normalizeAction(b: SurfaceAction): CanonAction {
             return { type: 'mouse_move', direction: b.direction }
         case 'mouse_scroll':
             return { type: 'mouse_scroll', direction: b.direction }
+        // pattern-check: skip — surface→canonical mapping cases for §5.2 kinds
+        case 'auto_shift':
+            return {
+                type: 'auto_shift',
+                key: toCanonical(b.key),
+                mods: [...b.mods],
+                _keySrc: b.key,
+            }
+        case 'layer_mod':
+            return { type: 'layer_mod', layer: b.layer, mods: [...b.mods] }
+        case 'tap_toggle':
+            return { type: 'tap_toggle', layer: b.layer }
+        case 'set_base_saved':
+            return { type: 'set_base_saved', layer: b.layer }
+        case 'auto_layer':
+            return { type: 'auto_layer', layer: b.layer }
+        case 'gui_lock':
+            return { type: 'gui_lock', action: b.action }
+        case 'secure':
+            return { type: 'secure', action: b.action }
+        case 'autocorrect':
+            return { type: 'autocorrect', action: b.action }
+        case 'tune_tap_term':
+            return { type: 'tune_tap_term', ms: b.ms }
+        case 'unicode':
+            return { type: 'unicode', codepoint: b.codepoint }
+        case 'macro_record':
+            return { type: 'macro_record', slot: b.slot }
+        case 'macro_play':
+            return { type: 'macro_play', slot: b.slot }
+        case 'leader':
+            return {
+                type: 'leader',
+                ...(b.windowMs !== undefined ? { windowMs: b.windowMs } : {}),
+            }
+        case 'peripheral':
+            return { type: 'peripheral', kind: b.kind, code: b.code }
         default:
-            // caps_word | transparent | none | bootloader | reset |
-            // soft_off | studio_unlock | grave_escape | key_repeat
+            // caps_word | transparent | none | bootloader | reset | soft_off |
+            // studio_unlock | grave_escape | key_repeat | alt_repeat | layer_lock
             return { type: b.type }
     }
 }
