@@ -14,6 +14,7 @@ import { TransportError } from '../errors'
 import { RemapprSession } from './auth'
 import {
     buildRequest,
+    buildUch,
     buildUniversal,
     type ControlResponse,
     EVENT_TAG,
@@ -61,6 +62,16 @@ export interface RemapprRpc {
         arg?: Uint8Array,
         opts?: { targetNode?: number; timeoutMs?: number },
     ): Promise<UniversalReply>
+    /** A sealed (mutating) verb relayed to a node behind a dongle (§6.3 outer-UCH
+     *  form). The session must have been established with that node (handshake over
+     *  the relay, §6.5). HW-proof-pending — the relay data plane is firmware-gated. */
+    callSealedRelay(
+        session: RemapprSession,
+        namespace: number,
+        verb: number,
+        arg: Uint8Array | undefined,
+        opts: { targetNode: number; timeoutMs?: number },
+    ): Promise<ControlResponse>
     /** Subscribe to live 0xE0 INPUT events (Key-Test). Starts the read pump. */
     subscribeInput(cb: (e: InputEvent) => void): () => void
     onClosed(cb: (reason?: unknown) => void): () => void
@@ -308,6 +319,36 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
         })
     }
 
+    async function callSealedRelay(
+        session: RemapprSession,
+        namespace: number,
+        verb: number,
+        arg: Uint8Array = new Uint8Array(),
+        opts: { targetNode: number; timeoutMs?: number },
+    ): Promise<ControlResponse> {
+        const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+        return exchange(async () => {
+            const rid = nextReqId()
+            const uch = buildUch(namespace, rid, opts.targetNode)
+            await writeFrame(session.sealRelay(uch, verb, nextSeq(), arg))
+            const reply = await nextFrame(timeoutMs)
+            if (reply[0] !== UNIVERSAL_TAG) {
+                throw new TransportError('expected a universal reply to a relayed seal')
+            }
+            // Open-failure reply (§6.3): [0xE2][UCH_outer(RESP)][plaintext inner].
+            // The node couldn't seal (no session / tamper), so the inner is a bare
+            // plaintext response after the outer UCH.
+            if (reply[1 + UCH_LEN] !== SEALED_TAG) {
+                return parseResponse(reply.subarray(1 + UCH_LEN))
+            }
+            const inner = session.openRelay(reply)
+            if (inner === null) {
+                throw new TransportError('relay-sealed reply failed authentication')
+            }
+            return parseResponse(inner)
+        })
+    }
+
     function subscribeInput(cb: (e: InputEvent) => void): () => void {
         inputListeners.add(cb)
         return () => inputListeners.delete(cb)
@@ -343,6 +384,7 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
         callPlain,
         callSealed,
         callUniversalPlain,
+        callSealedRelay,
         subscribeInput,
         onClosed(cb) {
             if (closed) {

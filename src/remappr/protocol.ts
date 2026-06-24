@@ -23,6 +23,15 @@ export const SEAL_PLAIN = 43
 /** Sealed-envelope overhead beyond the plaintext: ctr(4) + tag(16). */
 export const SEAL_OVERHEAD = 20
 
+/** Universal-sealed RELAY (§6.3) AEAD-plaintext size: the host pads `UCH(8) ||
+ *  inner` to this so the dongle forwards a full 64-byte radio CTRL frame and the
+ *  node derives the same plaintext length from `env_len` (control_auth.c). Budget
+ *  (§9.1, universal-sealed-relay row): 64 − 1(0xE2) − 8(UCH_outer) − 1(0xE1) −
+ *  4(ctr) − 16(tag) = 34. Blob chunk floors to BLOB_ALIGN (16). NOTE: the relay
+ *  data plane is firmware HW-proof-pending — this byte layout follows §6.3/§9.1
+ *  but is not yet validated against the firmware relay decoder. */
+export const RELAY_SEAL_PLAIN = 34
+
 /** Legacy sealed (0xE1) config-chunk size — the firmware's legacy data-plane
  *  figure (the universal-sealed GET_LIMITS value of 16 is a different path).
  *  Config writes ride the legacy sealed path, so they use this. */

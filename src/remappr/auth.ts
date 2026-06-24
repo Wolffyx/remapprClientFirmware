@@ -18,7 +18,14 @@ import { x25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { unsafe } from '@noble/ciphers/aes.js'
-import { buildRequest, SEAL_PLAIN, SEALED_TAG } from './protocol'
+import {
+    buildRequest,
+    RELAY_SEAL_PLAIN,
+    SEAL_PLAIN,
+    SEALED_TAG,
+    UCH_LEN,
+    UNIVERSAL_TAG,
+} from './protocol'
 
 /** Frozen HKDF info string — MUST match firmware CA_INFO_SESSION exactly. */
 const INFO = new TextEncoder().encode('remappr-ctrl-auth session v1')
@@ -300,5 +307,83 @@ export class RemapprSession {
             envelope.subarray(0, 4),
             sealed,
         )
+    }
+
+    /**
+     * Seal a mutating verb for the dongle→node RELAY path (§6.3):
+     * `[0xE2][UCH_outer][0xE1][ctr]AEAD(UCH || inner)[tag]`. The cleartext outer
+     * UCH lets the dongle route on target_node; the identical UCH sealed inside
+     * binds the address app↔node (the node returns ERR_AUTH on any mismatch).
+     * `UCH || inner` is padded to RELAY_SEAL_PLAIN so the forwarded radio frame is
+     * a full 64 bytes and the node derives the matching plaintext length from
+     * `env_len`. Same key / per-direction counter / nonce / AAD as the legacy
+     * seal. HW-proof-pending: byte layout per §6.3/§9.1, not yet validated against
+     * the firmware relay decoder (the relay data plane is firmware-gated).
+     */
+    sealRelay(
+        uch: Uint8Array,
+        cmd: number,
+        seq: number,
+        arg: Uint8Array,
+    ): Uint8Array {
+        if (!this.key) throw new Error('remappr session not established')
+        const inner = buildRequest(cmd, seq, arg)
+        if (uch.length + inner.length > RELAY_SEAL_PLAIN)
+            throw new Error('remappr relay frame exceeds the 64-byte radio budget')
+        const pt = new Uint8Array(RELAY_SEAL_PLAIN)
+        pt.set(uch, 0)
+        pt.set(inner, uch.length)
+        const ctr = this.txCtr++
+        const ctrBytes = le32(ctr)
+        const ct = ccmSeal(
+            this.key,
+            makeNonce(DIR_HOST_TO_DEVICE, ctr),
+            ctrBytes,
+            pt,
+        )
+        return concat([
+            Uint8Array.of(UNIVERSAL_TAG),
+            uch,
+            Uint8Array.of(SEALED_TAG),
+            ctrBytes,
+            ct,
+        ])
+    }
+
+    /**
+     * Open a node's relay-sealed reply (§6.3):
+     * `[0xE2][UCH_outer(RESP)][0xE1][ctr]AEAD(UCH_inner || inner_resp)[tag]`. The
+     * reply AEAD-plaintext is the same fixed RELAY_SEAL_PLAIN size. Verifies the
+     * sealed inner UCH equals the cleartext outer (the host half of the §6.3
+     * full-UCH bind) and returns the inner response frame (trailing pad included;
+     * parseResponse trims by its data_len), or null on auth / UCH-mismatch failure.
+     */
+    openRelay(frame: Uint8Array): Uint8Array | null {
+        if (!this.key) throw new Error('remappr session not established')
+        if (frame[0] !== UNIVERSAL_TAG || frame[1 + UCH_LEN] !== SEALED_TAG)
+            return null
+        const outerUch = frame.subarray(1, 1 + UCH_LEN)
+        const ctrOff = 1 + UCH_LEN + 1
+        const dv = new DataView(
+            frame.buffer,
+            frame.byteOffset,
+            frame.byteLength,
+        )
+        const ctr = dv.getUint32(ctrOff, true)
+        const sealedOff = ctrOff + 4
+        const sealed = frame.subarray(
+            sealedOff,
+            sealedOff + RELAY_SEAL_PLAIN + TAG_LEN,
+        )
+        const pt = ccmOpen(
+            this.key,
+            makeNonce(DIR_DEVICE_TO_HOST, ctr),
+            frame.subarray(ctrOff, ctrOff + 4),
+            sealed,
+        )
+        if (pt === null) return null
+        // §6.3 full-UCH bind: the sealed inner UCH must equal the routed outer.
+        if (!equal(pt.subarray(0, UCH_LEN), outerUch)) return null
+        return pt.subarray(UCH_LEN)
     }
 }
