@@ -357,4 +357,57 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
             windowMs: 400,
         })
     })
+
+    // pattern-check: skip — custom hold-tap lowering test fixtures
+    it('hold_tap (custom) lowers to MOD_TAP / LAYER_TAP and round-trips', () => {
+        const json = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "HT", "target": "zmk" }, ${kb(2)},
+            "layers": [
+                { "name": "base", "bindings": [
+                    { "type": "hold_tap", "ref": "ht_shift", "holdParam": "LSHIFT", "tapParam": "A" },
+                    { "type": "hold_tap", "ref": "ht_layer", "holdParam": "fn", "tapParam": "B" }
+                ] },
+                { "name": "fn", "bindings": ["X", "Y"] }
+            ],
+            "holdTaps": [
+                { "id": "ht_shift", "flavor": "tap-preferred", "tappingTermMs": 200, "bindings": ["&kp", "&kp"] },
+                { "id": "ht_layer", "bindings": ["&mo", "&kp"] }
+            ]
+        }`
+        roundTrips(json)
+        const { config } = decodeRemapprBlob(
+            buildRemapprBlob(parseKeymap(json), { configVersion: 1 }).blob,
+        )
+        // The custom-behavior grouping isn't on the wire — both cells decode to a
+        // plain tap_hold (MOD_TAP / LAYER_TAP); the holdTaps def is not recovered.
+        expect(config!.holdTaps).toBeUndefined()
+        const a = config!.layers[0].bindings[0]
+        const b = config!.layers[0].bindings[1]
+        if (a.type !== 'tap_hold' || b.type !== 'tap_hold')
+            throw new Error('expected both cells to decode to tap_hold')
+        expect(a.hold).toEqual({ type: 'modifier', modifier: 'LEFT_SHIFT' })
+        expect(a.flavor).toBe('tap-preferred')
+        expect(a.tappingTermMs).toBe(200)
+        expect(b.hold).toEqual({ type: 'layer', layer: 'Layer 1' })
+    })
+
+    it('hold_tap with a non-mod / non-layer hold is a diagnosed gap', () => {
+        const json = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "HTbad", "target": "zmk" }, ${kb(1)},
+            "layers": [{ "name": "base", "bindings": [
+                { "type": "hold_tap", "ref": "bad", "holdParam": "A", "tapParam": "B" }
+            ] }],
+            "holdTaps": [{ "id": "bad", "bindings": ["&kp", "&kp"] }]
+        }`
+        const { diagnostics } = buildRemapprBlob(parseKeymap(json), {
+            configVersion: 1,
+        })
+        expect(
+            diagnostics.some(
+                (d) => d.level === 'error' && /not a modifier/.test(d.message),
+            ),
+        ).toBe(true)
+    })
 })

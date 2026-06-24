@@ -48,13 +48,14 @@ import {
     type MacroStep,
 } from './blobWriter'
 import type {
+    CanonHoldTapDef,
     CanonMacro,
     CanonMacroStep,
     CanonModMorph,
     CanonTapDance,
     CanonTapHold,
 } from '../../types'
-import { MODIFIERS, type Modifier } from '../../keycodes'
+import { MODIFIERS, resolveKeycode, type Modifier } from '../../keycodes'
 
 const COMBO_ANY_LAYER = 0xff
 // HID Keyboard usage page. Consumer/System pages (12, …) are a deferred gap
@@ -246,6 +247,116 @@ function flavorCode(a: CanonTapHold): number {
     return Flavor.Balanced
 }
 
+// hold_tap flavor — the def has no coarse `resolve` hint (unlike CanonTapHold).
+// pattern-check: skip — tiny pure flavor enum resolver for custom hold-taps
+function holdTapFlavorCode(flavor: CanonHoldTapDef['flavor']): number {
+    switch (flavor) {
+        case 'hold-preferred':
+            return Flavor.HoldPreferred
+        case 'tap-preferred':
+            return Flavor.TapPreferred
+        case 'tap-unless-interrupted':
+            return Flavor.TapUnlessInterrupted
+        default:
+            return Flavor.Balanced
+    }
+}
+
+// Resolve a ZMK keycode token ("LSHIFT", "A", …) to its HID keyboard usage, or
+// null. Reuses the canonical keycode resolver + the catalog usage map.
+// pattern-check: skip — pure token→usage lookup for hold-tap params
+function tokenUsage(token: string): number | null {
+    const canon = resolveKeycode(token)
+    if (!canon) return null
+    const u = HID_USAGE_BY_CANONICAL.get(canon)
+    return u && u.page === HID_PAGE_KEYBOARD ? u.usage : null
+}
+
+// Lower a custom `zmk,behavior-hold-tap` reference to MOD_TAP / LAYER_TAP — the
+// only tap-hold shapes the firmware represents. bindings[0] is the hold behavior,
+// bindings[1] the tap behavior (ZMK order); holdParam/tapParam are their args. The
+// tap side must be &kp <key>; the hold side is &kp/&sk <modifier> (→ MOD_TAP) or
+// &mo/&to/&tog <layer> (→ LAYER_TAP). Anything else is a wire gap. requirePriorIdle
+// + retro-tap are emitted faithfully but are not modeled by the round-trip decoder
+// (CanonTapHold lacks them) — a hold-tap decodes back as a plain tap_hold.
+function lowerHoldTap(
+    action: Extract<CanonAction, { type: 'hold_tap' }>,
+    def: CanonHoldTapDef,
+    diag: DiagnosticBag,
+    path: (string | number)[],
+    layerIndex: Map<string, number>,
+): BehaviorRecord {
+    const holdTok = def.bindings[0].replace(/^&/, '')
+    const tapTok = def.bindings[1].replace(/^&/, '')
+
+    if (tapTok !== 'kp') {
+        diag.error(
+            `hold_tap "${action.ref}" tap behavior "${def.bindings[1]}" is not ` +
+                `&kp — a firmware hold-tap taps a single key`,
+            path,
+        )
+        return rec({ type: BehaviorType.None })
+    }
+    const tap = tokenUsage(action.tapParam)
+    if (tap === null) {
+        diag.error(
+            `hold_tap "${action.ref}" tap key "${action.tapParam}" is not a ` +
+                `keyboard usage`,
+            path,
+        )
+        return rec({ type: BehaviorType.None })
+    }
+    if (def.holdTriggerKeyPositions?.length || def.holdTriggerOnRelease)
+        diag.warn(
+            `hold_tap "${action.ref}" positional-hold / hold-trigger-on-release ` +
+                `is not on the wire — dropped`,
+            path,
+        )
+    const common = {
+        flavor: holdTapFlavorCode(def.flavor),
+        tap,
+        tappingTermMs: def.tappingTermMs ?? 0,
+        quickTapMs: def.quickTapMs ?? 0,
+        requirePriorIdleMs: def.requirePriorIdleMs ?? 0,
+        flags: def.retroTap ? BehaviorFlags.RETRO_TAP : 0,
+    }
+
+    if (holdTok === 'kp' || holdTok === 'sk') {
+        const u = tokenUsage(action.holdParam)
+        const bit = u !== null ? usageToModBit(u) : null
+        if (bit === null) {
+            diag.error(
+                `hold_tap "${action.ref}" hold "${action.holdParam}" is not a ` +
+                    `modifier — only mod or layer holds are on the wire`,
+                path,
+            )
+            return rec({ type: BehaviorType.None })
+        }
+        return rec({ type: BehaviorType.ModTap, ...common, hold: bit })
+    }
+    if (holdTok === 'mo' || holdTok === 'to' || holdTok === 'tog') {
+        const li =
+            layerIndex.get(action.holdParam) ??
+            (/^\d+$/.test(action.holdParam)
+                ? Number(action.holdParam)
+                : undefined)
+        if (li === undefined) {
+            diag.error(
+                `hold_tap "${action.ref}" hold layer "${action.holdParam}" is unknown`,
+                path,
+            )
+            return rec({ type: BehaviorType.None })
+        }
+        return rec({ type: BehaviorType.LayerTap, ...common, hold: li })
+    }
+    diag.error(
+        `hold_tap "${action.ref}" hold behavior "${def.bindings[0]}" is not on ` +
+            `the wire (firmware hold is a modifier or a layer only)`,
+        path,
+    )
+    return rec({ type: BehaviorType.None })
+}
+
 /* ── composite behaviors (mod-morph 9, tap-dance 10; §43.3) ──────────────────
  * MOD_MORPH and TAP_DANCE carry their inner behaviors in the separate SUBS table
  * (id 12, same 16-byte record framing as BEHAVIOR); the composite record points
@@ -254,9 +365,11 @@ function flavorCode(a: CanonTapHold): number {
  * memoizing the produced record so repeated references share one sub-slice (and
  * dedupe down to a single behavior-table entry). */
 interface CompCtx {
+    // pattern-check: skip — adding a def-lookup field to an existing context struct
     subs: BehaviorRecord[]
     tapDanceById: Map<string, CanonTapDance>
     modMorphById: Map<string, CanonModMorph>
+    holdTapById: Map<string, CanonHoldTapDef>
     /** ref-key ("td:id" / "mm:id") → already-lowered composite record. */
     memo: Map<string, BehaviorRecord>
     /** ref-keys currently being lowered, to break a self-referential cycle. */
@@ -557,6 +670,14 @@ function lowerAction(
                 tap: PeripheralKind[action.kind],
                 hold: action.code,
             })
+        case 'hold_tap': {
+            const def = comp.holdTapById.get(action.ref)
+            if (!def) {
+                diag.error(`unknown hold_tap "${action.ref}"`, path)
+                return rec({ type: BehaviorType.None })
+            }
+            return lowerHoldTap(action, def, diag, path, layerIndex)
+        }
         case 'tap_dance':
             return withComposite(`td:${action.ref}`, comp, diag, path, () => {
                 const def = comp.tapDanceById.get(action.ref)
@@ -690,6 +811,7 @@ function encodeBlob(
         subs,
         tapDanceById: new Map((config.tapDances ?? []).map((t) => [t.id, t])),
         modMorphById: new Map((config.modMorphs ?? []).map((m) => [m.id, m])),
+        holdTapById: new Map((config.holdTaps ?? []).map((h) => [h.id, h])),
         memo: new Map(),
         inProgress: new Set(),
     }
