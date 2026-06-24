@@ -28,4 +28,5 @@ export {
     type RemapprIdentityStore,
 } from './auth'
 export { discover, type DiscoveryResult } from './discovery'
+export { listNodes, getNodeInfo, type NodeRecord } from './nodes'
 export * as remapprProtocol from './protocol'

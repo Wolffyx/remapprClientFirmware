@@ -466,3 +466,58 @@ export function buildReadChunkArg(offset: number, want: number): Uint8Array {
     dv.setUint16(4, want, true)
     return out
 }
+
+/* ── DONGLE namespace: node roster (§5.9) ───────────────────────────────── */
+// pattern-check: skip — pure node-record DataView codec, data-only like the rest
+// of protocol.ts (file header already declares no GoF pattern).
+
+/** One DONGLE.LIST_NODES / GET_NODE_INFO record (§5.9). `deviceIdTail` is the
+ *  last 6 bytes of the node's device id, hex-encoded for display / matching. */
+export interface NodeRecord {
+    shortId: number
+    personality: number
+    pipe: number
+    online: boolean
+    bonded: boolean
+    hopCount: number
+    rssi: number // i8 dBm (signed)
+    deviceIdTail: string // 6-byte hex
+}
+
+/** Wire size of one node record: u16 short_id, u8 personality, u8 pipe, u8 flags,
+ *  u8 hop_count, i8 rssi, 6×u8 device_id_tail. */
+export const NODE_RECORD_LEN = 13
+
+export function parseNodeRecord(d: Uint8Array, off = 0): NodeRecord {
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const flags = d[off + 4]
+    let tail = ''
+    for (let i = 0; i < 6; i++)
+        tail += d[off + 7 + i].toString(16).padStart(2, '0')
+    return {
+        shortId: dv.getUint16(off, true),
+        personality: d[off + 2],
+        pipe: d[off + 3],
+        online: (flags & 0x01) !== 0,
+        bonded: (flags & 0x02) !== 0,
+        hopCount: d[off + 5],
+        rssi: (d[off + 6] << 24) >> 24, // sign-extend i8
+        deviceIdTail: tail,
+    }
+}
+
+/** Parse a packed LIST_NODES reply (concatenated 13-byte records). A trailing
+ *  partial record (shorter than NODE_RECORD_LEN) is ignored. */
+export function parseNodeList(d: Uint8Array): NodeRecord[] {
+    const out: NodeRecord[] = []
+    for (let off = 0; off + NODE_RECORD_LEN <= d.length; off += NODE_RECORD_LEN)
+        out.push(parseNodeRecord(d, off))
+    return out
+}
+
+/** Build the `u16 short_id` arg for DONGLE.GET_NODE_INFO. */
+export function buildNodeInfoArg(shortId: number): Uint8Array {
+    const out = new Uint8Array(2)
+    new DataView(out.buffer).setUint16(0, shortId, true)
+    return out
+}
