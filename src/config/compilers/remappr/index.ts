@@ -15,7 +15,7 @@
 
 import type { ExportedFile } from '../../../types'
 import { HID_USAGE_BY_CANONICAL } from '../../../catalog/entries'
-import type { DiagnosticBag } from '../../diagnostics'
+import { DiagnosticBag, type Diagnostic } from '../../diagnostics'
 import {
     runCompile,
     registerCompiler,
@@ -26,6 +26,7 @@ import {
     BehaviorType,
     BlobBuilder,
     BLOB_READER_VERSION,
+    Flavor,
     LightingActionCode,
     LightingTargetCode,
     MacroOp,
@@ -41,7 +42,8 @@ import {
     type MacroRecord,
     type MacroStep,
 } from './blobWriter'
-import type { CanonMacro, CanonMacroStep } from '../../types'
+import type { CanonMacro, CanonMacroStep, CanonTapHold } from '../../types'
+import { MODIFIERS, type Modifier } from '../../keycodes'
 
 const COMBO_ANY_LAYER = 0xff
 // HID Keyboard usage page. Consumer/System pages (12, …) are a deferred gap
@@ -205,6 +207,34 @@ function usageToModBit(usage: number): number | null {
     return usage >= 0xe0 && usage <= 0xe7 ? 1 << (usage - 0xe0) : null
 }
 
+// Modifier[] → HID modifier mask. MODIFIERS index == REMAPPR_MOD_* bit
+// (LEFT_CTRL=0 … RIGHT_GUI=7), so the mask is a direct OR of `1 << index`.
+// pattern-check: skip tiny pure Modifier[]→mask reduce for KEY_MODS
+function modsToMask(mods: Modifier[]): number {
+    let mask = 0
+    for (const m of mods) mask |= 1 << MODIFIERS.indexOf(m)
+    return mask & 0xff
+}
+
+// ZMK hold-tap flavor string → remappr_th_flavor. When no flavor is set, fall
+// back to the coarser `resolve` hint, else Balanced.
+// pattern-check: skip tiny pure flavor→enum resolver for tap_hold
+function flavorCode(a: CanonTapHold): number {
+    switch (a.flavor) {
+        case 'hold-preferred':
+            return Flavor.HoldPreferred
+        case 'balanced':
+            return Flavor.Balanced
+        case 'tap-preferred':
+            return Flavor.TapPreferred
+        case 'tap-unless-interrupted':
+            return Flavor.TapUnlessInterrupted
+    }
+    if (a.resolve === 'prefer-hold') return Flavor.HoldPreferred
+    if (a.resolve === 'prefer-tap') return Flavor.TapPreferred
+    return Flavor.Balanced
+}
+
 // Lower one canonical binding to a behavior record. Unsupported actions emit a
 // diagnostic and fall back to NONE so the blob still forms (thin slice).
 function lowerAction(
@@ -216,17 +246,52 @@ function lowerAction(
 ): BehaviorRecord {
     switch (action.type) {
         case 'key_press': {
-            if (action.mods?.length) {
-                diag.error(
-                    `modded key_press ("${action.key}" + mods) not yet on the ` +
-                        `wire — §44.3 (extend BH_KEY / macro)`,
-                    path,
-                )
-                return rec({ type: BehaviorType.None })
-            }
             const usage = keyUsage(action.key, diag, path)
             if (usage === null) return rec({ type: BehaviorType.None })
+            if (action.mods?.length) {
+                // KEY_MODS (22): a modded key_press (e.g. Ctrl+C). tap = usage,
+                // hold = modifier mask; the firmware emits the mods + usage as
+                // one chord and retracts both on release. (§5.2, no longer a gap.)
+                return rec({
+                    type: BehaviorType.KeyMods,
+                    tap: usage,
+                    hold: modsToMask(action.mods),
+                })
+            }
             return rec({ type: BehaviorType.Key, tap: usage })
+        }
+        case 'tap_hold': {
+            // MOD_TAP (3) when hold is a modifier; LAYER_TAP (4) when hold is a
+            // layer. tap = tap-key usage, hold = mod mask | layer index, plus
+            // flavor + timings. (mod-tap-of-a-modded-key isn't on the wire.)
+            const tapUsage = keyUsage(action.tap.key, diag, [...path, 'tap'])
+            if (tapUsage === null) return rec({ type: BehaviorType.None })
+            if (action.tap.mods?.length) {
+                diag.warn(
+                    `tap_hold tap "${action.tap.key}" carries modifiers — ` +
+                        `dropped (firmware MOD_TAP tap is a single usage)`,
+                    [...path, 'tap'],
+                )
+            }
+            const common = {
+                flavor: flavorCode(action),
+                tap: tapUsage,
+                tappingTermMs: action.tappingTermMs ?? 0,
+                quickTapMs: action.quickTapMs ?? 0,
+            }
+            if (action.hold.type === 'modifier') {
+                return rec({
+                    type: BehaviorType.ModTap,
+                    ...common,
+                    hold: 1 << MODIFIERS.indexOf(action.hold.modifier),
+                })
+            }
+            const li = layerIndex.get(action.hold.layer)
+            if (li === undefined) {
+                diag.error(`unknown layer "${action.hold.layer}"`, path)
+                return rec({ type: BehaviorType.None })
+            }
+            return rec({ type: BehaviorType.LayerTap, ...common, hold: li })
         }
         case 'transparent':
             return rec({ type: BehaviorType.Trans })
@@ -297,6 +362,21 @@ function lowerAction(
                 type: BehaviorType.System,
                 tap: SystemAction[action.type],
             })
+        case 'ext_power':
+            // Firmware exposes a single EXT_POWER_TOGGLE system action; absolute
+            // on/off can't be expressed, so only `toggle` lowers cleanly.
+            if (action.action !== 'toggle') {
+                diag.error(
+                    `ext_power "${action.action}" not on the wire — firmware ` +
+                        `only has EXT_POWER_TOGGLE (use "toggle")`,
+                    path,
+                )
+                return rec({ type: BehaviorType.None })
+            }
+            return rec({
+                type: BehaviorType.System,
+                tap: SystemAction.ext_power_toggle,
+            })
         case 'mouse_key':
             // op in `tap`, button code in `hold`; engine reports press/release
             // edges, the app drives the mouse driver.
@@ -352,7 +432,15 @@ function lowerAction(
     }
 }
 
-function emitBlob(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
+// Pure encoder: ConfigKeymap → RMBC blob bytes. Shared by the export `compile()`
+// path (version from meta) and the live-device commit path (version = active+1).
+// Does NOT 16-byte-pad — the golden artifact is unpadded; flash-alignment padding
+// is applied at push time by the control service, not baked into the blob.
+function encodeBlob(
+    config: ConfigKeymap,
+    diag: DiagnosticBag,
+    configVersion: number,
+): Uint8Array {
     const numLayers = config.layers.length
     const numPositions = config.keyboard.keys.length
 
@@ -451,8 +539,41 @@ function emitBlob(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     if (combos.length > 0) builder.comboTable(combos)
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
 
-    const bytes = builder.finalize(config.schemaVersion, BLOB_READER_VERSION, 1)
+    return builder.finalize(
+        config.schemaVersion,
+        BLOB_READER_VERSION,
+        configVersion,
+    )
+}
 
+// Export `config_version`: a monotonic u32 the firmware uses to reject stale
+// commits. The exported artifact has no live device to compare against, so it
+// defaults to 1 (a clean integer in `meta.version` overrides). The live-device
+// commit path supplies `active + 1` via buildRemapprBlob instead.
+function exportConfigVersion(config: ConfigKeymap): number {
+    const v = config.meta.version
+    if (v === undefined) return 1
+    const n = Number.parseInt(v, 10)
+    return Number.isFinite(n) && n > 0 ? n : 1
+}
+
+/**
+ * Pure ConfigKeymap → RMBC blob entry point for callers outside the compile
+ * pipeline (the live-device commit path). Returns the blob bytes plus the
+ * diagnostics raised while lowering. `configVersion` must be `active + 1` so the
+ * firmware accepts the commit (§21 ERR_VERSION rejects ≤ active).
+ */
+export function buildRemapprBlob(
+    config: ConfigKeymap,
+    opts: { configVersion: number },
+): { blob: Uint8Array; diagnostics: readonly Diagnostic[] } {
+    const diag = new DiagnosticBag()
+    const blob = encodeBlob(config, diag, opts.configVersion)
+    return { blob, diagnostics: diag.all }
+}
+
+function emitBlob(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
+    const bytes = encodeBlob(config, diag, exportConfigVersion(config))
     return [
         {
             filename: `${config.keyboard.id || config.keyboard.name}.rmbc`,

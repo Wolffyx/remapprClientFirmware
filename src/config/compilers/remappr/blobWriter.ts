@@ -13,7 +13,8 @@ export const BLOB_MAGIC = 0x43424d52 // "RMBC"
 export const BLOB_READER_VERSION = 1
 export const BLOB_HEADER_LEN = 20
 
-// enum remappr_table_id (config_blob.h).
+// enum remappr_table_id (config_blob.h). Ids 2(LAYOUT), 8(MOUSE), 9(PROFILE),
+// 10(ALIAS), 11(SECURITY) are reserved — the firmware does not decode them.
 export const TableId = {
     Layer: 1,
     Layout: 2,
@@ -28,9 +29,15 @@ export const TableId = {
     Security: 11,
     Subs: 12,
     Conditional: 13,
+    KeyOverride: 14,
+    Leader: 15,
+    Personality: 16,
+    ActionBinding: 17,
 } as const
 
-// enum remappr_behavior_type (behavior_table.h).
+// enum remappr_behavior_type (behavior_table.h) — 37 types, 0..36 (dense). The
+// 16-byte record layout is identical across all types; only `type` and the
+// interpretation of tap/hold/term/quick/prior differ.
 export const BehaviorType = {
     None: 0,
     Trans: 1,
@@ -52,6 +59,25 @@ export const BehaviorType = {
     Mouse: 17,
     Output: 18,
     Lighting: 19,
+    AutoShift: 20,
+    Leader: 21,
+    // KEY_MODS (22): modded key_press (e.g. Ctrl+C) — tap = HID usage, hold = mod
+    // mask. Emits mods+usage as one chord, both retracted on release.
+    KeyMods: 22,
+    AltRepeat: 23,
+    LayerMod: 24,
+    LayerTapToggle: 25,
+    LayerLock: 26,
+    ToSaved: 27,
+    GuiLock: 28,
+    Secure: 29,
+    TuneTerm: 30,
+    Unicode: 31, // tap = BMP codepoint (≤ 0xFFFF)
+    Autocorrect: 32, // tap = lock_action
+    AutoLayer: 33,
+    MacroRecord: 34, // tap = dynamic-macro slot
+    MacroPlay: 35, // tap = dynamic-macro slot
+    Peripheral: 36, // tap = peripheral_kind, hold = code
 } as const
 
 // enum remappr_system_action (behavior_table.h) — carried in BH_SYSTEM `tap`.
@@ -59,6 +85,11 @@ export const SystemAction = {
     reset: 0,
     bootloader: 1,
     soft_off: 2,
+    ext_power_toggle: 3,
+    clear_storage: 4,
+    debug_toggle: 5,
+    nkro_toggle: 6,
+    swap_keys: 7,
 } as const
 
 // enum remappr_mouse_op (behavior_table.h) — carried in BH_MOUSE `tap`.
@@ -66,6 +97,30 @@ export const MouseOp = {
     key: 0,
     move: 1,
     scroll: 2,
+    dragscroll: 3,
+} as const
+
+// enum remappr_lock_action (behavior_table.h) — carried in `tap` for
+// GUI_LOCK / SECURE / AUTOCORRECT.
+export const LockAction = {
+    off: 0,
+    on: 1,
+    toggle: 2,
+} as const
+
+// enum remappr_peripheral_kind (behavior_table.h) — carried in BH_PERIPHERAL
+// `tap`; the code rides in `hold`.
+export const PeripheralKind = {
+    encoder: 0,
+    dipswitch: 1,
+    haptic: 2,
+    audio: 3,
+    joystick: 4,
+    midi: 5,
+    steno: 6,
+    sequencer: 7,
+    wpm: 8,
+    rawhid: 9,
 } as const
 
 // enum remappr_mouse_button — carried in BH_MOUSE `hold` for MouseOp.key.
@@ -103,6 +158,7 @@ export const LightingTargetCode = {
     underglow: 0,
     backlight: 1,
     per_key: 2,
+    indicator: 3,
 } as const
 
 // enum remappr_lighting_action — carried in BH_LIGHTING `tap` (order matches
@@ -191,6 +247,48 @@ export interface MacroRecord {
 export interface ConditionalRecord {
     ifLayers: number[]
     thenLayer: number
+}
+
+// pattern-check: skip plain wire-DTO interfaces mirroring the firmware table layouts
+/** One key-override (8 bytes): replace trigger+mods with replacement+mods while
+ *  enabled. `layers` is a 16-bit enabled-layer bitmask (0 = any layer). */
+export interface KeyOverrideRecord {
+    trigger: number // HID usage
+    triggerMods: number // mods that must all be held
+    negativeMods: number // mods none of which may be held
+    suppressedMods: number // mods masked from the report while on
+    replacement: number // HID usage (0 = emit nothing)
+    replacementMods: number
+    layers: number // u16 bitmask, 0 = any
+}
+
+/** One leader sequence: `usages` (1..5 HID usages) fire `outputIndex` (a behavior
+ *  table index). */
+export interface LeaderRecord {
+    usages: number[]
+    outputIndex: number
+}
+
+/** The RGB table: a per-key color map. `mode` 0 = effects-only (no colors),
+ *  1 = per-key. `colors` is RGB888 row-major [layer][position], length
+ *  `numLayers * numPositions * 3`. */
+export interface RgbTable {
+    mode: number
+    perLayer: boolean
+    numLayers: number
+    numPositions: number
+    colors: Uint8Array
+}
+
+/** One action-binding record (10 bytes): an additive per-position action that
+ *  sits alongside the keymap binding. `kind`/`code`/`arg0`/`arg1` are passed
+ *  through verbatim (the firmware resolver interprets them). */
+export interface ActionBindingRecord {
+    position: number
+    kind: number
+    code: number
+    arg0: number
+    arg1: number
 }
 
 const CRC_TABLE = (() => {
@@ -369,6 +467,91 @@ export class BlobBuilder {
             this.w.u8(c.ifLayers.length)
             this.w.u8(c.thenLayer)
             for (const l of c.ifLayers) this.w.u8(l)
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_KEY_OVERRIDE (id 14): u16 count + count × 8-byte fixed records. */
+    keyOverrideTable(records: KeyOverrideRecord[]): this {
+        this.tableBegin(TableId.KeyOverride, 1)
+        this.w.u16(records.length)
+        for (const r of records) {
+            this.w.u8(r.trigger)
+            this.w.u8(r.triggerMods)
+            this.w.u8(r.negativeMods)
+            this.w.u8(r.suppressedMods)
+            this.w.u8(r.replacement)
+            this.w.u8(r.replacementMods)
+            this.w.u16(r.layers)
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_LEADER (id 15): u16 count + per record { u8 num_usages, u8 pad,
+     *  u16 output_behavior_index, num_usages × u8 usage }. Max 5 usages. */
+    leaderTable(records: LeaderRecord[]): this {
+        this.tableBegin(TableId.Leader, 1)
+        this.w.u16(records.length)
+        for (const r of records) {
+            this.w.u8(r.usages.length)
+            this.w.u8(0) // pad
+            this.w.u16(r.outputIndex)
+            for (const u of r.usages) this.w.u8(u)
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_RGB (id 7): 8-byte header { u8 mode, u8 flags, u8 num_layers, u8 pad,
+     *  u16 num_positions, u16 pad } + RGB888 colors row-major [layer][pos]. */
+    rgbTable(rgb: RgbTable): this {
+        this.tableBegin(TableId.Rgb, 1)
+        this.w.u8(rgb.mode)
+        this.w.u8(rgb.perLayer ? 1 : 0)
+        this.w.u8(rgb.numLayers)
+        this.w.u8(0) // pad
+        this.w.u16(rgb.numPositions)
+        this.w.u16(0) // pad
+        for (const byte of rgb.colors) this.w.u8(byte)
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_PERSONALITY (id 16): u8 personality + 3 reserved bytes (only byte 0
+     *  is read by the decoder). */
+    personalityTable(personality: number): this {
+        this.tableBegin(TableId.Personality, 1)
+        this.w.u8(personality)
+        this.w.u8(0)
+        this.w.u16(0)
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_ACTION_BINDING (id 17): header { u16 count, u16 num_positions } +
+     *  count × 10-byte records { u16 position, u8 kind, u8 reserved, u16 code,
+     *  u16 arg0, u16 arg1 }. */
+    actionBindingTable(
+        numPositions: number,
+        records: ActionBindingRecord[],
+    ): this {
+        this.tableBegin(TableId.ActionBinding, 1)
+        this.w.u16(records.length)
+        this.w.u16(numPositions)
+        for (const r of records) {
+            this.w.u16(r.position)
+            this.w.u8(r.kind)
+            this.w.u8(0) // reserved
+            this.w.u16(r.code)
+            this.w.u16(r.arg0)
+            this.w.u16(r.arg1)
         }
         this.tableEnd()
         return this
