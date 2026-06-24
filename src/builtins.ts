@@ -13,6 +13,7 @@ import './qmk'
 import './qmk-vial'
 import './keychron'
 import './mock'
+import './remappr'
 import './config'
 
 /**
