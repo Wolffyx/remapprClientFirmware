@@ -301,6 +301,15 @@ export interface NodesApi {
      *  `capabilities.readOnly === true`; every editing call throws. Editing a
      *  behind-dongle node is gated on the relayed-write HW-proof. */
     open(id: number): Promise<KeyboardService>
+
+    /** Open (or close) the dongle's pairing window so a new node can bond — the
+     *  remote equivalent of the physical pairing button. Resolves to the window
+     *  state; rejects when the roster is full (all pipes bonded). */
+    openPairWindow(open?: boolean): Promise<boolean>
+
+    /** Unbond a node by id, clearing a stale dongle bond so its pipe is free to
+     *  re-pair. Rejects on an unknown id. */
+    forgetNode(id: number): Promise<void>
 }
 
 export interface KeyboardService {

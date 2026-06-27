@@ -54,6 +54,45 @@ export async function getNodeInfo(
         : null
 }
 
+// pattern-check: skip — thin async wrappers over DONGLE.OPEN_PAIR_WINDOW /
+// FORGET_NODE, same shape as listNodes/getNodeInfo above; no GoF abstraction.
+
+/** Open or close the dongle's §17 pairing window remotely (DONGLE.OPEN_PAIR_
+ *  WINDOW) — the button-equivalent over USB. Returns the resulting window state
+ *  (true = open). Throws on ERR_STATE (all 7 pipes already bonded) or a
+ *  non-dongle device (ERR_CMD). */
+export async function openPairWindow(
+    rpc: RemapprRpc,
+    open = true,
+): Promise<boolean> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.OPEN_PAIR_WINDOW,
+        new Uint8Array([open ? 1 : 0]),
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`OPEN_PAIR_WINDOW → ${statusName(reply.status)}`)
+    return reply.data.length >= 1 ? reply.data[0] !== 0 : open
+}
+
+/** Unbond a node by short-id (DONGLE.FORGET_NODE) — clears a stale dongle bond
+ *  so the pipe is free to re-pair. Throws on ERR_ARG (unknown short-id) or a
+ *  non-dongle device (ERR_CMD). */
+export async function forgetNode(
+    rpc: RemapprRpc,
+    shortId: number,
+): Promise<void> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.FORGET_NODE,
+        new Uint8Array([shortId & 0xff, (shortId >> 8) & 0xff]),
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(
+            `FORGET_NODE 0x${shortId.toString(16)} → ${statusName(reply.status)}`,
+        )
+}
+
 // pattern-check: skip — handshake-over-relay mirrors the direct establishSession
 // (adapter.ts) but rides callUniversalPlain + target_node; linear async flow.
 /**

@@ -9,7 +9,7 @@ import type { DeviceInfo } from '../types'
 
 import { loadDeviceConfig } from './configRead'
 import { discover } from './discovery'
-import { listNodes } from './nodes'
+import { forgetNode, listNodes, openPairWindow } from './nodes'
 import type { DeviceInfo as RawDeviceInfo, NodeRecord } from './protocol'
 import type { RemapprRpc } from './rpc'
 import { RemapprKeyboardService } from './service'
@@ -77,6 +77,14 @@ export function buildNodesApi(rpc: RemapprRpc): NodesApi {
                 readOnly: true,
                 sharesTransport: true,
             })
+        },
+
+        openPairWindow(open = true): Promise<boolean> {
+            return openPairWindow(rpc, open)
+        },
+
+        forgetNode(id: number): Promise<void> {
+            return forgetNode(rpc, id)
         },
     }
 }

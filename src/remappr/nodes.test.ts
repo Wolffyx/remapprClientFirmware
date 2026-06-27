@@ -1,6 +1,6 @@
 // pattern-check: skip — node-enumeration test fixtures against a fake rpc.
 import { describe, expect, it } from 'vitest'
-import { getNodeInfo, listNodes } from './nodes'
+import { forgetNode, getNodeInfo, listNodes, openPairWindow } from './nodes'
 import {
     DongleVerb,
     Namespace,
@@ -111,5 +111,49 @@ describe('node enumeration (DONGLE namespace)', () => {
             data: new Uint8Array(),
         }))
         expect(await getNodeInfo(miss, 99)).toBeNull()
+    })
+})
+
+describe('dongle pairing control (DONGLE namespace)', () => {
+    it('openPairWindow sends the open flag and returns the window state', async () => {
+        const rpc = fakeRpc(async (ns, verb, arg) => {
+            expect(ns).toBe(Namespace.DONGLE)
+            expect(verb).toBe(DongleVerb.OPEN_PAIR_WINDOW)
+            expect(arg).toEqual(new Uint8Array([1]))
+            return { status: Status.OK, data: new Uint8Array([1]) }
+        })
+        expect(await openPairWindow(rpc)).toBe(true)
+
+        const close = fakeRpc(async (_ns, _verb, arg) => {
+            expect(arg).toEqual(new Uint8Array([0]))
+            return { status: Status.OK, data: new Uint8Array([0]) }
+        })
+        expect(await openPairWindow(close, false)).toBe(false)
+    })
+
+    it('openPairWindow throws when the roster is full (ERR_STATE)', async () => {
+        const rpc = fakeRpc(async () => ({
+            status: Status.ERR_STATE,
+            data: new Uint8Array(),
+        }))
+        await expect(openPairWindow(rpc)).rejects.toThrow(/OPEN_PAIR_WINDOW/)
+    })
+
+    it('forgetNode sends the short-id and resolves on OK', async () => {
+        const rpc = fakeRpc(async (ns, verb, arg) => {
+            expect(ns).toBe(Namespace.DONGLE)
+            expect(verb).toBe(DongleVerb.FORGET_NODE)
+            expect(new DataView(arg!.buffer).getUint16(0, true)).toBe(0x1234)
+            return { status: Status.OK, data: new Uint8Array() }
+        })
+        await expect(forgetNode(rpc, 0x1234)).resolves.toBeUndefined()
+    })
+
+    it('forgetNode throws on an unknown short-id (ERR_ARG)', async () => {
+        const rpc = fakeRpc(async () => ({
+            status: Status.ERR_ARG,
+            data: new Uint8Array(),
+        }))
+        await expect(forgetNode(rpc, 99)).rejects.toThrow(/FORGET_NODE/)
     })
 })

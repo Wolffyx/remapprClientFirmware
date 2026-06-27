@@ -163,6 +163,10 @@ export const KeyboardVerb = {
 export const DongleVerb = {
     LIST_NODES: 0x01,
     GET_NODE_INFO: 0x02,
+    /** Open/close the §17 pairing window remotely (arg[0]: 1 open / 0 close). */
+    OPEN_PAIR_WINDOW: 0x03,
+    /** Unbond a node by short-id (arg: u16) — clears a stale dongle bond. */
+    FORGET_NODE: 0x04,
 } as const
 
 /** Device role (enum remappr_role, firmware include/remappr/role.h) — reported as
