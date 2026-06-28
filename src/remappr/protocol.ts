@@ -501,8 +501,13 @@ export interface NodeRecord {
     shortId: number
     personality: number
     pipe: number
+    /** Radio liveness (§15 failsafe): the node has been heard recently. True
+     *  even before a crypto session resumes — show it, the app can reach it. */
     online: boolean
     bonded: boolean
+    /** A crypto session is up AND the node is online, so the dongle can seal
+     *  control toward it right now. Gate "open / control" on this, not `online`. */
+    secured: boolean
     hopCount: number
     rssi: number // i8 dBm (signed)
     deviceIdTail: string // 6-byte hex
@@ -528,6 +533,7 @@ export function parseNodeRecord(d: Uint8Array, off = 0): NodeRecord {
         pipe: d[off + 3],
         online: (flags & 0x01) !== 0,
         bonded: (flags & 0x02) !== 0,
+        secured: (flags & 0x04) !== 0,
         hopCount: d[off + 5],
         rssi: (d[off + 6] << 24) >> 24, // sign-extend i8
         deviceIdTail: tail,

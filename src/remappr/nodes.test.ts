@@ -51,8 +51,8 @@ function fakeRpc(
 describe('node enumeration (DONGLE namespace)', () => {
     it('parses a packed LIST_NODES reply (signed rssi, flags, id tail)', async () => {
         const data = new Uint8Array([
-            ...rec(7, 0x10, 3, 0x03, 1, -40, [1, 2, 3, 4, 5, 6], 85),
-            ...rec(9, 0x11, 4, 0x01, 2, -70, [0xaa, 0xbb, 0, 0, 0, 0]),
+            ...rec(7, 0x10, 3, 0x07, 1, -40, [1, 2, 3, 4, 5, 6], 85), // online+bonded+secured
+            ...rec(9, 0x11, 4, 0x01, 2, -70, [0xaa, 0xbb, 0, 0, 0, 0]), // online only
         ])
         const rpc = fakeRpc(async (ns, verb) => {
             expect(ns).toBe(Namespace.DONGLE)
@@ -67,6 +67,7 @@ describe('node enumeration (DONGLE namespace)', () => {
             pipe: 3,
             online: true,
             bonded: true,
+            secured: true,
             hopCount: 1,
             rssi: -40,
             deviceIdTail: '010203040506',
@@ -74,6 +75,7 @@ describe('node enumeration (DONGLE namespace)', () => {
         })
         expect(nodes[1].bonded).toBe(false)
         expect(nodes[1].online).toBe(true)
+        expect(nodes[1].secured).toBe(false) // online but no crypto session
         expect(nodes[1].rssi).toBe(-70)
         expect(nodes[1].deviceIdTail).toBe('aabb00000000')
         expect(nodes[1].battery).toBeNull() // 0xff -> unknown
