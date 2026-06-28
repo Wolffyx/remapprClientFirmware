@@ -64,6 +64,10 @@ const HID_PAGE_KEYBOARD = 7
 // — not a usage-page tag in the record — disambiguates the page on the wire
 // (§44.4). GD System Control (page 1) has no catalog entries yet.
 const HID_PAGE_CONSUMER = 12
+// GD System Control (page 1): power / sleep / wake → BH_SYS_CTRL. Same shape as
+// Consumer — the firmware emits the bare GD usage through its system-control HID
+// interface; the record carries no modifier field (§44.4).
+const HID_PAGE_SYSTEM = 1
 
 const NONE_REC: BehaviorRecord = {
     type: BehaviorType.None,
@@ -83,8 +87,10 @@ const rec = (p: Partial<BehaviorRecord> & { type: number }): BehaviorRecord => (
     ...p,
 })
 
-// Resolve a CanonicalKeyId to its HID keyboard usage, or null with a diagnostic
-// for consumer-page / unknown keys (the §44.4 usage-page gap).
+// Resolve a CanonicalKeyId to its HID keyboard usage, or null with a diagnostic.
+// Consumer / GD-system usages are bindable as standalone keys (BH_CONSUMER /
+// BH_SYS_CTRL via the key_press path) but cannot be a macro step, hold-tap tap-
+// key, or sequence target — those positions are keyboard-page only.
 function keyUsage(
     keyId: string,
     diag: DiagnosticBag,
@@ -97,8 +103,8 @@ function keyUsage(
     }
     if (u.page !== HID_PAGE_KEYBOARD) {
         diag.error(
-            `key "${keyId}" is on HID page ${u.page} (consumer/system not yet ` +
-                `on the wire — §44.4)`,
+            `key "${keyId}" is on HID page ${u.page} — only keyboard-page ` +
+                `usages can be a macro / tap / sequence target (§44.4)`,
             path,
         )
         return null
@@ -432,6 +438,20 @@ function lowerAction(
                     )
                 }
                 return rec({ type: BehaviorType.Consumer, tap: u.usage })
+            }
+            if (u.page === HID_PAGE_SYSTEM) {
+                // BH_SYS_CTRL (38): a GD System Control usage (power/sleep/wake).
+                // Like BH_CONSUMER it is asserted on press and released (usage 0)
+                // on the up edge via the system-control HID interface; the record
+                // has no modifier field, so any mods on the binding are dropped.
+                if (action.mods?.length) {
+                    diag.warn(
+                        `system-control key "${action.key}" carries modifiers — ` +
+                            `dropped (BH_SYS_CTRL emits a bare GD usage)`,
+                        path,
+                    )
+                }
+                return rec({ type: BehaviorType.SysCtrl, tap: u.usage })
             }
             if (u.page !== HID_PAGE_KEYBOARD) {
                 diag.error(

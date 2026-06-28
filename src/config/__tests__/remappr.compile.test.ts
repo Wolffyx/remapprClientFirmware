@@ -508,3 +508,86 @@ describe('remappr consumer-page (media) keys', () => {
         expect(bytesOf(parseKeymap(TINY_CONSUMER))).toEqual(golden)
     })
 })
+
+// GD System Control (§44.4): canonical ids on HID page 1 lower to BH_SYS_CTRL
+// (38) carrying the bare GD usage, not BH_KEY. The firmware routes these through
+// its dedicated system-control HID interface (power / sleep / wake).
+// pattern-check: skip — test fixtures + assertions, no production logic
+const SYS_CTRL = `{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Sys", "target": "zmk" },
+    "keyboard": { "id": "s", "name": "S",
+        "keys": [{"x":0,"y":0},{"x":1,"y":0},{"x":2,"y":0}] },
+    "layers": [{ "name": "base", "bindings": [
+        "sys_ctrl.system_power_down", "sys_ctrl.system_sleep",
+        "sys_ctrl.system_wake_up"
+    ] }]
+}`
+
+describe('remappr GD system-control keys', () => {
+    it('lowers page-1 usages to BH_SYS_CTRL (38)', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(SYS_CTRL),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        const recAt = (i: number) => beh[0] + 2 + i * 16
+        const typeOf = (i: number) => b[recAt(i)]
+        const tapOf = (i: number) => u16(b, recAt(i) + 4)
+        // Three distinct GD usages → behaviors 0..2 in binding order.
+        expect([typeOf(0), typeOf(1), typeOf(2)]).toEqual([38, 38, 38])
+        expect(tapOf(0)).toBe(0x81) // System Power Down
+        expect(tapOf(1)).toBe(0x82) // System Sleep
+        expect(tapOf(2)).toBe(0x83) // System Wake Up
+    })
+
+    it('drops modifiers on a system-control binding (warns, no error)', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "S", "target": "zmk" },
+                "keyboard": { "id": "s", "name": "S", "keys": [{"x":0,"y":0}] },
+                "layers": [{ "name": "base", "bindings": [
+                    { "type": "key_press", "key": "sys_ctrl.system_sleep",
+                      "mods": ["LEFT_CTRL"] }
+                ] }]
+            }`),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        expect(
+            diagnostics.some((d) => /system-control key/.test(d.message)),
+        ).toBe(true)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        expect(b[beh[0] + 2]).toBe(38) // still BH_SYS_CTRL, mods dropped
+    })
+
+    // Byte-exact lock for the firmware cross-check (mirrors the consumer golden):
+    // a tiny 2-key fixture whose identical bytes are embedded + decoded firmware-
+    // side in tests/config_blob/golden_canonical.h. The BH_SYS_CTRL wire ABI
+    // cannot drift silently — change either side and one of the two tests fails.
+    // pattern-check: skip — locked golden bytes, no production logic
+    it('matches the locked system-control golden bytes (firmware cross-check)', () => {
+        const TINY_SYS = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "Sys", "target": "zmk" },
+            "keyboard": { "id": "s", "name": "S",
+                "keys": [{"x":0,"y":0},{"x":1,"y":0}] },
+            "layers": [{ "name": "base",
+                "bindings": ["sys_ctrl.system_power_down", "sys_ctrl.system_sleep"] }]
+        }`
+        // prettier-ignore
+        const golden = Uint8Array.from([
+            0x52, 0x4d, 0x42, 0x43, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x46, 0x00, 0x00, 0x00, 0x12, 0x2a, 0xf1, 0x46, 0x01, 0x00, 0x01, 0x00,
+            0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0xc8, 0x00, 0x00, 0x00,
+            0x04, 0x00, 0x01, 0x00, 0x22, 0x00, 0x00, 0x00, 0x02, 0x00, 0x26, 0x00,
+            0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x26, 0x00, 0x00, 0x00, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x04, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        ])
+        expect(bytesOf(parseKeymap(TINY_SYS))).toEqual(golden)
+    })
+})

@@ -441,3 +441,34 @@ describe('remappr consumer round-trip (BH_CONSUMER)', () => {
         })
     })
 })
+
+// GD system-control keys round-trip through BH_SYS_CTRL (§44.4).
+// pattern-check: skip — round-trip test data, no production logic
+describe('remappr system-control round-trip (BH_SYS_CTRL)', () => {
+    it('encode → decode → re-encode is byte-stable for GD usages', () => {
+        roundTrips(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "Sys", "target": "zmk" }, ${kb(3)},
+            "layers": [{ "name": "base", "bindings": [
+                "sys_ctrl.system_power_down", "sys_ctrl.system_sleep",
+                "sys_ctrl.system_wake_up"
+            ] }]
+        }`)
+    })
+
+    it('decodes BH_SYS_CTRL back to its system-control key_press', () => {
+        const json = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "S", "target": "zmk" }, ${kb(1)},
+            "layers": [{ "name": "base",
+                "bindings": ["sys_ctrl.system_power_down"] }]
+        }`
+        const { blob } = buildRemapprBlob(parseKeymap(json), { configVersion: 1 })
+        const decoded = decodeRemapprBlob(blob)
+        expect(decoded.code).toBe(DecodeCode.OK)
+        expect(decoded.config!.layers[0].bindings[0]).toMatchObject({
+            type: 'key_press',
+            key: 'sys_ctrl.system_power_down',
+        })
+    })
+})
