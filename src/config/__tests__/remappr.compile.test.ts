@@ -298,6 +298,33 @@ describe('remappr system behaviors (BH_SYSTEM)', () => {
         expect(typeOf(2)).toBe(16)
         expect(tapOf(2)).toBe(2) // soft_off
     })
+
+    it('lowers ext_power toggle/on/off to BH_SYSTEM action codes', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "EP", "target": "zmk" },
+                "keyboard": { "id": "ep", "name": "EP",
+                    "keys": [{"x":0,"y":0},{"x":1,"y":0},{"x":2,"y":0}] },
+                "layers": [{ "name": "base", "bindings": [
+                    { "type": "ext_power", "action": "toggle" },
+                    { "type": "ext_power", "action": "on" },
+                    { "type": "ext_power", "action": "off" }
+                ] }]
+            }`),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        const recAt = (i: number) => beh[0] + 2 + i * 16
+        const typeOf = (i: number) => b[recAt(i)]
+        const tapOf = (i: number) => u16(b, recAt(i) + 4)
+        // toggle = 3 (existing), on = 9, off = 10 (8 is the unpair control verb).
+        expect([typeOf(0), typeOf(1), typeOf(2)]).toEqual([16, 16, 16])
+        expect(tapOf(0)).toBe(3)
+        expect(tapOf(1)).toBe(9)
+        expect(tapOf(2)).toBe(10)
+    })
 })
 
 // Mouse behaviors (§44.3): mouse_key/move/scroll lower to BH_MOUSE (type 17)

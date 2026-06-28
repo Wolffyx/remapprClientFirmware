@@ -161,6 +161,18 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
         }`)
     })
 
+    // pattern-check: skip — round-trip test data, no production logic
+    it('ext_power on/off round-trips (BH_SYSTEM)', () => {
+        roundTrips(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "EP", "target": "zmk" }, ${kb(2)},
+            "layers": [{ "name": "base", "bindings": [
+                { "type": "ext_power", "action": "on" },
+                { "type": "ext_power", "action": "off" }
+            ] }]
+        }`)
+    })
+
     // pattern-check: skip — round-trip test data for the §5.2 vocabulary
     it('round-trips the §5.2 vocabulary (behavior_type 20..36)', () => {
         const json = `{

@@ -576,19 +576,17 @@ function lowerAction(
                 tap: SystemAction[action.type],
             })
         case 'ext_power':
-            // Firmware exposes a single EXT_POWER_TOGGLE system action; absolute
-            // on/off can't be expressed, so only `toggle` lowers cleanly.
-            if (action.action !== 'toggle') {
-                diag.error(
-                    `ext_power "${action.action}" not on the wire — firmware ` +
-                        `only has EXT_POWER_TOGGLE (use "toggle")`,
-                    path,
-                )
-                return rec({ type: BehaviorType.None })
-            }
+            // EXT_POWER toggle / on / off → BH_SYSTEM with the matching system
+            // action code; the keyboard_node sink drives the board's ext_power
+            // GPIO (toggle relative, on/off absolute). §44.3, §5.2-I.
             return rec({
                 type: BehaviorType.System,
-                tap: SystemAction.ext_power_toggle,
+                tap:
+                    action.action === 'on'
+                        ? SystemAction.ext_power_on
+                        : action.action === 'off'
+                          ? SystemAction.ext_power_off
+                          : SystemAction.ext_power_toggle,
             })
         case 'mouse_key':
             // op in `tap`, button code in `hold`; engine reports press/release

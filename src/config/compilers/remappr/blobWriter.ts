@@ -92,6 +92,10 @@ export const SystemAction = {
     debug_toggle: 5,
     nkro_toggle: 6,
     swap_keys: 7,
+    // 8 = REMAPPR_SYS_UNPAIR (a P1 radio control verb, never a keymap behavior —
+    // the compiler does not emit it), so the absolute ext-power codes resume at 9.
+    ext_power_on: 9,
+    ext_power_off: 10,
 } as const
 
 // enum remappr_mouse_op (behavior_table.h) — carried in BH_MOUSE `tap`.

@@ -321,6 +321,10 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
             if (name === 'soft_off') return { type: 'soft_off' }
             if (name === 'ext_power_toggle')
                 return { type: 'ext_power', action: 'toggle' }
+            if (name === 'ext_power_on')
+                return { type: 'ext_power', action: 'on' }
+            if (name === 'ext_power_off')
+                return { type: 'ext_power', action: 'off' }
             return unmodeled(`system(${name ?? rec.tap})`)
         }
         case BehaviorType.Mouse: {
