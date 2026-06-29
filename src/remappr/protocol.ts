@@ -51,6 +51,7 @@ export const Cmd = {
     COMMIT_CONFIG: 0x13,
     ROLLBACK_CONFIG: 0x14,
     READ_CONFIG_CHUNK: 0x15,
+    UNPAIR_RADIO: 0x18, // COMMON: forget the bonded dongle, re-arm (owner-sealed, P1)
     GET_PROFILE_STATUS: 0x20,
     SELECT_PROFILE: 0x21,
     CLEAR_PROFILE: 0x22,
@@ -113,6 +114,7 @@ export const Cap = {
     DIAGNOSTICS: 1 << 4,
     AUTH: 1 << 5,
     KEYMAP: 1 << 6,
+    PAIRING: 1 << 7,
 } as const
 
 /* ── universal (proto-v2) ───────────────────────────────────────────────── */
@@ -167,6 +169,9 @@ export const DongleVerb = {
     OPEN_PAIR_WINDOW: 0x03,
     /** Unbond a node by short-id (arg: u16) — clears a stale dongle bond. */
     FORGET_NODE: 0x04,
+    /** Wipe the whole bond table (pipes 1..7) — recovers a dongle whose pipes are
+     *  full of stale/incomplete (short-id 0) bonds that FORGET_NODE cannot clear. */
+    CLEAR_ALL_BONDS: 0x05,
 } as const
 
 /** Device role (enum remappr_role, firmware include/remappr/role.h) — reported as
