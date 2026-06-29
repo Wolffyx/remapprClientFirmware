@@ -42,6 +42,9 @@ import {
     buildRemapprActionTypes,
     buildRemapprKeyAction,
     relabelLayer,
+    REMAPPR_KIND_MACRO,
+    REMAPPR_KIND_MOD_MORPH,
+    REMAPPR_KIND_TAP_DANCE,
     REMAPPR_KIND_TRANSPARENT,
 } from './actions'
 import { remapprCodec } from './codec'
@@ -213,6 +216,9 @@ export class RemapprKeyboardService implements KeyboardService {
         this.macros = {
             getCount: () => this.config.macros?.length ?? 0,
             readonly: this.readOnly,
+            // §24 named macros surfaced as key-assignable tiles: the picker
+            // lists these by their real DT names in the Macros tab.
+            listNames: () => (this.config.macros ?? []).map((m) => m.id),
             getMacro: async (idx) => {
                 const m = this.macroAt(idx)
                 if (!m) throw new ProtocolError(`No macro at index ${idx}`)
@@ -300,6 +306,20 @@ export class RemapprKeyboardService implements KeyboardService {
         return this.editedTapDances.get(idx) ?? this.config.tapDances?.[idx]
     }
 
+    /** Resolve a composite binding's display name from its pool (§24) so a
+     *  freshly bound macro / tap-dance / mod-morph shows its real name on the
+     *  keycap, not "#<index>". Non-composite kinds (and out-of-range indices)
+     *  return undefined; labelFor then ignores the field. */
+    private compositeName(kind: string, params: number[]): string | undefined {
+        const idx = params[0] ?? 0
+        if (kind === REMAPPR_KIND_MACRO) return this.macroAt(idx)?.id
+        if (kind === REMAPPR_KIND_TAP_DANCE) return this.tapDanceAt(idx)?.id
+        if (kind === REMAPPR_KIND_MOD_MORPH) {
+            return this.config.modMorphs?.[idx]?.id
+        }
+        return undefined
+    }
+
     /** `base` with pending macro / tap-dance edits overlaid (for commit/export). */
     private withEdits(base: ConfigKeymap): ConfigKeymap {
         if (this.editedMacros.size === 0 && this.editedTapDances.size === 0) {
@@ -376,7 +396,13 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     buildKeyAction(kind: string, params: number[]): KeyAction {
-        return buildRemapprKeyAction(kind, params, this.layerNames())
+        return buildRemapprKeyAction(
+            kind,
+            params,
+            this.layerNames(),
+            undefined,
+            this.compositeName(kind, params),
+        )
     }
 
     async listKeyCatalog(): Promise<KeyCatalog> {
@@ -429,6 +455,9 @@ export class RemapprKeyboardService implements KeyboardService {
             action.params,
             this.layerNames(),
             action.label?.modifiers,
+            // Persist the composite's real name in the buffer so relabelLayer
+            // (getKeymap / layer ops) keeps it across a re-render (§24).
+            this.compositeName(action.kind, action.params),
         )
         this.layers[idx] = { ...layer, keys: next }
         this.markPending(true)

@@ -88,6 +88,13 @@ export interface MacroApi {
     getMacro(idx: number): Promise<MacroAction[]>
 
     setMacro?(idx: number, actions: MacroAction[]): Promise<void>
+
+    /** Real per-index macro names (e.g. §24 config-blob DT names); index =
+     *  pool position. Only the Remappr adapter implements this; the keycode
+     *  picker keys off its presence to list macros as named tiles in the
+     *  Macros tab. View-only firmwares whose macros aren't key-assignable
+     *  (ZMK, QMK/Vial) omit it. */
+    listNames?(): readonly string[]
 }
 
 // Pattern check: Facade (Tier 1) — extended — mirrors EncoderApi/MacroApi/RgbApi:
