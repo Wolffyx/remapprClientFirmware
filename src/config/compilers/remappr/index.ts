@@ -838,7 +838,15 @@ function encodeBlob(
     configVersion: number,
 ): Uint8Array {
     const numLayers = config.layers.length
-    const numPositions = config.keyboard.keys.length
+    // numPositions is the physical key count. Prefer the declared geometry, but a
+    // device with no stored geometry (a fresh/default config) leaves
+    // keyboard.keys empty while the per-layer bindings already carry one entry
+    // per position (§44.7 invariant). Fall back to the binding count so the LAYER
+    // table never emits num_positions=0 — the firmware rejects that with
+    // ERR_BOUNDS in decode_keymap, surfacing to the app as COMMIT_CONFIG →
+    // ERR_ACTIVATE.
+    const numPositions =
+        config.keyboard.keys.length || config.layers[0]?.bindings.length || 0
 
     if (numLayers === 0) diag.error('keymap has no layers', ['layers'])
     if (numPositions === 0) diag.error('keyboard has no keys', ['keyboard', 'keys'])

@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { getCompiler, hasCompiler, parseKeymap } from '../index'
+import { buildRemapprBlob } from '../compilers/remappr/index'
+import { decodeRemapprBlob, DecodeCode } from '../compilers/remappr/decode'
+import { defaultConfig } from '../../remappr/configRead'
 
 // Read a little-endian u16 out of a blob.
 const u16 = (b: Uint8Array, off: number): number => b[off] | (b[off + 1] << 8)
@@ -38,6 +41,31 @@ const TINY = `{
         { "name": "fn", "bindings": [{ "type": "transparent" }, "A", { "type": "none" }] }
     ]
 }`
+
+describe('fresh-device default config (no stored geometry)', () => {
+    it('encodes num_positions from the binding count when keyboard.keys is empty', () => {
+        // The live "Save on a freshly-connected keyboard" path: with no stored
+        // config the editor uses defaultConfig(), which leaves keyboard.keys
+        // empty but carries one transparent binding per physical position.
+        // Regression for COMMIT_CONFIG → ERR_ACTIVATE (the firmware rejects a
+        // LAYER table with num_positions=0 as ERR_BOUNDS in decode_keymap).
+        const cfg = defaultConfig(15)
+        expect(cfg.keyboard.keys).toHaveLength(0)
+
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const layer = findTable(blob, 1) // TBL_LAYER
+        expect(layer).not.toBeNull()
+        const [start] = layer!
+        expect(u16(blob, start)).toBe(1) // num_layers
+        expect(u16(blob, start + 2)).toBe(15) // num_positions — was 0 before the fix
+        expect(diagnostics.some((d) => d.severity === 'error')).toBe(false)
+
+        // The firmware re-validates on commit; the app's decoder shares that
+        // logic, so a clean round-trip proves the blob now activates.
+        const decoded = decodeRemapprBlob(blob)
+        expect(decoded.code).toBe(DecodeCode.OK)
+    })
+})
 
 describe('remappr (canonical → RMBC) target', () => {
     it('is registered alongside the text targets', () => {
