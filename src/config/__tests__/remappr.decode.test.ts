@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { parseKeymap } from '../index'
 import { buildRemapprBlob } from '../compilers/remappr'
-import { crc32 } from '../compilers/remappr/blobWriter'
+import {
+    BehaviorType,
+    BlobBuilder,
+    crc32,
+    MacroOp,
+    NameKind,
+    TableId,
+    type BehaviorRecord,
+} from '../compilers/remappr/blobWriter'
 import { DecodeCode, decodeRemapprBlob } from '../compilers/remappr/decode'
 
 // The same locked golden bytes asserted in remappr.compile.test.ts + the
@@ -81,6 +89,133 @@ describe('decodeRemapprBlob golden cross-check', () => {
         const { config } = decodeRemapprBlob(GOLDEN)
         const { blob } = buildRemapprBlob(config!, { configVersion: 1 })
         expect(blob).toEqual(GOLDEN)
+    })
+})
+
+// A BehaviorRecord with every field zeroed; overrides set the interesting ones.
+const rec = (over: Partial<BehaviorRecord>): BehaviorRecord => ({
+    type: 0,
+    flavor: 0,
+    flags: 0,
+    subCount: 0,
+    tap: 0,
+    hold: 0,
+    tappingTermMs: 0,
+    quickTapMs: 0,
+    requirePriorIdleMs: 0,
+    subIndex: 0,
+    ...over,
+})
+
+// Walk the table frames of a finalized blob and return one table's payload.
+const tablePayload = (blob: Uint8Array, id: number): Uint8Array | null => {
+    let off = 20 // BLOB_HEADER_LEN
+    const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength)
+    while (off + 8 <= blob.length) {
+        const tid = dv.getUint16(off, true)
+        const len = dv.getUint32(off + 4, true)
+        const start = off + 8
+        if (tid === id) return blob.subarray(start, start + len)
+        off = start + len
+    }
+    return null
+}
+
+describe('decodeRemapprBlob TBL_NAMES (§24 real DT names)', () => {
+    // macro #0 + a mod-morph over subs[0..1], named via TBL_NAMES.
+    const namedBlob = (): Uint8Array =>
+        new BlobBuilder()
+            .layerTable(1, 2, 200, 5)
+            .behaviorTable([
+                rec({ type: BehaviorType.Macro, tap: 0 }),
+                rec({
+                    type: BehaviorType.ModMorph,
+                    hold: 0x02,
+                    subCount: 2,
+                    subIndex: 0,
+                }),
+            ])
+            .bindingTable([0, 1]) // layer 0: pos0 → macro, pos1 → mod-morph
+            .subsTable([
+                rec({ type: BehaviorType.Key, tap: 0x04 }),
+                rec({ type: BehaviorType.Key, tap: 0x05 }),
+            ])
+            .macroTable([{ steps: [{ op: MacroOp.Tap, arg: 0x0b }] }])
+            .namesTable([
+                { kind: NameKind.ModMorph, ref: 0, name: 'swap_dot' },
+                { kind: NameKind.Macro, ref: 0, name: 'macro_hi' },
+            ])
+            .finalize(1, 1, 7)
+
+    it('applies names to macro/composite defs and their bindings', () => {
+        const { code, config } = decodeRemapprBlob(namedBlob())
+        expect(code).toBe(DecodeCode.OK)
+        const c = config!
+        expect(c.macros?.[0].id).toBe('macro_hi')
+        expect(c.modMorphs?.[0].id).toBe('swap_dot')
+        expect(c.layers[0].bindings[0]).toMatchObject({
+            type: 'macro',
+            ref: 'macro_hi',
+        })
+        expect(c.layers[0].bindings[1]).toMatchObject({
+            type: 'mod_morph',
+            ref: 'swap_dot',
+        })
+    })
+
+    // Byte-level cross-lock: the TS writer must emit exactly the layout the
+    // firmware keymap_encode.c asserts in tests/config_blob test_names_table.
+    it('emits the firmware TBL_NAMES wire layout byte-for-byte', () => {
+        const payload = tablePayload(namedBlob(), TableId.Names)!
+        // prettier-ignore
+        const expected = Uint8Array.from([
+            0x02, 0x00,                                     // count = 2
+            0x02, 0x00, 0x00, 0x00, 0x08,                   // mod-morph, ref 0, len 8
+            0x73, 0x77, 0x61, 0x70, 0x5f, 0x64, 0x6f, 0x74, // "swap_dot"
+            0x00, 0x00, 0x00, 0x00, 0x08,                   // macro, ref 0, len 8
+            0x6d, 0x61, 0x63, 0x72, 0x6f, 0x5f, 0x68, 0x69, // "macro_hi"
+        ])
+        expect(payload).toEqual(expected)
+    })
+
+    it('falls back to synthetic ids when a name is absent', () => {
+        const blob = new BlobBuilder()
+            .layerTable(1, 1, 200, 5)
+            .behaviorTable([rec({ type: BehaviorType.Macro, tap: 0 })])
+            .bindingTable([0])
+            .macroTable([{ steps: [{ op: MacroOp.Tap, arg: 0x0b }] }])
+            .finalize(1, 1, 1)
+        const { config } = decodeRemapprBlob(blob)
+        expect(config!.macros?.[0].id).toBe('macro_0')
+        expect(config!.layers[0].bindings[0]).toMatchObject({
+            type: 'macro',
+            ref: 'macro_0',
+        })
+    })
+
+    it('skips a malformed names entry (overrun) and still decodes', () => {
+        const blob = namedBlob()
+        const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength)
+        // Overrun the first entry's name_len (mod-morph "swap_dot"), then re-fix
+        // the body CRC so the blob passes header validation and readNames runs.
+        let off = 20
+        while (off + 8 <= blob.length) {
+            const tid = dv.getUint16(off, true)
+            const len = dv.getUint32(off + 4, true)
+            if (tid === TableId.Names) {
+                blob[off + 8 + 6] = 0xff // entry 0 name_len → overruns the table
+                break
+            }
+            off += 8 + len
+        }
+        const bodyLen = dv.getUint32(12, true)
+        dv.setUint32(16, crc32(blob.subarray(20, 20 + bodyLen)), true)
+
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK) // keymap still forms
+        // the overrun aborts the names walk → both fall back to synthetic ids
+        expect(config!.modMorphs?.[0].id).toBe('mm_0')
+        expect(config!.macros?.[0].id).toBe('macro_0')
     })
 })
 
@@ -250,13 +385,14 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
         const { config } = decodeRemapprBlob(
             buildRemapprBlob(parseKeymap(json), { configVersion: 1 }).blob,
         )
-        // Synthesized ref keyed by sub_index (0 = first composite's slice).
+        // §24: the real id round-trips via TBL_NAMES — not the synthetic td_0.
         expect(config!.layers[0].bindings[0]).toEqual({
             type: 'tap_dance',
-            ref: 'td_0',
+            ref: 'td_esc',
         })
         expect(config!.tapDances).toHaveLength(1)
         const td = config!.tapDances![0]
+        expect(td.id).toBe('td_esc')
         expect(td.tappingTermMs).toBe(180)
         expect(td.taps.map((t) => t.count)).toEqual([1, 2])
         expect(td.taps.map((t) => t.action.type)).toEqual(['key_press', 'layer'])

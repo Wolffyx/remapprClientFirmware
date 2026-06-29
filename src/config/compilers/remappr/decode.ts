@@ -56,6 +56,7 @@ import {
     MouseButtonCode,
     MouseDirCode,
     MouseOp,
+    NameKind,
     OUTPUT_NO_PROFILE,
     OutputActionCode,
     PeripheralKind,
@@ -214,6 +215,11 @@ interface DecodeCtx {
      *  reconstructed def here (keyed unique by sub_index). */
     tapDances: CanonTapDance[]
     modMorphs: CanonModMorph[]
+    /** Real DT names from TBL_NAMES, keyed by sub_index (§24). Return the name
+     *  when present so the def id (and every binding ref) is the real label
+     *  instead of the synthetic td_N / mm_N. */
+    tdName: (subIndex: number) => string | undefined
+    mmName: (subIndex: number) => string | undefined
 }
 
 // Build a key_press, threading the original mods through (KEY_MODS).
@@ -450,7 +456,7 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
 // firmware carries no name, so the ref is synthesized from the sub_index (unique
 // per composite — distinct composites own distinct, non-overlapping sub slices).
 function decodeTapDance(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
-    const ref = `td_${rec.subIndex}`
+    const ref = ctx.tdName(rec.subIndex) ?? `td_${rec.subIndex}`
     const taps: CanonTapDanceStep[] = []
     for (let i = 0; i < rec.subCount; i++) {
         const sub = ctx.subs[rec.subIndex + i]
@@ -476,7 +482,7 @@ function decodeTapDance(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
 }
 
 function decodeModMorph(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
-    const ref = `mm_${rec.subIndex}`
+    const ref = ctx.mmName(rec.subIndex) ?? `mm_${rec.subIndex}`
     const sub0 = ctx.subs[rec.subIndex]
     const sub1 = ctx.subs[rec.subIndex + 1]
     if (rec.subCount < 2 || !sub0 || !sub1) {
@@ -668,6 +674,22 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const macroT = table(TableId.Macro)
     const macros = macroT ? readMacros(bytes, macroT, diag) : []
 
+    // ── NAMES (optional, §24) → real DT labels for macros + composites ──
+    const namesT = table(TableId.Names)
+    const names = namesT
+        ? readNames(bytes, namesT, diag)
+        : {
+              macros: new Map<number, string>(),
+              tapDances: new Map<number, string>(),
+              modMorphs: new Map<number, string>(),
+          }
+    // Rename macros in place so macroRef (and every macro binding) carries the
+    // real name; tap-dance / mod-morph names resolve per-cell via ctx below.
+    macros.forEach((m, i) => {
+        const nm = names.macros.get(i)
+        if (nm) m.id = nm
+    })
+
     const layerName = (i: number): string =>
         i >= 0 && i < numLayers ? `Layer ${i}` : `Layer ${i}`
     const macroRef = (i: number): string =>
@@ -686,6 +708,8 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         subs,
         tapDances,
         modMorphs,
+        tdName: (sub) => names.tapDances.get(sub),
+        mmName: (sub) => names.modMorphs.get(sub),
     }
     const decoded = behaviors.map((rec, i) =>
         behaviorToAction(rec, { ...ctx, path: ['behaviors', i] }),
@@ -757,6 +781,54 @@ function readRecordTable(bytes: Uint8Array, t: TableFrame): BehaviorRecord[] | n
     if (t.start + 2 + count * 16 > t.end) return null
     const out: BehaviorRecord[] = []
     for (let i = 0; i < count; i++) out.push(parseBehaviorRecord(r))
+    return out
+}
+
+interface DecodedNames {
+    macros: Map<number, string>
+    tapDances: Map<number, string>
+    modMorphs: Map<number, string>
+}
+
+// TBL_NAMES (§24): u16 count + per entry { u8 kind, u8 reserved, u16 ref,
+// u8 name_len, name_len × u8 UTF-8 }. Advisory display labels — bounds-checked
+// so a malformed or foreign blob can't throw; unknown kinds + overruns skip.
+function readNames(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): DecodedNames {
+    const out: DecodedNames = {
+        macros: new Map(),
+        tapDances: new Map(),
+        modMorphs: new Map(),
+    }
+    if (t.end - t.start < 2) return out
+    const r = new ByteReader(bytes)
+    r.seek(t.start)
+    const count = r.u16()
+    const dec = new TextDecoder()
+    for (let i = 0; i < count; i++) {
+        if (r.pos + 5 > t.end) {
+            diag.warn('names table truncated')
+            break
+        }
+        const kind = r.u8()
+        r.u8() // reserved
+        const ref = r.u16()
+        const len = r.u8()
+        if (r.pos + len > t.end) {
+            diag.warn('name string overruns table')
+            break
+        }
+        const name = dec.decode(bytes.subarray(r.pos, r.pos + len))
+        r.seek(r.pos + len)
+        if (!name) continue
+        if (kind === NameKind.Macro) out.macros.set(ref, name)
+        else if (kind === NameKind.TapDance) out.tapDances.set(ref, name)
+        else if (kind === NameKind.ModMorph) out.modMorphs.set(ref, name)
+        else diag.warn(`unknown name kind ${kind}`)
+    }
     return out
 }
 

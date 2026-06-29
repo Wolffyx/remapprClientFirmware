@@ -35,6 +35,7 @@ import {
     MouseDirCode,
     MouseOp,
     LockAction,
+    NameKind,
     OUTPUT_NO_PROFILE,
     OutputActionCode,
     PeripheralKind,
@@ -46,6 +47,7 @@ import {
     type LeaderRecord,
     type MacroRecord,
     type MacroStep,
+    type NameRecord,
 } from './blobWriter'
 import type {
     CanonHoldTapDef,
@@ -383,6 +385,9 @@ interface CompCtx {
     memo: Map<string, BehaviorRecord>
     /** ref-keys currently being lowered, to break a self-referential cycle. */
     inProgress: Set<string>
+    /** TBL_NAMES entries (§24) collected as composites are first lowered, keyed
+     *  by the assigned sub_index so the firmware/app see the real name. */
+    names: NameRecord[]
 }
 
 // Memoize a composite record by ref-key and guard against a definition that
@@ -765,6 +770,11 @@ function lowerAction(
                         )
                 const subIndex = comp.subs.length
                 comp.subs.push(...slots)
+                comp.names.push({
+                    kind: NameKind.TapDance,
+                    ref: subIndex,
+                    name: action.ref,
+                })
                 return rec({
                     type: BehaviorType.TapDance,
                     subCount: maxCount,
@@ -798,6 +808,11 @@ function lowerAction(
                 )
                 const subIndex = comp.subs.length
                 comp.subs.push(sub0, sub1)
+                comp.names.push({
+                    kind: NameKind.ModMorph,
+                    ref: subIndex,
+                    name: action.ref,
+                })
                 // ZMK keep-mods: trigger mods are suppressed from the morphed
                 // report unless kept. The firmware flag is all-or-nothing, so any
                 // keep-mods list keeps them all; a partial list warns.
@@ -868,6 +883,7 @@ function encodeBlob(
         holdTapById: new Map((config.holdTaps ?? []).map((h) => [h.id, h])),
         memo: new Map(),
         inProgress: new Set(),
+        names: [],
     }
 
     // De-duplicated behavior table; bindings index into it.
@@ -1016,6 +1032,17 @@ function encodeBlob(
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
     if (leaders.length > 0) builder.leaderTable(leaders)
+    // NAMES (§24): real labels for the macros + composites this blob emits, so a
+    // device round-trip (decode → edit → re-commit) keeps the names the app shows.
+    // Macros are keyed by their table index; composites by sub_index (collected in
+    // comp.names as each was lowered). Emitted last; absent when there are none.
+    const names: NameRecord[] = [
+        ...[...macroIndex].map(
+            ([name, ref]): NameRecord => ({ kind: NameKind.Macro, ref, name }),
+        ),
+        ...comp.names,
+    ]
+    if (names.length > 0) builder.namesTable(names)
 
     return builder.finalize(
         config.schemaVersion,

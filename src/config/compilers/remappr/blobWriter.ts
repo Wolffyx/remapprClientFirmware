@@ -33,6 +33,15 @@ export const TableId = {
     Leader: 15,
     Personality: 16,
     ActionBinding: 17,
+    Poshold: 18,
+    Names: 19,
+} as const
+
+/** TBL_NAMES entry kind (config_blob.h REMAPPR_NAME_KIND_*). */
+export const NameKind = {
+    Macro: 0,
+    TapDance: 1,
+    ModMorph: 2,
 } as const
 
 // enum remappr_behavior_type (behavior_table.h) — 39 types, 0..38 (dense). The
@@ -306,6 +315,17 @@ export interface ActionBindingRecord {
     arg1: number
 }
 
+// pattern-check: skip plain data record mirroring the other *Record interfaces
+/** One TBL_NAMES entry: a display label for a macro/composite (§24). `kind` is
+ *  a NameKind value; `ref` is the macro index or composite sub_index. */
+export interface NameRecord {
+    kind: number
+    ref: number
+    name: string
+}
+
+const NAME_ENCODER = new TextEncoder()
+
 const CRC_TABLE = (() => {
     const t = new Uint32Array(256)
     for (let n = 0; n < 256; n++) {
@@ -469,6 +489,28 @@ export class BlobBuilder {
                 this.w.u8(0) // pad
                 this.w.u16(s.arg)
             }
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_NAMES (id 19): u16 count + per entry { u8 kind, u8 reserved, u16 ref,
+     *  u8 name_len, name_len × u8 UTF-8 }. Advisory display labels (§24); mirrors
+     *  keymap_encode.c. Entries with an empty name are dropped (firmware does the
+     *  same), so an all-empty list still emits a 0-count table — callers that want
+     *  no table at all should skip calling this. */
+    namesTable(records: NameRecord[]): this {
+        const named = records.filter((r) => r.name.length > 0)
+        this.tableBegin(TableId.Names, 1)
+        this.w.u16(named.length)
+        for (const r of named) {
+            const bytes = NAME_ENCODER.encode(r.name).subarray(0, 255)
+            this.w.u8(r.kind)
+            this.w.u8(0) // reserved
+            this.w.u16(r.ref)
+            this.w.u8(bytes.length)
+            for (const b of bytes) this.w.u8(b)
         }
         this.tableEnd()
         return this

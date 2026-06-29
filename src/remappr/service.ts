@@ -8,13 +8,16 @@ import { filterCatalogByCodec } from '../catalog/filter'
 import type { KeyCatalog } from '../catalog/types'
 import type {
     Capabilities,
+    DynamicEntriesApi,
     KeyboardService,
     KeyTestApi,
+    MacroApi,
     NodesApi,
 } from '../service'
 import type {
     ActionType,
     AdapterNotification,
+    ComboEntry,
     DeviceInfo,
     ExportedFile,
     KeyAction,
@@ -22,10 +25,17 @@ import type {
     KeyUpdate,
     Layer,
     LockState,
+    MacroAction,
     PhysicalLayout,
+    TapDanceEntry,
 } from '../types'
 import { ProtocolError } from '../errors'
-import { type ConfigKeymap, serializeKeymap } from '../config'
+import {
+    type CanonMacro,
+    type CanonTapDance,
+    type ConfigKeymap,
+    serializeKeymap,
+} from '../config'
 import { buildRemapprBlob } from '../config/compilers/remappr'
 
 import {
@@ -36,6 +46,14 @@ import {
 } from './actions'
 import { remapprCodec } from './codec'
 import { lowerConfigToNeutral, raiseNeutralToConfig } from './configBridge'
+import {
+    actionsToMacro,
+    comboToEntry,
+    entryToTapDance,
+    isRichTapDance,
+    macroToActions,
+    tapDanceToEntry,
+} from './dynamicBridge'
 import type { RemapprRpc } from './rpc'
 import type { RemapprSession } from './auth'
 import {
@@ -103,6 +121,13 @@ export class RemapprKeyboardService implements KeyboardService {
     /** Behind-dongle roster — present on the dongle's own service, omitted on a
      *  node view (a node has no nodes of its own). */
     public readonly nodes?: NodesApi
+    /** Read-only macro list (§24): the active config's macros surfaced to the
+     *  Macros tab by their real DT names. Editing (setMacro) lands with the
+     *  round-trip; for now `readonly: true`. */
+    public readonly macros?: MacroApi
+    /** Read-only dynamic entries (§24): tap-dance + combo surfaced to their tabs.
+     *  Mod-morph has no tab (it shows on the bound key); set* reject for now. */
+    public readonly dynamic?: DynamicEntriesApi
 
     private readonly rpc: RemapprRpc
     private readonly session?: RemapprSession
@@ -122,6 +147,11 @@ export class RemapprKeyboardService implements KeyboardService {
     private nextLayerId = 0
     private pendingChanges = false
     private closed = false
+    // Pending macro / tap-dance edits (§24), overlaid on `config` at commit so the
+    // committed config stays the source of truth and discard reverts cleanly —
+    // same contract as the neutral `layers` buffer. Keyed by pool index.
+    private readonly editedMacros = new Map<number, CanonMacro>()
+    private readonly editedTapDances = new Map<number, CanonTapDance>()
 
     private readonly notificationListeners = new Set<NotificationHandler>()
     private readonly pendingChangesListeners = new Set<PendingChangesHandler>()
@@ -174,6 +204,70 @@ export class RemapprKeyboardService implements KeyboardService {
             }
         }
 
+        // pattern-check: skip — facade object literals mirroring keyTest/nodes;
+        // the class is already the Adapter/Facade declared in the file header.
+        // Dynamic entries (§24): surface the decoded macros + composites read-only
+        // so the Macros / Tap-Dance / Combo tabs render real names. Editing lands
+        // with the round-trip; until then every set* rejects.
+        // pattern-check: skip — facade method bodies delegating to dynamicBridge
+        this.macros = {
+            getCount: () => this.config.macros?.length ?? 0,
+            readonly: this.readOnly,
+            getMacro: async (idx) => {
+                const m = this.macroAt(idx)
+                if (!m) throw new ProtocolError(`No macro at index ${idx}`)
+                return macroToActions(m)
+            },
+            setMacro: async (idx, actions) => {
+                this.assertWritable()
+                const m = this.config.macros?.[idx]
+                if (!m) throw new ProtocolError(`No macro at index ${idx}`)
+                this.editedMacros.set(idx, actionsToMacro(m.id, m.params, actions))
+                this.markPending(true)
+            },
+        }
+        this.dynamic = {
+            getCounts: () => ({
+                tapDance: this.config.tapDances?.length ?? 0,
+                combo: this.config.combos?.length ?? 0,
+                keyOverride: 0, // out of §24 scope; not surfaced as a tab yet
+            }),
+            getTapDance: async (idx) => {
+                const td = this.tapDanceAt(idx)
+                if (!td) throw new ProtocolError(`No tap-dance at index ${idx}`)
+                return tapDanceToEntry(td)
+            },
+            setTapDance: async (idx, entry) => {
+                this.assertWritable()
+                const td = this.config.tapDances?.[idx]
+                if (!td) throw new ProtocolError(`No tap-dance at index ${idx}`)
+                // Rich composites (nested / >2 taps) can't round-trip the 4-slot
+                // editor — refuse rather than silently drop the extra steps (§24).
+                if (isRichTapDance(td)) {
+                    throw new ProtocolError(
+                        `Tap-dance "${td.id}" is too complex to edit here ` +
+                            '(nested or multi-tap); edit it as JSON instead.',
+                    )
+                }
+                this.editedTapDances.set(idx, entryToTapDance(td.id, entry))
+                this.markPending(true)
+            },
+            getCombo: async (idx) => {
+                const c = this.config.combos?.[idx]
+                if (!c) throw new ProtocolError(`No combo at index ${idx}`)
+                return comboToEntry(c)
+            },
+            setCombo: async () => {
+                throw new ProtocolError('Editing combos is not yet supported')
+            },
+            getKeyOverride: async () => {
+                throw new ProtocolError('Key overrides are not surfaced yet')
+            },
+            setKeyOverride: async () => {
+                throw new ProtocolError('Editing key overrides is not yet supported')
+            },
+        }
+
         this.rpc.onClosed((reason) => this.fireClosed(reason))
     }
 
@@ -196,6 +290,40 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     /* ── editing buffer ─────────────────────────────────────────────────── */
+
+    /** The macro at `idx` with any pending edit applied (read path). */
+    private macroAt(idx: number): CanonMacro | undefined {
+        return this.editedMacros.get(idx) ?? this.config.macros?.[idx]
+    }
+
+    private tapDanceAt(idx: number): CanonTapDance | undefined {
+        return this.editedTapDances.get(idx) ?? this.config.tapDances?.[idx]
+    }
+
+    /** `base` with pending macro / tap-dance edits overlaid (for commit/export). */
+    private withEdits(base: ConfigKeymap): ConfigKeymap {
+        if (this.editedMacros.size === 0 && this.editedTapDances.size === 0) {
+            return base
+        }
+        return {
+            ...base,
+            ...(base.macros
+                ? { macros: base.macros.map((m, i) => this.editedMacros.get(i) ?? m) }
+                : {}),
+            ...(base.tapDances
+                ? {
+                      tapDances: base.tapDances.map(
+                          (t, i) => this.editedTapDances.get(i) ?? t,
+                      ),
+                  }
+                : {}),
+        }
+    }
+
+    private clearEdits(): void {
+        this.editedMacros.clear()
+        this.editedTapDances.clear()
+    }
 
     private seedLayersFromConfig(): void {
         const { layers } = lowerConfigToNeutral(this.config)
@@ -388,7 +516,9 @@ export class RemapprKeyboardService implements KeyboardService {
     async commit(): Promise<void> {
         this.assertWritable()
         const session = this.requireSession()
-        const next = raiseNeutralToConfig(this.layers, this.config)
+        // Fold pending macro / tap-dance edits (§24) into the config the layers
+        // raise onto, so a committed blob carries them (and their names).
+        const next = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
         const version = this.configVersion + 1
         const { blob } = buildRemapprBlob(next, { configVersion: version })
         const padded = padTo(blob, BLOB_ALIGN)
@@ -414,6 +544,7 @@ export class RemapprKeyboardService implements KeyboardService {
 
         this.config = next
         this.configVersion = version
+        this.clearEdits()
         this.markPending(false)
     }
 
@@ -437,11 +568,13 @@ export class RemapprKeyboardService implements KeyboardService {
                 .callSealed(this.session, Cmd.ROLLBACK_CONFIG)
                 .catch(() => undefined)
         }
+        this.clearEdits()
         this.seedLayersFromConfig()
         this.markPending(false)
     }
 
     async resetSettings(): Promise<void> {
+        this.clearEdits()
         this.seedLayersFromConfig()
         this.activeLayoutId = this.layouts[0]?.id ?? 0
         this.markPending(false)
@@ -468,7 +601,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async exportConfig(): Promise<ExportedFile[]> {
-        const live = raiseNeutralToConfig(this.layers, this.config)
+        const live = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
         return [
             {
                 filename: `${this.deviceInfo.name || 'remappr'}.keymap.json`,
