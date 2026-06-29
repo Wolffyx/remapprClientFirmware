@@ -18,6 +18,7 @@ export type {
     CanonMacro,
     CanonMacroStep,
     CanonTapDance,
+    CanonTapDanceStep,
     CanonKscan,
     CanonMatrixKscan,
     CanonDirectKscan,

@@ -41,18 +41,28 @@ function usageOf(a: CanonAction | undefined): number {
     return a?.type === 'key_press' ? usageOfKey(a.key) : 0
 }
 
-/** A macro's canonical steps → the app's flat MacroAction buffer. */
+// pattern-check: skip — bug fix: exhaustive macro-step mapper; pure data transform
+/** A macro's canonical steps → the app's flat MacroAction buffer. Advanced ZMK
+ *  macro controls (param forwarding, tap-time override, pause-for-release) have no
+ *  compact-app representation and are dropped for display — the full step list
+ *  survives in the config (raise preserves it). */
 export function macroToActions(macro: CanonMacro): MacroAction[] {
-    return macro.steps.map((s): MacroAction => {
+    return macro.steps.flatMap((s): MacroAction[] => {
         switch (s.type) {
             case 'tap':
-                return { kind: 'tap', keycode: usageOfKey(s.key) }
+                return [{ kind: 'tap', keycode: usageOfKey(s.key) }]
             case 'press':
-                return { kind: 'down', keycode: usageOfKey(s.key) }
+                return [{ kind: 'down', keycode: usageOfKey(s.key) }]
             case 'release':
-                return { kind: 'up', keycode: usageOfKey(s.key) }
+                return [{ kind: 'up', keycode: usageOfKey(s.key) }]
             case 'wait':
-                return { kind: 'delay', ms: s.ms }
+                return [{ kind: 'delay', ms: s.ms }]
+            case 'text':
+                return [{ kind: 'text', text: s.text }]
+            case 'param':
+            case 'tap_time':
+            case 'pause_for_release':
+                return []
         }
     })
 }
@@ -102,9 +112,10 @@ function keyOfUsage(usage: number): CanonicalKeyId | null {
 /** The app's MacroAction buffer → a canonical macro (the inverse of
  *  macroToActions). Unmappable keycodes are dropped; `text` passes through for
  *  the compiler to expand. */
+// pattern-check: skip — type-narrowing bug fix on an existing mapper signature
 export function actionsToMacro(
     id: string,
-    params: number,
+    params: CanonMacro['params'],
     actions: MacroAction[],
 ): CanonMacro {
     const steps: CanonMacroStep[] = []

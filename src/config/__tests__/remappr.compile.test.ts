@@ -58,7 +58,7 @@ describe('fresh-device default config (no stored geometry)', () => {
         const [start] = layer!
         expect(u16(blob, start)).toBe(1) // num_layers
         expect(u16(blob, start + 2)).toBe(15) // num_positions — was 0 before the fix
-        expect(diagnostics.some((d) => d.severity === 'error')).toBe(false)
+        expect(diagnostics.some((d) => d.level === 'error')).toBe(false)
 
         // The firmware re-validates on commit; the app's decoder shares that
         // logic, so a clean round-trip proves the blob now activates.
