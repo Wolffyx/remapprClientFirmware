@@ -10,7 +10,7 @@
 // reassemble inbound FRAG chains per request_id; the host never emits fragments.
 
 import type { Transport } from '../transport'
-import { TransportError } from '../errors'
+import { TransportError, FragmentLostError } from '../errors'
 import { RemapprSession } from './auth'
 import {
     buildRequest,
@@ -297,6 +297,8 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
 
             let assembled = new Uint8Array(0)
             let inChain = false
+            let expIdx = 0 // next expected frag index in the active chain (§4.2)
+            let chainCnt = 0 // frag_count from FRAG_FIRST; 0 = legacy (no seq)
             let timeout = baseTimeout
             // eslint-disable-next-line no-constant-condition
             while (true) {
@@ -313,25 +315,48 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
                 const chunk = frame.subarray(1 + UCH_LEN)
                 const fragBits = uch.flags & (UchFlag.FRAG_FIRST | UchFlag.FRAG_MORE)
                 if (!inChain && fragBits === 0) {
+                    if (uch.fragCount > 0 && uch.fragIndex !== 0) {
+                        // Seq present, no chain, no FRAG flags: FRAG_FIRST was lost.
+                        throw new FragmentLostError(
+                            `FRAG chain start lost (got fragment ${uch.fragIndex} of ${uch.fragCount})`,
+                        )
+                    }
                     assembled = chunk.slice() // single-frame reply
                     break
                 }
                 if (uch.flags & UchFlag.FRAG_FIRST) {
-                    assembled = chunk.slice()
+                    assembled = new Uint8Array(0) // (re)start; chunk appended below
                     inChain = true
+                    expIdx = 0
+                    chainCnt = uch.fragCount
                     timeout = Math.max(baseTimeout, FRAG_INTER_TIMEOUT_MS)
                 } else if (!inChain) {
                     continue // stray FRAG_MORE without a FRAG_FIRST
-                } else {
-                    const merged = new Uint8Array(assembled.length + chunk.length)
-                    merged.set(assembled, 0)
-                    merged.set(chunk, assembled.length)
-                    assembled = merged
                 }
+                // Per-fragment seq (§4.2): a hole in the index means a fragment was
+                // dropped in transit — surface it so an idempotent read re-requests
+                // instead of reassembling a silently truncated body.
+                if (chainCnt > 0) {
+                    if (uch.fragIndex !== expIdx) {
+                        throw new FragmentLostError(
+                            `FRAG gap: expected fragment ${expIdx}, got ${uch.fragIndex} of ${chainCnt}`,
+                        )
+                    }
+                    expIdx++
+                }
+                const merged = new Uint8Array(assembled.length + chunk.length)
+                merged.set(assembled, 0)
+                merged.set(chunk, assembled.length)
+                assembled = merged
                 if (assembled.length > FRAG_REASSEMBLY_CAP) {
                     throw new TransportError('universal reply exceeds reassembly cap')
                 }
                 if (uch.flags & UchFlag.FRAG_MORE) continue
+                if (chainCnt > 0 && expIdx !== chainCnt) {
+                    throw new FragmentLostError(
+                        `FRAG chain ended early: ${expIdx} of ${chainCnt} fragments`,
+                    )
+                }
                 break // FRAG_MORE clear → last fragment
             }
             const resp = parseResponse(assembled)
@@ -372,7 +397,8 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
                 // makes nextFrame() reject with a timeout. Retry that transient
                 // like ERR_STATE; rethrow a closed transport or a spent budget.
                 const retriable =
-                    e instanceof TransportError && /timeout/i.test(e.message)
+                    e instanceof FragmentLostError ||
+                    (e instanceof TransportError && /timeout/i.test(e.message))
                 if (!retriable || attempt >= maxAttempts) throw e
             }
             await delay(RELAY_RETRY_BACKOFF_MS)

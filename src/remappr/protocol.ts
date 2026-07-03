@@ -314,6 +314,11 @@ export interface Uch {
     flags: number
     requestId: number
     targetNode: number
+    /** Per-fragment sequence (§4.2 reserved bytes): 0-based index within a
+     * FRAG_* chain, and the chain's total fragment count (0 = not fragmented /
+     * legacy emitter with no sequence). */
+    fragIndex: number
+    fragCount: number
 }
 
 export function buildUch(
@@ -341,6 +346,8 @@ export function parseUch(frame: Uint8Array, off = 0): Uch {
         flags: frame[off + 2],
         requestId: frame[off + 3],
         targetNode: dv.getUint16(off + 4, true),
+        fragIndex: frame[off + 6],
+        fragCount: frame[off + 7],
     }
 }
 
