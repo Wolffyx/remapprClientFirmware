@@ -593,7 +593,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const h = new ByteReader(bytes)
     const magic = h.u32()
     if (magic !== BLOB_MAGIC) return fail(DecodeCode.MAGIC)
-    const schemaVersion = h.u16()
+    h.u16() // schema version — consumed to advance the reader; not otherwise used
     const minReader = h.u16()
     if (minReader > BLOB_READER_VERSION) return fail(DecodeCode.READER_VER)
     const configVersion = h.u32()

@@ -17,7 +17,6 @@ import type {
 import type {
     ActionType,
     AdapterNotification,
-    ComboEntry,
     DeviceInfo,
     ExportedFile,
     KeyAction,
@@ -25,9 +24,7 @@ import type {
     KeyUpdate,
     Layer,
     LockState,
-    MacroAction,
     PhysicalLayout,
-    TapDanceEntry,
 } from '../types'
 import { ProtocolError } from '../errors'
 import {

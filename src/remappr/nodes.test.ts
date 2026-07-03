@@ -129,7 +129,7 @@ describe('node enumeration (DONGLE namespace)', () => {
 
     it('getNodeInfo sends the short-id arg and returns the record or null', async () => {
         const r = rec(7, 0x10, 3, 0x03, 1, -40, [1, 2, 3, 4, 5, 6])
-        const rpc = fakeRpc(async (ns, verb, arg) => {
+        const rpc = fakeRpc(async (_ns, verb, arg) => {
             expect(verb).toBe(DongleVerb.GET_NODE_INFO)
             expect(new DataView(arg!.buffer).getUint16(0, true)).toBe(7)
             return { status: Status.OK, data: r }
