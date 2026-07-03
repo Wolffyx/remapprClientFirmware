@@ -16,7 +16,6 @@ import {
     Namespace,
     parseDeviceInfo,
     parseLimits,
-    parsePersonalityMap,
     parseUch,
     SEALED_TAG,
     UCH_LEN,

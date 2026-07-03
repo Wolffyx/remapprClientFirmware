@@ -1,0 +1,23 @@
+[
+    {
+        "Id": 129,
+        "Name": "System Power Down",
+        "Kinds": ["OSC"],
+        "Label": "Power",
+        "Label2": "GD System Control · power down (HUT 1/0x81)"
+    },
+    {
+        "Id": 130,
+        "Name": "System Sleep",
+        "Kinds": ["OSC"],
+        "Label": "Sleep",
+        "Label2": "GD System Control · sleep (HUT 1/0x82)"
+    },
+    {
+        "Id": 131,
+        "Name": "System Wake Up",
+        "Kinds": ["OSC"],
+        "Label": "Wake",
+        "Label2": "GD System Control · wake up (HUT 1/0x83)"
+    }
+]

@@ -1,7 +1,7 @@
 // pattern-check: skip — discovery negotiation test fixtures against a fake rpc.
 import { describe, expect, it } from 'vitest'
 import { discover } from './discovery'
-import { Cmd, CommonVerb, Status } from './protocol'
+import { Cmd, CommonVerb, Namespace, Role, Status } from './protocol'
 import type { RemapprRpc } from './rpc'
 
 // A 16-byte DEVICE_INFO with the given proto_max (other fields 0).
@@ -17,6 +17,11 @@ function deviceInfo(protoMax: number): Uint8Array {
 // Minimal PersonalityMap: role, personality, proto_major, 0 namespaces, hwCaps.
 function personalityMap(): Uint8Array {
     return Uint8Array.of(0x02, 0x10, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00)
+}
+
+// A dongle's PersonalityMap: role = DONGLE (1), 0 namespaces, hwCaps 0.
+function donglePersonalityMap(): Uint8Array {
+    return Uint8Array.of(Role.DONGLE, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00)
 }
 
 // Minimal GET_LIMITS payload (5×u16 + 2×u8 = 12 bytes).
@@ -96,5 +101,52 @@ describe('discover (node-aware)', () => {
         await expect(discover(rpc, { targetNode: 9 })).rejects.toThrow(
             /GET_DEVICE_INFO/,
         )
+    })
+
+    it('falls back to universal GET_DEVICE_INFO (target 0) when the legacy probe fails, surfacing role = DONGLE', async () => {
+        const calls: { ns: number; verb: number; target: number }[] = []
+        const rpc = {
+            callPlain: async () => {
+                throw new Error('dongle drops the legacy flat frame')
+            },
+            callUniversalPlain: async (
+                ns: number,
+                verb: number,
+                _arg?: Uint8Array,
+                opts?: { targetNode?: number },
+            ) => {
+                calls.push({ ns, verb, target: opts?.targetNode ?? 0 })
+                if (verb === Cmd.GET_DEVICE_INFO)
+                    return { status: Status.OK, data: deviceInfo(2) }
+                if (verb === CommonVerb.GET_PERSONALITY_MAP)
+                    return { status: Status.OK, data: donglePersonalityMap() }
+                if (verb === CommonVerb.GET_LIMITS)
+                    return { status: Status.OK, data: limits() }
+                return { status: Status.ERR_CMD, data: new Uint8Array() }
+            },
+        } as unknown as RemapprRpc
+
+        const res = await discover(rpc)
+        expect(res.role).toBe(Role.DONGLE)
+        expect(res.protoMax).toBe(2)
+        // The fallback addressed the device itself (target 0) under COMMON.
+        expect(calls[0]).toEqual({
+            ns: Namespace.COMMON,
+            verb: Cmd.GET_DEVICE_INFO,
+            target: 0,
+        })
+    })
+
+    it('throws when neither the legacy nor the universal device-info probe answers', async () => {
+        const rpc = {
+            callPlain: async () => {
+                throw new Error('no legacy reply')
+            },
+            callUniversalPlain: async () => ({
+                status: Status.ERR_CMD,
+                data: new Uint8Array(),
+            }),
+        } as unknown as RemapprRpc
+        await expect(discover(rpc)).rejects.toThrow(/GET_DEVICE_INFO/)
     })
 })

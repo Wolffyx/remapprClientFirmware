@@ -86,25 +86,18 @@ function kp(kpAction: CanonKeyPress): string {
     return `&kp ${token}`
 }
 
-// One emit handler per CanonAction variant; the mapped type forces every
-// discriminant to be handled. Handlers receive the narrowed action.
-type BindingHandlers = {
+// The actions ZMK can render, each to its `&behavior …` token. This table *is*
+// ZMK's capability declaration: a discriminant present here is supported; one
+// absent is not, and emitBinding drops it to the `fallback` no-op. Partial over
+// CanonAction — other firmwares (and the canonical model) carry actions ZMK has
+// no behavior for. Handlers receive the narrowed action.
+type BindingHandlers = Partial<{
     [T in CanonAction['type']]: (
         a: Extract<CanonAction, { type: T }>,
         ctx: Ctx,
         path: Path,
     ) => string
-}
-
-// §5.2 Remappr-firmware-only behaviors have no ZMK binding; warn + &none so the
-// keymap still builds. pattern-check: skip — shared fallback handler.
-const remapprOnly = (a: { type: string }, ctx: Ctx, path: Path): string => {
-    ctx.diag.warn(
-        `"${a.type}" is a Remappr-specific behavior; no ZMK binding; emitted &none`,
-        path,
-    )
-    return '&none'
-}
+}>
 
 const HANDLERS: BindingHandlers = {
     key_press: (a) => kp(a),
@@ -204,30 +197,20 @@ const HANDLERS: BindingHandlers = {
     mouse_key: (a) => `&mkp ${MOUSE_BTN[a.button]}`,
     mouse_move: (a) => `&mmv ${MOVE[a.direction]}`,
     mouse_scroll: (a) => `&msc ${SCRL[a.direction]}`,
-    // pattern-check: skip — §5.2 Remappr-only kinds → &none fallback
-    auto_shift: remapprOnly,
-    alt_repeat: remapprOnly,
-    layer_lock: remapprOnly,
-    layer_mod: remapprOnly,
-    tap_toggle: remapprOnly,
-    set_base_saved: remapprOnly,
-    auto_layer: remapprOnly,
-    gui_lock: remapprOnly,
-    secure: remapprOnly,
-    autocorrect: remapprOnly,
-    tune_tap_term: remapprOnly,
-    unicode: remapprOnly,
-    macro_record: remapprOnly,
-    macro_play: remapprOnly,
-    leader: remapprOnly,
-    peripheral: remapprOnly,
 }
 
+// An action ZMK has no behavior for (e.g. Remappr-firmware-only §5.2 kinds):
+// warn + &none so the keymap still builds.
+const fallback = (a: CanonAction, ctx: Ctx, path: Path): string => {
+    ctx.diag.warn(`"${a.type}" has no ZMK binding; emitted &none`, path)
+    return '&none'
+}
+
+// pattern-check: skip — refactor of the existing Strategy dispatch: presence-check
+// on ZMK's own partial handler table, no new abstraction introduced.
 export function emitBinding(a: CanonAction, ctx: Ctx, path: Path): string {
-    const handler = HANDLERS[a.type] as (
-        a: CanonAction,
-        ctx: Ctx,
-        path: Path,
-    ) => string
-    return handler(a, ctx, path)
+    const handler = HANDLERS[a.type] as
+        | ((a: CanonAction, ctx: Ctx, path: Path) => string)
+        | undefined
+    return handler ? handler(a, ctx, path) : fallback(a, ctx, path)
 }

@@ -90,11 +90,18 @@ export type ActionSlotKind =
     | 'action'
 
 export interface ActionSlot {
+    // pattern-check: skip additive optional field on existing interface
     label: string
     kind: ActionSlotKind
     values?: { value: number; label: string }[]
     range?: { min: number; max: number }
     innerKinds?: string[]
+    /**
+     * enum param1 values that enable this (trailing) slot. Undefined = always
+     * shown. Set when a behavior's later param is conditional on the command —
+     * e.g. `&bt`'s profile index applies only to BT_SEL / BT_DISC.
+     */
+    enabledFor?: number[]
 }
 
 export interface DeviceInfo {

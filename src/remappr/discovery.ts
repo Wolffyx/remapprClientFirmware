@@ -19,7 +19,18 @@ import {
     Status,
     statusName,
 } from './protocol'
-import type { RemapprRpc } from './rpc'
+import { type RemapprRpc, RELAY_READ_RETRIES } from './rpc'
+
+// pattern-check: skip — a numeric tuning constant; DiscoveryResult below is
+// pre-existing (unchanged), not a new interface.
+/** Bootstrap timeout for the legacy GET_DEVICE_INFO probe. A directly-attached
+ *  keyboard answers it in milliseconds; a dongle has no legacy dispatcher and
+ *  drops it, so a long wait there is pure latency. Keep it short — on timeout the
+ *  probe falls back to the universal COMMON verb (which both a keyboard and a
+ *  dongle answer), so a slow keyboard is not misclassified, only delayed by one
+ *  extra round trip. This is what makes connecting to a dongle feel instant
+ *  instead of ~1.5 s. */
+const LEGACY_PROBE_TIMEOUT_MS = 400
 
 export interface DiscoveryResult {
     protoMax: number
@@ -28,6 +39,10 @@ export interface DiscoveryResult {
     personality?: PersonalityMap
     /** Present on proto_max >= 2 (chunk + frame + pipelining limits). */
     limits?: Limits
+    /** Resolved device role (enum remappr_role) from the personality map, or
+     *  undefined on a v1 device. The adapter branches the connect path on it
+     *  (a dongle skips auth/config and lands on its node roster). */
+    role?: number
 }
 
 /**
@@ -49,7 +64,30 @@ export async function discover(
 
     let diData: Uint8Array
     if (target === 0) {
-        diData = (await rpc.callPlain(Cmd.GET_DEVICE_INFO)).data
+        try {
+            diData = (
+                await rpc.callPlain(
+                    Cmd.GET_DEVICE_INFO,
+                    undefined,
+                    LEGACY_PROBE_TIMEOUT_MS,
+                )
+            ).data
+        } catch {
+            // No legacy dispatcher answered (a dongle drops non-0xE2 frames):
+            // fall back to the universal COMMON discovery verb addressed to the
+            // device itself (§7.2). A dongle replies here as a ROLE_DONGLE device.
+            const r = await rpc.callUniversalPlain(
+                Namespace.COMMON,
+                Cmd.GET_DEVICE_INFO,
+                undefined,
+                { targetNode: 0 },
+            )
+            if (r.status !== Status.OK)
+                throw new Error(
+                    `GET_DEVICE_INFO → ${statusName(r.status)}`,
+                )
+            diData = r.data
+        }
     } else {
         // Relayed: legacy verbs keep their number under COMMON, so GET_DEVICE_INFO
         // travels universal-framed to the node (§6.2) rather than direct.
@@ -57,7 +95,7 @@ export async function discover(
             Namespace.COMMON,
             Cmd.GET_DEVICE_INFO,
             undefined,
-            { targetNode: target },
+            { targetNode: target, retries: RELAY_READ_RETRIES },
         )
         if (r.status !== Status.OK)
             throw new Error(
@@ -77,7 +115,7 @@ export async function discover(
             Namespace.COMMON,
             CommonVerb.GET_PERSONALITY_MAP,
             undefined,
-            { targetNode: target },
+            { targetNode: target, retries: RELAY_READ_RETRIES },
         )
         if (pm.status === Status.OK) personality = parsePersonalityMap(pm.data)
     } catch {
@@ -88,12 +126,18 @@ export async function discover(
             Namespace.COMMON,
             CommonVerb.GET_LIMITS,
             undefined,
-            { targetNode: target },
+            { targetNode: target, retries: RELAY_READ_RETRIES },
         )
         if (lim.status === Status.OK) limits = parseLimits(lim.data)
     } catch {
         /* universal limits unavailable — leave undefined */
     }
 
-    return { protoMax: deviceInfo.protoMax, deviceInfo, personality, limits }
+    return {
+        protoMax: deviceInfo.protoMax,
+        deviceInfo,
+        personality,
+        limits,
+        role: personality?.role,
+    }
 }

@@ -51,6 +51,7 @@ export const Cmd = {
     COMMIT_CONFIG: 0x13,
     ROLLBACK_CONFIG: 0x14,
     READ_CONFIG_CHUNK: 0x15,
+    UNPAIR_RADIO: 0x18, // COMMON: forget the bonded dongle, re-arm (owner-sealed, P1)
     GET_PROFILE_STATUS: 0x20,
     SELECT_PROFILE: 0x21,
     CLEAR_PROFILE: 0x22,
@@ -113,6 +114,7 @@ export const Cap = {
     DIAGNOSTICS: 1 << 4,
     AUTH: 1 << 5,
     KEYMAP: 1 << 6,
+    PAIRING: 1 << 7,
 } as const
 
 /* ── universal (proto-v2) ───────────────────────────────────────────────── */
@@ -163,6 +165,28 @@ export const KeyboardVerb = {
 export const DongleVerb = {
     LIST_NODES: 0x01,
     GET_NODE_INFO: 0x02,
+    /** Open/close the §17 pairing window remotely (arg[0]: 1 open / 0 close). */
+    OPEN_PAIR_WINDOW: 0x03,
+    /** Unbond a node by short-id (arg: u16) — clears a stale dongle bond. */
+    FORGET_NODE: 0x04,
+    /** Wipe the whole bond table (pipes 1..7) — recovers a dongle whose pipes are
+     *  full of stale/incomplete (short-id 0) bonds that FORGET_NODE cannot clear. */
+    CLEAR_ALL_BONDS: 0x05,
+    /** Return the §5 master node's record (one NODE_RECORD_LEN blob), or ERR_STATE
+     *  when no bonded node reports a MAIN election role. The roster already carries
+     *  a `master` flag per record, so this is a convenience lookup. */
+    GET_MASTER: 0x06,
+} as const
+
+/** Device role (enum remappr_role, firmware include/remappr/role.h) — reported as
+ *  byte 0 of GET_PERSONALITY_MAP. A dongle self-identifies as DONGLE so the host
+ *  takes the roster path instead of the keyboard connect path. */
+export const Role = {
+    NODE: 0,
+    DONGLE: 1,
+    RADIO_COPROCESSOR: 2,
+    BRIDGE: 3,
+    DEVKIT: 4,
 } as const
 
 /* ── frag reassembly limits (control_frag / control_cli) ────────────────── */
@@ -449,6 +473,17 @@ export function parseKeyLayoutChunk(d: Uint8Array): KeyLayoutChunk {
     const total = dv.getUint16(0, true)
     const start = dv.getUint16(2, true)
     const count = d[4]
+    // A relayed §9.2 FRAG chain that lost one middle fragment reassembles a body
+    // short by that fragment — the transport concatenates chunks by arrival order
+    // with no per-fragment sequence, so a gap is invisible there. Reject the short
+    // chunk explicitly (its header still declares the full `count`) so the caller
+    // retries the read, instead of reading past the buffer for a cryptic DataView
+    // RangeError. Mirrors control_cli cmd_get_layout's `len(body) < count*16` guard.
+    if (d.length < 5 + count * 16) {
+        throw new Error(
+            `layout chunk truncated: ${d.length - 5} B for ${count} entries`,
+        )
+    }
     const positions: KeyLayoutPos[] = []
     let off = 5
     for (let i = 0; i < count; i++) {
@@ -486,16 +521,35 @@ export interface NodeRecord {
     shortId: number
     personality: number
     pipe: number
+    /** Radio liveness (§15 failsafe): the node has been heard recently. True
+     *  even before a crypto session resumes — show it, the app can reach it. */
     online: boolean
     bonded: boolean
+    /** A crypto session is up AND the node is online, so the dongle can seal
+     *  control toward it right now. Gate "open / control" on this, not `online`. */
+    secured: boolean
     hopCount: number
     rssi: number // i8 dBm (signed)
     deviceIdTail: string // 6-byte hex
+    /** Battery state-of-charge 0..100, or null when the node has not reported
+     *  one (firmware sends 0xFF = unknown). */
+    battery: number | null
+    /** The node holds a §5 MAIN election bit, so the dongle treats it as the
+     *  master. A v2/legacy node carries no role and always reads false. */
+    master: boolean
+    /** Raw §5 election-role low byte (enum remappr_node_role); 0 = unknown. Kept
+     *  alongside `master` for callers that want the exact role, not just the bit. */
+    nodeRole: number
 }
 
 /** Wire size of one node record: u16 short_id, u8 personality, u8 pipe, u8 flags,
- *  u8 hop_count, i8 rssi, 6×u8 device_id_tail. */
-export const NODE_RECORD_LEN = 13
+ *  u8 hop_count, i8 rssi, 6×u8 device_id_tail, u8 battery_soc (0xFF = unknown),
+ *  u8 node_role (§5 election-role low byte, 0 = unknown). */
+export const NODE_RECORD_LEN = 15
+
+/** Flags-byte bit that marks the §5 master node (mirrors firmware
+ *  REMAPPR_DONGLE_NODE_F_MASTER). */
+const NODE_F_MASTER = 0x08
 
 export function parseNodeRecord(d: Uint8Array, off = 0): NodeRecord {
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
@@ -503,19 +557,24 @@ export function parseNodeRecord(d: Uint8Array, off = 0): NodeRecord {
     let tail = ''
     for (let i = 0; i < 6; i++)
         tail += d[off + 7 + i].toString(16).padStart(2, '0')
+    const batt = d[off + 13]
     return {
         shortId: dv.getUint16(off, true),
         personality: d[off + 2],
         pipe: d[off + 3],
         online: (flags & 0x01) !== 0,
         bonded: (flags & 0x02) !== 0,
+        secured: (flags & 0x04) !== 0,
         hopCount: d[off + 5],
         rssi: (d[off + 6] << 24) >> 24, // sign-extend i8
         deviceIdTail: tail,
+        battery: batt === 0xff ? null : batt,
+        master: (flags & NODE_F_MASTER) !== 0,
+        nodeRole: d[off + 14],
     }
 }
 
-/** Parse a packed LIST_NODES reply (concatenated 13-byte records). A trailing
+/** Parse a packed LIST_NODES reply (concatenated 15-byte records). A trailing
  *  partial record (shorter than NODE_RECORD_LEN) is ignored. */
 export function parseNodeList(d: Uint8Array): NodeRecord[] {
     const out: NodeRecord[] = []

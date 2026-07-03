@@ -54,6 +54,90 @@ export async function getNodeInfo(
         : null
 }
 
+// pattern-check: skip — thin async wrappers over DONGLE.OPEN_PAIR_WINDOW /
+// FORGET_NODE, same shape as listNodes/getNodeInfo above; no GoF abstraction.
+
+/** Open or close the dongle's §17 pairing window remotely (DONGLE.OPEN_PAIR_
+ *  WINDOW) — the button-equivalent over USB. Returns the resulting window state
+ *  (true = open). Throws on ERR_STATE (all 7 pipes already bonded) or a
+ *  non-dongle device (ERR_CMD). */
+export async function openPairWindow(
+    rpc: RemapprRpc,
+    open = true,
+): Promise<boolean> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.OPEN_PAIR_WINDOW,
+        new Uint8Array([open ? 1 : 0]),
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`OPEN_PAIR_WINDOW → ${statusName(reply.status)}`)
+    return reply.data.length >= 1 ? reply.data[0] !== 0 : open
+}
+
+/** Unbond a node by short-id (DONGLE.FORGET_NODE) — clears a stale dongle bond
+ *  so the pipe is free to re-pair. Throws on ERR_ARG (unknown short-id) or a
+ *  non-dongle device (ERR_CMD). */
+export async function forgetNode(
+    rpc: RemapprRpc,
+    shortId: number,
+): Promise<void> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.FORGET_NODE,
+        new Uint8Array([shortId & 0xff, (shortId >> 8) & 0xff]),
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(
+            `FORGET_NODE 0x${shortId.toString(16)} → ${statusName(reply.status)}`,
+        )
+}
+
+// pattern-check: skip — thin async wrapper over DONGLE.CLEAR_ALL_BONDS, same
+// shape as forgetNode above; no GoF abstraction.
+/** Wipe the dongle's entire bond table (DONGLE.CLEAR_ALL_BONDS) — the recovery
+ *  for a table full of stale bonds that FORGET_NODE can't reach (an incomplete
+ *  bond has no short-id). Returns the number of pipes actually unbonded. Throws
+ *  on a non-dongle device (ERR_CMD). */
+export async function clearAllBonds(rpc: RemapprRpc): Promise<number> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.CLEAR_ALL_BONDS,
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`CLEAR_ALL_BONDS → ${statusName(reply.status)}`)
+    return reply.data.length >= 1 ? reply.data[0] : 0
+}
+
+// pattern-check: skip — orchestrates establishNodeSession + one callSealedRelay;
+// linear async flow, same idiom as the wrappers above, no GoF abstraction.
+/**
+ * Tell a behind-dongle node to forget its dongle bond and re-arm for a fresh
+ * pair (COMMON.UNPAIR_RADIO, owner-sealed §19, P1). Establishes a §19 node
+ * session over the relay, then sends the sealed verb; the node drops its bond
+ * and re-arms, and the dongle reuses that node's pipe on the re-pair (no leak).
+ * Throws on a failed handshake or a non-OK seal. NOTE: the relayed sealed data
+ * plane is HW-proof-pending (firmware-gated); the firmware verb is HW-proven.
+ */
+export async function unpairRadio(
+    rpc: RemapprRpc,
+    targetNode: number,
+    identity: RemapprIdentity = loadOrCreateIdentity(),
+): Promise<void> {
+    const session = await establishNodeSession(rpc, targetNode, identity)
+    const reply = await rpc.callSealedRelay(
+        session,
+        Namespace.COMMON,
+        Cmd.UNPAIR_RADIO,
+        undefined,
+        { targetNode },
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(
+            `UNPAIR_RADIO 0x${targetNode.toString(16)} → ${statusName(reply.status)}`,
+        )
+}
+
 // pattern-check: skip — handshake-over-relay mirrors the direct establishSession
 // (adapter.ts) but rides callUniversalPlain + target_node; linear async flow.
 /**

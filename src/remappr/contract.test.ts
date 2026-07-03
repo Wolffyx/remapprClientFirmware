@@ -23,6 +23,7 @@ import {
     buildUch,
     Cmd,
     CommonVerb,
+    DongleVerb,
     EVENT_TAG,
     EVT_INPUT,
     FRAME,
@@ -332,6 +333,76 @@ function makeMismatch(): Transport {
     }
 }
 
+/* ── fake Remappr dongle ────────────────────────────────────────────────────
+ * A dongle has no legacy dispatcher (it drops/ERRs non-0xE2 frames) and no auth
+ * or config of its own; it answers the DONGLE namespace (LIST_NODES). The adapter
+ * must detect it and take the roster path — skipping the §19 handshake. */
+function makeFakeDongle(): {
+    transport: Transport
+    sawAuth: () => boolean
+} {
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const readable = new ReadableStream<Uint8Array>({
+        start: (c) => {
+            controller = c
+        },
+    })
+    const enqueue = (f: Uint8Array): void => {
+        const p = new Uint8Array(FRAME)
+        p.set(f.subarray(0, FRAME))
+        controller.enqueue(p)
+    }
+    let sawAuth = false
+
+    const onFrame = (frame: Uint8Array): void => {
+        const b0 = frame[0]
+        if (b0 === Cmd.CONTROL_AUTH_BEGIN || b0 === Cmd.CONTROL_AUTH_FINISH) {
+            sawAuth = true // a dongle is never handshaken; record + drop
+            return
+        }
+        if (b0 === Cmd.GET_DEVICE_INFO) {
+            // Legacy flat frame: no on-board dispatcher → ERR_CMD (empty), so the
+            // host's parseDeviceInfo throws and the adapter falls back to a
+            // LIST_NODES probe (matches an un-self-identifying dongle).
+            enqueue(respFrame(b0, frame[1], Status.ERR_CMD, new Uint8Array()))
+            return
+        }
+        if (b0 === UNIVERSAL_TAG) {
+            const uch = parseUch(frame, 1)
+            const verb = frame[1 + UCH_LEN]
+            const seq = frame[1 + UCH_LEN + 1]
+            if (
+                uch.namespace === Namespace.DONGLE &&
+                verb === DongleVerb.LIST_NODES
+            ) {
+                // OK + empty roster (no bonded nodes yet).
+                enqueue(
+                    uniFrame(
+                        uch.namespace,
+                        uch.requestId,
+                        0,
+                        respFrame(verb, seq, 0, new Uint8Array()),
+                    ),
+                )
+            }
+            return
+        }
+    }
+
+    const writable = new WritableStream<Uint8Array>({
+        write: (frame) => onFrame(frame),
+    })
+    return {
+        transport: {
+            label: 'remappr-dongle-fake',
+            abortController: new AbortController(),
+            readable,
+            writable,
+        },
+        sawAuth: () => sawAuth,
+    }
+}
+
 /* ── shared adapter contract ────────────────────────────────────────────── */
 
 runContractSuite('remappr', {
@@ -406,6 +477,31 @@ describe('RemapprKeyboardService — live config round-trip', () => {
         expect(layouts[0].name).toBe('Remappr')
         expect(layouts[0].keys).toHaveLength(4)
         expect(layouts[0].keys[1].x).toBe(100)
+        await svc.disconnect()
+    })
+
+    it('a keyboard takes the editor path (kind is not dongle)', async () => {
+        const svc = await connectFake(makeFakeRemappr())
+        expect(svc.kind).not.toBe('dongle')
+        await svc.disconnect()
+    })
+})
+
+describe('RemapprAdapter — dongle connect (lands on the node roster)', () => {
+    it('detects a dongle, skips auth/config, and exposes the roster', async () => {
+        const dongle = makeFakeDongle()
+        const svc = await remapprAdapter.connect(
+            dongle.transport,
+            new AbortController().signal,
+        )
+        // Roster path: dongle kind, dongle name, a nodes facade, no keymap edits.
+        expect(svc.kind).toBe('dongle')
+        expect(svc.deviceInfo.name).toBe('Remappr Dongle')
+        expect(svc.nodes).toBeDefined()
+        expect(await svc.nodes!.list()).toEqual([])
+        expect(svc.capabilities.readOnly).toBe(true)
+        // A dongle is never handshaken (§7.2): the §19 BEGIN/FINISH never ran.
+        expect(dongle.sawAuth()).toBe(false)
         await svc.disconnect()
     })
 })

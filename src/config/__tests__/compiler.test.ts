@@ -115,6 +115,56 @@ describe('keymap compilers', () => {
         )
         expect(keymap).toContain('NOT GENERATED')
     })
+
+    // pattern-check: skip — regression test data for the per-firmware fallback
+    it('drops actions a firmware has no handler for to its own no-op', () => {
+        // layer_lock + peripheral are §5.2 Remappr-firmware-only kinds: neither the
+        // ZMK nor the QMK handler table carries them, so each compiler must warn +
+        // emit its own no-op token (its capability = handler presence) rather than
+        // a real binding.
+        const cfg = parseKeymap(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "RO", "target": "zmk" },
+            "keyboard": { "id": "ro", "name": "RO",
+                "keys": [{"x":0,"y":0},{"x":1,"y":0}] },
+            "layers": [
+                { "name": "base", "bindings": [
+                    { "type": "layer_lock" },
+                    { "type": "peripheral", "kind": "encoder", "code": 3 }
+                ] },
+                { "name": "fn", "bindings": [
+                    { "type": "transparent" }, { "type": "transparent" }
+                ] }
+            ]
+        }`)
+
+        const zmk = getCompiler('zmk').compile(cfg)
+        const keymap = String(
+            zmk.files.find((f) => f.filename.endsWith('.keymap'))!.content,
+        )
+        expect(keymap).toContain('&none')
+        for (const t of ['layer_lock', 'peripheral']) {
+            expect(
+                zmk.diagnostics.some(
+                    (d) =>
+                        d.level === 'warn' &&
+                        d.message === `"${t}" has no ZMK binding; emitted &none`,
+                ),
+            ).toBe(true)
+        }
+
+        const qmk = getCompiler('qmk').compile(cfg)
+        expect(String(qmk.files[0].content)).toContain('KC_NO')
+        for (const t of ['layer_lock', 'peripheral']) {
+            expect(
+                qmk.diagnostics.some(
+                    (d) =>
+                        d.level === 'warn' &&
+                        d.message === `"${t}" has no QMK keycode; emitted KC_NO`,
+                ),
+            ).toBe(true)
+        }
+    })
 })
 
 // A config exercising every behavior added for real-ZMK-config parity.

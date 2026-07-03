@@ -1,5 +1,6 @@
 // Pattern check: Adapter (Tier 1) — extended — backs src/firmware/adapter.ts FirmwareAdapter; translates ZMK GetBehaviorDetailsResponse → neutral ActionType.
 import type {
+    BehaviorBindingParametersSet,
     BehaviorParameterValueDescription,
     GetBehaviorDetailsResponse,
 } from '@zmkfirmware/zmk-studio-ts-client/behaviors'
@@ -33,7 +34,11 @@ function buildSlot(
     if (onlyNil) return undefined
 
     const kind = describeSlotKind(behaviorDisplayName, descriptions)
-    const namedLabel = descriptions[0]?.name?.toString().trim()
+    // First non-empty name — a merged column may lead with a nameless nil
+    // (e.g. &bt's no-arg set) before the descriptor that actually names it.
+    const namedLabel = descriptions
+        .map((d) => d.name?.toString().trim())
+        .find((n) => n && n.length > 0)
     const slot: ActionSlot = {
         label: namedLabel && namedLabel.length > 0 ? namedLabel : label,
         kind,
@@ -50,18 +55,107 @@ function buildSlot(
     return slot
 }
 
+// A param slot is "real" when it carries at least one non-nil description.
+function hasRealParams(
+    descriptions?: BehaviorParameterValueDescription[],
+): boolean {
+    if (!descriptions || descriptions.length === 0) return false
+    const onlyNil =
+        descriptions.length === 1 &&
+        descriptions[0].nil !== undefined &&
+        descriptions[0].constant === undefined
+    return !onlyNil
+}
+
+// Flatten a param column across every metadata set, de-duped so each constant
+// / range / hid / layer appears once. ZMK splits a behavior into one set per
+// valid (param1, param2) shape — e.g. &bt has a no-arg set plus a BT_SEL set
+// whose param2 is the profile index — and only the union exposes them all.
+function mergeDescriptions(
+    sets: BehaviorBindingParametersSet[],
+    pick: (
+        s: BehaviorBindingParametersSet,
+    ) => BehaviorParameterValueDescription[] | undefined,
+): BehaviorParameterValueDescription[] {
+    const out: BehaviorParameterValueDescription[] = []
+    const seen = new Set<string>()
+    for (const set of sets) {
+        for (const d of pick(set) ?? []) {
+            const key =
+                d.constant !== undefined
+                    ? `c:${d.constant}`
+                    : `k:${d.name ?? ''}:${
+                          d.range
+                              ? `r${d.range.min}-${d.range.max}`
+                              : d.hidUsage
+                                ? 'hid'
+                                : d.layerId
+                                  ? 'layer'
+                                  : d.nil
+                                    ? 'nil'
+                                    : '?'
+                      }`
+            if (seen.has(key)) continue
+            seen.add(key)
+            out.push(d)
+        }
+    }
+    return out
+}
+
+// param1 command values whose set also defines a param2, when at least one
+// other set has none — i.e. the trailing slot is conditional on the command.
+// Returns undefined when param2 always (or never) applies.
+function conditionalParam1Values(
+    sets: BehaviorBindingParametersSet[],
+): number[] | undefined {
+    const enablers: number[] = []
+    let anyWithoutParam2 = false
+    for (const set of sets) {
+        if (hasRealParams(set.param2)) {
+            for (const d of set.param1 ?? []) {
+                if (d.constant !== undefined) enablers.push(d.constant)
+            }
+        } else {
+            anyWithoutParam2 = true
+        }
+    }
+    if (!anyWithoutParam2 || enablers.length === 0) return undefined
+    return Array.from(new Set(enablers))
+}
+
 export function behaviorToActionType(
     behavior: GetBehaviorDetailsResponse,
 ): ActionType {
+    const sets = behavior.metadata ?? []
     const slots: ActionSlot[] = []
-    const meta = behavior.metadata?.[0]
-    if (meta) {
-        const p1 = buildSlot('param1', behavior.displayName, meta.param1)
-        if (p1) slots.push(p1)
-        const p2 = buildSlot('param2', behavior.displayName, meta.param2)
-        if (p2) slots.push(p2)
-    }
-    if (slots.length === 2) {
+    const p1 = buildSlot(
+        'param1',
+        behavior.displayName,
+        mergeDescriptions(sets, (s) => s.param1),
+    )
+    if (p1) slots.push(p1)
+    const p2 = buildSlot(
+        'param2',
+        behavior.displayName,
+        mergeDescriptions(sets, (s) => s.param2),
+    )
+    if (p2) slots.push(p2)
+
+    if (slots.length === 2 && slots[0].kind === 'enum') {
+        // Command-style behavior (e.g. &bt), not a hold-tap. Gate the trailing
+        // slot on the commands that actually take it and label by role.
+        const enabledFor = conditionalParam1Values(sets)
+        slots[0] = { ...slots[0], label: 'Command' }
+        slots[1] = {
+            ...slots[1],
+            label:
+                slots[1].label && slots[1].label !== 'param2'
+                    ? slots[1].label
+                    : 'Value',
+            ...(enabledFor ? { enabledFor } : {}),
+        }
+    } else if (slots.length === 2) {
         slots[0] = { ...slots[0], label: 'Hold' }
         slots[1] = { ...slots[1], label: 'Tap' }
     }

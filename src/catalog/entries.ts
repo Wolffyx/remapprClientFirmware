@@ -5,6 +5,7 @@ import acJson from './hid-pages/ac.json'
 import alJson from './hid-pages/al.json'
 import mediaJson from './hid-pages/media.json'
 import contactJson from './hid-pages/contact.json'
+import systemJson from './hid-pages/system.json'
 import overridesJson from './hid-pages/overrides.json'
 import { CANONICAL_ALIASES, resolveAlias } from './aliases'
 import { EXTERNAL_NAMES, EXTERNAL_NOTES } from './external-names'
@@ -88,6 +89,11 @@ const acBuild = fromHidPage(acJson as RawHidEntry[], 'ac', 12)
 const alBuild = fromHidPage(alJson as RawHidEntry[], 'al', 12)
 const mediaBuild = fromHidPage(mediaJson as RawHidEntry[], 'media', 12)
 const contactBuild = fromHidPage(contactJson as RawHidEntry[], 'contact', 12)
+// Generic Desktop System Control (HID page 1): power / sleep / wake. The firmware
+// emits these through its system-control HID interface as BH_SYS_CTRL (§44.4), so
+// — exactly like Consumer — the behavior type, not a page tag in the record,
+// disambiguates the page on the wire.
+const systemBuild = fromHidPage(systemJson as RawHidEntry[], 'sys_ctrl', 1)
 
 export {
     AUDIO_ENTRIES,
@@ -158,6 +164,7 @@ const AC_RAW = acBuild.entries
 const AL_RAW = alBuild.entries
 const MEDIA_RAW = mediaBuild.entries
 const CONTACT_RAW = contactBuild.entries
+const SYSTEM_RAW = systemBuild.entries
 
 const ENTRY_BY_ID = new Map<CanonicalKeyId, CatalogEntry>()
 const indexEntries = (es: CatalogEntry[]): void => {
@@ -169,6 +176,7 @@ indexEntries(AC_RAW)
 indexEntries(AL_RAW)
 indexEntries(MEDIA_RAW)
 indexEntries(CONTACT_RAW)
+indexEntries(SYSTEM_RAW)
 indexEntries(STATIC_ENTRIES)
 
 // Merge each present secondary into its primary; record alias name for search.
@@ -208,6 +216,7 @@ export const AC_ENTRIES = dropAliased(AC_RAW)
 export const AL_ENTRIES = dropAliased(AL_RAW)
 export const MEDIA_ENTRIES = dropAliased(MEDIA_RAW)
 export const CONTACT_ENTRIES = dropAliased(CONTACT_RAW)
+export const SYSTEM_ENTRIES = dropAliased(SYSTEM_RAW)
 
 export const CATALOG: CatalogEntry[] = [
     ...KEYBOARD_ENTRIES,
@@ -216,6 +225,7 @@ export const CATALOG: CatalogEntry[] = [
     ...AL_ENTRIES,
     ...MEDIA_ENTRIES,
     ...CONTACT_ENTRIES,
+    ...SYSTEM_ENTRIES,
     ...dropAliased(STATIC_ENTRIES),
 ]
 
@@ -230,6 +240,7 @@ const allUsageBuilds = [
     alBuild,
     mediaBuild,
     contactBuild,
+    systemBuild,
 ]
 for (const b of allUsageBuilds) {
     for (const [id, u] of b.usages) {

@@ -22,6 +22,7 @@ import {
     QUANTUM_ENTRIES,
     RGB_ENTRIES,
     SHIFTED_ENTRIES,
+    SYSTEM_ENTRIES,
     WIRELESS_ENTRIES,
 } from './entries'
 import type { CanonicalKeyId, CatalogPage } from './types'
@@ -89,6 +90,14 @@ export const CATALOG_PAGES: CatalogPage[] = [
         style: 'flat-grid',
         visible: true,
         entries: [...MEDIA_ENTRIES, ...MEDIA_TRANSPORT_ENTRIES],
+    },
+    {
+        // GD System Control (HID page 1): power / sleep / wake → BH_SYS_CTRL.
+        id: 'system-control',
+        name: 'System',
+        style: 'flat-grid',
+        visible: true,
+        entries: SYSTEM_ENTRIES,
     },
     {
         id: 'wireless',
@@ -194,6 +203,7 @@ const PREFIX_TO_PAGE: Record<string, string> = {
     macro: 'macros',
     combo: 'combos',
     system: 'quantum',
+    sys_ctrl: 'system-control',
     mod: 'keyboard',
     display: 'misc',
     caps_word: 'misc',

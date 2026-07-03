@@ -56,6 +56,7 @@ import {
     MouseButtonCode,
     MouseDirCode,
     MouseOp,
+    NameKind,
     OUTPUT_NO_PROFILE,
     OutputActionCode,
     PeripheralKind,
@@ -65,6 +66,8 @@ import {
 } from './blobWriter'
 
 const HID_PAGE_KEYBOARD = 7
+const HID_PAGE_CONSUMER = 12
+const HID_PAGE_SYSTEM = 1
 
 /** Decode result codes — mirror enum remappr_config_result (config_blob.h). */
 export const DecodeCode = {
@@ -175,6 +178,16 @@ function usageToKey(usage: number): CanonicalKeyId | null {
     return HID_USAGE_DECODE.get((HID_PAGE_KEYBOARD << 16) | usage) ?? null
 }
 
+/** Consumer-page HID usage → canonical key id, or null if not in the catalog. */
+function consumerUsageToKey(usage: number): CanonicalKeyId | null {
+    return HID_USAGE_DECODE.get((HID_PAGE_CONSUMER << 16) | usage) ?? null
+}
+
+/** GD System-Control HID usage → canonical key id, or null if not in catalog. */
+function systemUsageToKey(usage: number): CanonicalKeyId | null {
+    return HID_USAGE_DECODE.get((HID_PAGE_SYSTEM << 16) | usage) ?? null
+}
+
 /** Single modifier-mask bit → Modifier (lowest set bit wins). */
 function maskToMod(mask: number): Modifier | null {
     for (let i = 0; i < 8; i++) if (mask & (1 << i)) return MODIFIERS[i]
@@ -202,6 +215,11 @@ interface DecodeCtx {
      *  reconstructed def here (keyed unique by sub_index). */
     tapDances: CanonTapDance[]
     modMorphs: CanonModMorph[]
+    /** Real DT names from TBL_NAMES, keyed by sub_index (§24). Return the name
+     *  when present so the def id (and every binding ref) is the real label
+     *  instead of the synthetic td_N / mm_N. */
+    tdName: (subIndex: number) => string | undefined
+    mmName: (subIndex: number) => string | undefined
 }
 
 // Build a key_press, threading the original mods through (KEY_MODS).
@@ -240,6 +258,25 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
         case BehaviorType.KeyMods: {
             const k = keyOf(rec.tap)
             return k ? keyPress(rec.tap, maskToMods(rec.hold)) : { type: 'none' }
+        }
+        case BehaviorType.Consumer: {
+            const k = consumerUsageToKey(rec.tap)
+            if (k === null) {
+                diag.warn(`unknown consumer usage 0x${rec.tap.toString(16)}`, path)
+                return { type: 'none' }
+            }
+            return { type: 'key_press', key: k }
+        }
+        case BehaviorType.SysCtrl: {
+            const k = systemUsageToKey(rec.tap)
+            if (k === null) {
+                diag.warn(
+                    `unknown system-control usage 0x${rec.tap.toString(16)}`,
+                    path,
+                )
+                return { type: 'none' }
+            }
+            return { type: 'key_press', key: k }
         }
         case BehaviorType.ModTap: {
             const k = keyOf(rec.tap)
@@ -290,6 +327,10 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
             if (name === 'soft_off') return { type: 'soft_off' }
             if (name === 'ext_power_toggle')
                 return { type: 'ext_power', action: 'toggle' }
+            if (name === 'ext_power_on')
+                return { type: 'ext_power', action: 'on' }
+            if (name === 'ext_power_off')
+                return { type: 'ext_power', action: 'off' }
             return unmodeled(`system(${name ?? rec.tap})`)
         }
         case BehaviorType.Mouse: {
@@ -415,7 +456,7 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
 // firmware carries no name, so the ref is synthesized from the sub_index (unique
 // per composite — distinct composites own distinct, non-overlapping sub slices).
 function decodeTapDance(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
-    const ref = `td_${rec.subIndex}`
+    const ref = ctx.tdName(rec.subIndex) ?? `td_${rec.subIndex}`
     const taps: CanonTapDanceStep[] = []
     for (let i = 0; i < rec.subCount; i++) {
         const sub = ctx.subs[rec.subIndex + i]
@@ -441,7 +482,7 @@ function decodeTapDance(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
 }
 
 function decodeModMorph(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
-    const ref = `mm_${rec.subIndex}`
+    const ref = ctx.mmName(rec.subIndex) ?? `mm_${rec.subIndex}`
     const sub0 = ctx.subs[rec.subIndex]
     const sub1 = ctx.subs[rec.subIndex + 1]
     if (rec.subCount < 2 || !sub0 || !sub1) {
@@ -552,7 +593,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const h = new ByteReader(bytes)
     const magic = h.u32()
     if (magic !== BLOB_MAGIC) return fail(DecodeCode.MAGIC)
-    const schemaVersion = h.u16()
+    h.u16() // schema version — consumed to advance the reader; not otherwise used
     const minReader = h.u16()
     if (minReader > BLOB_READER_VERSION) return fail(DecodeCode.READER_VER)
     const configVersion = h.u32()
@@ -633,6 +674,22 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const macroT = table(TableId.Macro)
     const macros = macroT ? readMacros(bytes, macroT, diag) : []
 
+    // ── NAMES (optional, §24) → real DT labels for macros + composites ──
+    const namesT = table(TableId.Names)
+    const names = namesT
+        ? readNames(bytes, namesT, diag)
+        : {
+              macros: new Map<number, string>(),
+              tapDances: new Map<number, string>(),
+              modMorphs: new Map<number, string>(),
+          }
+    // Rename macros in place so macroRef (and every macro binding) carries the
+    // real name; tap-dance / mod-morph names resolve per-cell via ctx below.
+    macros.forEach((m, i) => {
+        const nm = names.macros.get(i)
+        if (nm) m.id = nm
+    })
+
     const layerName = (i: number): string =>
         i >= 0 && i < numLayers ? `Layer ${i}` : `Layer ${i}`
     const macroRef = (i: number): string =>
@@ -651,6 +708,8 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         subs,
         tapDances,
         modMorphs,
+        tdName: (sub) => names.tapDances.get(sub),
+        mmName: (sub) => names.modMorphs.get(sub),
     }
     const decoded = behaviors.map((rec, i) =>
         behaviorToAction(rec, { ...ctx, path: ['behaviors', i] }),
@@ -722,6 +781,54 @@ function readRecordTable(bytes: Uint8Array, t: TableFrame): BehaviorRecord[] | n
     if (t.start + 2 + count * 16 > t.end) return null
     const out: BehaviorRecord[] = []
     for (let i = 0; i < count; i++) out.push(parseBehaviorRecord(r))
+    return out
+}
+
+interface DecodedNames {
+    macros: Map<number, string>
+    tapDances: Map<number, string>
+    modMorphs: Map<number, string>
+}
+
+// TBL_NAMES (§24): u16 count + per entry { u8 kind, u8 reserved, u16 ref,
+// u8 name_len, name_len × u8 UTF-8 }. Advisory display labels — bounds-checked
+// so a malformed or foreign blob can't throw; unknown kinds + overruns skip.
+function readNames(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): DecodedNames {
+    const out: DecodedNames = {
+        macros: new Map(),
+        tapDances: new Map(),
+        modMorphs: new Map(),
+    }
+    if (t.end - t.start < 2) return out
+    const r = new ByteReader(bytes)
+    r.seek(t.start)
+    const count = r.u16()
+    const dec = new TextDecoder()
+    for (let i = 0; i < count; i++) {
+        if (r.pos + 5 > t.end) {
+            diag.warn('names table truncated')
+            break
+        }
+        const kind = r.u8()
+        r.u8() // reserved
+        const ref = r.u16()
+        const len = r.u8()
+        if (r.pos + len > t.end) {
+            diag.warn('name string overruns table')
+            break
+        }
+        const name = dec.decode(bytes.subarray(r.pos, r.pos + len))
+        r.seek(r.pos + len)
+        if (!name) continue
+        if (kind === NameKind.Macro) out.macros.set(ref, name)
+        else if (kind === NameKind.TapDance) out.tapDances.set(ref, name)
+        else if (kind === NameKind.ModMorph) out.modMorphs.set(ref, name)
+        else diag.warn(`unknown name kind ${kind}`)
+    }
     return out
 }
 

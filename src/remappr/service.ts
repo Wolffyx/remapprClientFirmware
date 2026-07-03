@@ -6,7 +6,14 @@
 // compiles → seals the blob back.
 import { filterCatalogByCodec } from '../catalog/filter'
 import type { KeyCatalog } from '../catalog/types'
-import type { Capabilities, KeyboardService, KeyTestApi } from '../service'
+import type {
+    Capabilities,
+    DynamicEntriesApi,
+    KeyboardService,
+    KeyTestApi,
+    MacroApi,
+    NodesApi,
+} from '../service'
 import type {
     ActionType,
     AdapterNotification,
@@ -20,17 +27,33 @@ import type {
     PhysicalLayout,
 } from '../types'
 import { ProtocolError } from '../errors'
-import { type ConfigKeymap, serializeKeymap } from '../config'
+import {
+    type CanonMacro,
+    type CanonTapDance,
+    type ConfigKeymap,
+    serializeKeymap,
+} from '../config'
 import { buildRemapprBlob } from '../config/compilers/remappr'
 
 import {
     buildRemapprActionTypes,
     buildRemapprKeyAction,
     relabelLayer,
+    REMAPPR_KIND_MACRO,
+    REMAPPR_KIND_MOD_MORPH,
+    REMAPPR_KIND_TAP_DANCE,
     REMAPPR_KIND_TRANSPARENT,
 } from './actions'
 import { remapprCodec } from './codec'
 import { lowerConfigToNeutral, raiseNeutralToConfig } from './configBridge'
+import {
+    actionsToMacro,
+    comboToEntry,
+    entryToTapDance,
+    isRichTapDance,
+    macroToActions,
+    tapDanceToEntry,
+} from './dynamicBridge'
 import type { RemapprRpc } from './rpc'
 import type { RemapprSession } from './auth'
 import {
@@ -48,7 +71,9 @@ type ClosedHandler = (reason?: unknown) => void
 
 export interface RemapprServiceDeps {
     rpc: RemapprRpc
-    session: RemapprSession
+    /** Control-auth session for sealed writes. Omitted for read-only node views,
+     *  which never seal. */
+    session?: RemapprSession
     deviceInfo: DeviceInfo
     /** Decoded active config (source of truth); the editing buffer lowers from it. */
     config: ConfigKeymap
@@ -59,6 +84,20 @@ export interface RemapprServiceDeps {
     /** Max layer slots the blob reader accepts (from GET_KEYMAP_BOUNDS / default). */
     maxLayers: number
     limits?: Limits
+    /** Whole-device read-only (behind-dongle node view + the dongle itself): every
+     *  edit throws and there is no keyTest. Does NOT decide transport ownership —
+     *  see `sharesTransport`. */
+    readOnly?: boolean
+    /** True when this service borrows another service's transport (a behind-dongle
+     *  node view rides the dongle's RPC), so disconnect() must NOT tear it down.
+     *  False/omitted for a service that owns its transport (a direct keyboard or
+     *  the dongle itself), which closes it on disconnect. */
+    sharesTransport?: boolean
+    /** Device class surfaced to the renderer (`'dongle'` lands on the roster). */
+    kind?: 'keyboard' | 'dongle'
+    /** Behind-dongle roster facade — set on the dongle's own service, omitted on a
+     *  node view (no nesting). */
+    nodes?: NodesApi
 }
 
 /** Round `b` up to a multiple of `align` with zero padding (flash alignment). */
@@ -73,11 +112,28 @@ function padTo(b: Uint8Array, align: number): Uint8Array {
 export class RemapprKeyboardService implements KeyboardService {
     public readonly deviceInfo: DeviceInfo
     public readonly capabilities: Capabilities
+    /** `'dongle'` for the dongle's own service; `'keyboard'` (default) otherwise. */
+    public readonly kind: 'keyboard' | 'dongle'
     public readonly codec = remapprCodec
-    public readonly keyTest: KeyTestApi
+    /** Live matrix readout — direct devices only; a node's relayed input plane is
+     *  unsupported, so read-only views omit it. */
+    public readonly keyTest?: KeyTestApi
+    /** Behind-dongle roster — present on the dongle's own service, omitted on a
+     *  node view (a node has no nodes of its own). */
+    public readonly nodes?: NodesApi
+    /** Read-only macro list (§24): the active config's macros surfaced to the
+     *  Macros tab by their real DT names. Editing (setMacro) lands with the
+     *  round-trip; for now `readonly: true`. */
+    public readonly macros?: MacroApi
+    /** Read-only dynamic entries (§24): tap-dance + combo surfaced to their tabs.
+     *  Mod-morph has no tab (it shows on the bound key); set* reject for now. */
+    public readonly dynamic?: DynamicEntriesApi
 
     private readonly rpc: RemapprRpc
-    private readonly session: RemapprSession
+    private readonly session?: RemapprSession
+    private readonly readOnly: boolean
+    /** Borrowed transport (node view) — disconnect() must not close it. */
+    private readonly sharesTransport: boolean
     /** Decoded config = source of truth; updated only on a successful commit. */
     private config: ConfigKeymap
     private configVersion: number
@@ -91,6 +147,11 @@ export class RemapprKeyboardService implements KeyboardService {
     private nextLayerId = 0
     private pendingChanges = false
     private closed = false
+    // Pending macro / tap-dance edits (§24), overlaid on `config` at commit so the
+    // committed config stays the source of truth and discard reverts cleanly —
+    // same contract as the neutral `layers` buffer. Keyed by pool index.
+    private readonly editedMacros = new Map<number, CanonMacro>()
+    private readonly editedTapDances = new Map<number, CanonTapDance>()
 
     private readonly notificationListeners = new Set<NotificationHandler>()
     private readonly pendingChangesListeners = new Set<PendingChangesHandler>()
@@ -99,6 +160,10 @@ export class RemapprKeyboardService implements KeyboardService {
     constructor(deps: RemapprServiceDeps) {
         this.rpc = deps.rpc
         this.session = deps.session
+        this.readOnly = deps.readOnly ?? false
+        this.sharesTransport = deps.sharesTransport ?? false
+        this.kind = deps.kind ?? 'keyboard'
+        this.nodes = deps.nodes
         this.deviceInfo = deps.deviceInfo
         this.config = deps.config
         this.configVersion = deps.configVersion
@@ -112,32 +177,170 @@ export class RemapprKeyboardService implements KeyboardService {
 
         this.capabilities = {
             lock: false,
-            rename: true,
+            rename: !this.readOnly,
             notifications: false,
-            reorderLayers: true,
-            variableLayerCount: true,
+            reorderLayers: !this.readOnly,
+            variableLayerCount: !this.readOnly,
             exportFormats: ['remappr.keymap.json'],
             maxLayers: this.maxLayers,
+            readOnly: this.readOnly,
         }
 
         this.seedLayersFromConfig()
 
-        // Key-Test: legacy 0xE0 INPUT events → the set of pressed positions.
-        this.keyTest = {
-            onMatrixState: (cb) => {
-                const pressed = new Set<number>()
-                return this.rpc.subscribeInput((ie) => {
-                    if (ie.pressed) pressed.add(ie.inputId)
-                    else pressed.delete(ie.inputId)
-                    cb(new Set(pressed))
-                })
+        // Key-Test: legacy 0xE0 INPUT events → the set of pressed positions. Direct
+        // devices only — the rpc here is the shared dongle channel, so a relayed
+        // node view omits keyTest (a node's input events don't ride it).
+        if (!this.readOnly) {
+            this.keyTest = {
+                onMatrixState: (cb) => {
+                    const pressed = new Set<number>()
+                    return this.rpc.subscribeInput((ie) => {
+                        if (ie.pressed) pressed.add(ie.inputId)
+                        else pressed.delete(ie.inputId)
+                        cb(new Set(pressed))
+                    })
+                },
+            }
+        }
+
+        // pattern-check: skip — facade object literals mirroring keyTest/nodes;
+        // the class is already the Adapter/Facade declared in the file header.
+        // Dynamic entries (§24): surface the decoded macros + composites read-only
+        // so the Macros / Tap-Dance / Combo tabs render real names. Editing lands
+        // with the round-trip; until then every set* rejects.
+        // pattern-check: skip — facade method bodies delegating to dynamicBridge
+        this.macros = {
+            getCount: () => this.config.macros?.length ?? 0,
+            readonly: this.readOnly,
+            // §24 named macros surfaced as key-assignable tiles: the picker
+            // lists these by their real DT names in the Macros tab.
+            listNames: () => (this.config.macros ?? []).map((m) => m.id),
+            getMacro: async (idx) => {
+                const m = this.macroAt(idx)
+                if (!m) throw new ProtocolError(`No macro at index ${idx}`)
+                return macroToActions(m)
+            },
+            setMacro: async (idx, actions) => {
+                this.assertWritable()
+                const m = this.config.macros?.[idx]
+                if (!m) throw new ProtocolError(`No macro at index ${idx}`)
+                this.editedMacros.set(idx, actionsToMacro(m.id, m.params, actions))
+                this.markPending(true)
+            },
+        }
+        this.dynamic = {
+            getCounts: () => ({
+                tapDance: this.config.tapDances?.length ?? 0,
+                combo: this.config.combos?.length ?? 0,
+                keyOverride: 0, // out of §24 scope; not surfaced as a tab yet
+            }),
+            getTapDance: async (idx) => {
+                const td = this.tapDanceAt(idx)
+                if (!td) throw new ProtocolError(`No tap-dance at index ${idx}`)
+                return tapDanceToEntry(td)
+            },
+            setTapDance: async (idx, entry) => {
+                this.assertWritable()
+                const td = this.config.tapDances?.[idx]
+                if (!td) throw new ProtocolError(`No tap-dance at index ${idx}`)
+                // Rich composites (nested / >2 taps) can't round-trip the 4-slot
+                // editor — refuse rather than silently drop the extra steps (§24).
+                if (isRichTapDance(td)) {
+                    throw new ProtocolError(
+                        `Tap-dance "${td.id}" is too complex to edit here ` +
+                            '(nested or multi-tap); edit it as JSON instead.',
+                    )
+                }
+                this.editedTapDances.set(idx, entryToTapDance(td.id, entry))
+                this.markPending(true)
+            },
+            getCombo: async (idx) => {
+                const c = this.config.combos?.[idx]
+                if (!c) throw new ProtocolError(`No combo at index ${idx}`)
+                return comboToEntry(c)
+            },
+            setCombo: async () => {
+                throw new ProtocolError('Editing combos is not yet supported')
+            },
+            getKeyOverride: async () => {
+                throw new ProtocolError('Key overrides are not surfaced yet')
+            },
+            setKeyOverride: async () => {
+                throw new ProtocolError('Editing key overrides is not yet supported')
             },
         }
 
         this.rpc.onClosed((reason) => this.fireClosed(reason))
     }
 
+    /** Reject every edit on a read-only (behind-dongle node) view. */
+    private assertWritable(): void {
+        if (this.readOnly) {
+            throw new ProtocolError(
+                'Read-only node view: editing a behind-dongle node is not yet ' +
+                    'supported (relayed-write is HW-proof-pending).',
+            )
+        }
+    }
+
+    /** The sealed-write session, guaranteed present on a writable service. */
+    private requireSession(): RemapprSession {
+        if (!this.session) {
+            throw new ProtocolError('No control-auth session for this service')
+        }
+        return this.session
+    }
+
     /* ── editing buffer ─────────────────────────────────────────────────── */
+
+    /** The macro at `idx` with any pending edit applied (read path). */
+    private macroAt(idx: number): CanonMacro | undefined {
+        return this.editedMacros.get(idx) ?? this.config.macros?.[idx]
+    }
+
+    private tapDanceAt(idx: number): CanonTapDance | undefined {
+        return this.editedTapDances.get(idx) ?? this.config.tapDances?.[idx]
+    }
+
+    /** Resolve a composite binding's display name from its pool (§24) so a
+     *  freshly bound macro / tap-dance / mod-morph shows its real name on the
+     *  keycap, not "#<index>". Non-composite kinds (and out-of-range indices)
+     *  return undefined; labelFor then ignores the field. */
+    private compositeName(kind: string, params: number[]): string | undefined {
+        const idx = params[0] ?? 0
+        if (kind === REMAPPR_KIND_MACRO) return this.macroAt(idx)?.id
+        if (kind === REMAPPR_KIND_TAP_DANCE) return this.tapDanceAt(idx)?.id
+        if (kind === REMAPPR_KIND_MOD_MORPH) {
+            return this.config.modMorphs?.[idx]?.id
+        }
+        return undefined
+    }
+
+    /** `base` with pending macro / tap-dance edits overlaid (for commit/export). */
+    private withEdits(base: ConfigKeymap): ConfigKeymap {
+        if (this.editedMacros.size === 0 && this.editedTapDances.size === 0) {
+            return base
+        }
+        return {
+            ...base,
+            ...(base.macros
+                ? { macros: base.macros.map((m, i) => this.editedMacros.get(i) ?? m) }
+                : {}),
+            ...(base.tapDances
+                ? {
+                      tapDances: base.tapDances.map(
+                          (t, i) => this.editedTapDances.get(i) ?? t,
+                      ),
+                  }
+                : {}),
+        }
+    }
+
+    private clearEdits(): void {
+        this.editedMacros.clear()
+        this.editedTapDances.clear()
+    }
 
     private seedLayersFromConfig(): void {
         const { layers } = lowerConfigToNeutral(this.config)
@@ -190,7 +393,13 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     buildKeyAction(kind: string, params: number[]): KeyAction {
-        return buildRemapprKeyAction(kind, params, this.layerNames())
+        return buildRemapprKeyAction(
+            kind,
+            params,
+            this.layerNames(),
+            undefined,
+            this.compositeName(kind, params),
+        )
     }
 
     async listKeyCatalog(): Promise<KeyCatalog> {
@@ -230,6 +439,7 @@ export class RemapprKeyboardService implements KeyboardService {
         position: number,
         action: KeyAction,
     ): Promise<void> {
+        this.assertWritable()
         const idx = this.layerIndexById(layerId)
         if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
         if (position < 0 || position >= this.keyCount) {
@@ -242,6 +452,9 @@ export class RemapprKeyboardService implements KeyboardService {
             action.params,
             this.layerNames(),
             action.label?.modifiers,
+            // Persist the composite's real name in the buffer so relabelLayer
+            // (getKeymap / layer ops) keeps it across a re-render (§24).
+            this.compositeName(action.kind, action.params),
         )
         this.layers[idx] = { ...layer, keys: next }
         this.markPending(true)
@@ -252,6 +465,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async addLayer(): Promise<Layer> {
+        this.assertWritable()
         if (this.layers.length >= this.maxLayers) {
             throw new ProtocolError('Max layers reached')
         }
@@ -266,6 +480,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async removeLayer(layerId: number): Promise<void> {
+        this.assertWritable()
         const idx = this.layerIndexById(layerId)
         if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
         if (this.layers.length <= 1) {
@@ -276,6 +491,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async renameLayer(layerId: number, name: string): Promise<void> {
+        this.assertWritable()
         const idx = this.layerIndexById(layerId)
         if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
         this.layers[idx] = { ...this.layers[idx], name }
@@ -283,6 +499,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async moveLayer(startIndex: number, destIndex: number): Promise<void> {
+        this.assertWritable()
         if (
             startIndex < 0 ||
             startIndex >= this.layers.length ||
@@ -299,6 +516,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async restoreLayer(layerId: number, atIndex: number): Promise<Layer> {
+        this.assertWritable()
         const layer: Layer = {
             id: layerId,
             name: `Restored ${layerId}`,
@@ -322,7 +540,11 @@ export class RemapprKeyboardService implements KeyboardService {
     /* ── commit / discard (sealed config push) ──────────────────────────── */
 
     async commit(): Promise<void> {
-        const next = raiseNeutralToConfig(this.layers, this.config)
+        this.assertWritable()
+        const session = this.requireSession()
+        // Fold pending macro / tap-dance edits (§24) into the config the layers
+        // raise onto, so a committed blob carries them (and their names).
+        const next = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
         const version = this.configVersion + 1
         const { blob } = buildRemapprBlob(next, { configVersion: version })
         const padded = padTo(blob, BLOB_ALIGN)
@@ -335,13 +557,10 @@ export class RemapprKeyboardService implements KeyboardService {
             )
             await this.sealedOk(Cmd.WRITE_CONFIG_CHUNK, slice, 'WRITE_CONFIG_CHUNK')
         }
-        const validate = await this.rpc.callSealed(
-            this.session,
-            Cmd.VALIDATE_CONFIG,
-        )
+        const validate = await this.rpc.callSealed(session, Cmd.VALIDATE_CONFIG)
         if (validate.status !== Status.OK) {
             await this.rpc
-                .callSealed(this.session, Cmd.ROLLBACK_CONFIG)
+                .callSealed(session, Cmd.ROLLBACK_CONFIG)
                 .catch(() => undefined)
             throw new ProtocolError(
                 `VALIDATE_CONFIG failed: ${statusName(validate.status)}`,
@@ -351,6 +570,7 @@ export class RemapprKeyboardService implements KeyboardService {
 
         this.config = next
         this.configVersion = version
+        this.clearEdits()
         this.markPending(false)
     }
 
@@ -359,7 +579,7 @@ export class RemapprKeyboardService implements KeyboardService {
         arg: Uint8Array | undefined,
         label: string,
     ): Promise<void> {
-        const r = await this.rpc.callSealed(this.session, cmd, arg)
+        const r = await this.rpc.callSealed(this.requireSession(), cmd, arg)
         if (r.status !== Status.OK) {
             throw new ProtocolError(`${label} failed: ${statusName(r.status)}`)
         }
@@ -367,15 +587,20 @@ export class RemapprKeyboardService implements KeyboardService {
 
     async discardChanges(): Promise<void> {
         // Abort any staging the device started, then drop the in-memory edits by
-        // re-lowering from the last-known config (source of truth).
-        await this.rpc
-            .callSealed(this.session, Cmd.ROLLBACK_CONFIG)
-            .catch(() => undefined)
+        // re-lowering from the last-known config (source of truth). A read-only
+        // view has no session and never staged anything — just re-seed.
+        if (this.session) {
+            await this.rpc
+                .callSealed(this.session, Cmd.ROLLBACK_CONFIG)
+                .catch(() => undefined)
+        }
+        this.clearEdits()
         this.seedLayersFromConfig()
         this.markPending(false)
     }
 
     async resetSettings(): Promise<void> {
+        this.clearEdits()
         this.seedLayersFromConfig()
         this.activeLayoutId = this.layouts[0]?.id ?? 0
         this.markPending(false)
@@ -402,7 +627,7 @@ export class RemapprKeyboardService implements KeyboardService {
     }
 
     async exportConfig(): Promise<ExportedFile[]> {
-        const live = raiseNeutralToConfig(this.layers, this.config)
+        const live = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
         return [
             {
                 filename: `${this.deviceInfo.name || 'remappr'}.keymap.json`,
@@ -434,6 +659,11 @@ export class RemapprKeyboardService implements KeyboardService {
     async disconnect(): Promise<void> {
         if (this.closed) return
         this.fireClosed()
-        await this.rpc.close({ abortTransport: true }).catch(() => undefined)
+        // A node view borrows the dongle's RPC; never tear down a shared transport
+        // (its owner does). A service that owns its transport — a direct keyboard
+        // OR the dongle itself — closes it here.
+        if (!this.sharesTransport) {
+            await this.rpc.close({ abortTransport: true }).catch(() => undefined)
+        }
     }
 }

@@ -1,10 +1,11 @@
 // Pattern check: no GoF pattern (-) — rejected — fixture data only; mirrors GetBehaviorDetailsResponse shapes the real ZMK firmware emits over RPC, used by both export tests and any downstream test that needs a behavior map.
 //
 // One synthetic GetBehaviorDetailsResponse per behavior listed at
-// https://zmk.dev/docs/keymaps/behaviors. metadata[0] mirrors the
-// param-descriptor shape the upstream zmk-studio firmware uses today —
-// behaviorToActionType only consumes metadata[0], so a single signature
-// per behavior is sufficient for the slot-driven exporter.
+// https://zmk.dev/docs/keymaps/behaviors, mirroring the param-descriptor
+// shape the ZMK firmware emits over RPC. behaviorToActionType merges every
+// metadata set, so a behavior may declare multiple sets (see BT: a no-arg
+// command set plus BT_SEL / BT_DISC sets that carry the profile-index
+// param2).
 //
 // IDs are arbitrary — the keymap layer references them by behaviorId.
 
@@ -50,22 +51,30 @@ const nil = (name = ''): BehaviorParameterValueDescription => ({
     nil: {},
 })
 
+interface ParamSetSpec {
+    param1?: BehaviorParameterValueDescription[]
+    param2?: BehaviorParameterValueDescription[]
+}
+
 interface FixtureSpec {
     id: number
     displayName: string
     param1?: BehaviorParameterValueDescription[]
     param2?: BehaviorParameterValueDescription[]
+    // Multiple metadata sets — for behaviors whose param2 is conditional on
+    // param1 (e.g. &bt). Omit to declare a single set from param1/param2.
+    sets?: ParamSetSpec[]
 }
 
 const fixture = (s: FixtureSpec): GetBehaviorDetailsResponse => ({
     id: s.id,
     displayName: s.displayName,
-    metadata: [
-        {
-            param1: s.param1 ?? [nil()],
-            param2: s.param2 ?? [nil()],
-        },
-    ],
+    metadata: (s.sets ?? [{ param1: s.param1, param2: s.param2 }]).map(
+        (set) => ({
+            param1: set.param1 ?? [nil()],
+            param2: set.param2 ?? [nil()],
+        }),
+    ),
 })
 
 // Each fixture's id matches the export below so tests can reference by name.
@@ -123,19 +132,31 @@ export const CAPS_WORD = fixture({ id: 12, displayName: 'Caps Word' })
 export const KEY_REPEAT = fixture({ id: 13, displayName: 'Key Repeat' })
 export const GRESC = fixture({ id: 14, displayName: 'Grave Escape' })
 
-// &bt — param1 enum (BT_*), param2 optional profile index.
+// &bt — modelled the way real ZMK reports it: several metadata sets. The
+// no-arg commands take no param2; BT_SEL and BT_DISC each take a profile
+// index (RANGE). behaviorToActionType merges these into one enum command
+// slot + a profile slot gated (enabledFor) on BT_SEL / BT_DISC.
 export const BT = fixture({
     id: 20,
     displayName: 'Bluetooth',
-    param1: [
-        constant(0, 'BT_CLR'),
-        constant(1, 'BT_NXT'),
-        constant(2, 'BT_PRV'),
-        constant(3, 'BT_SEL'),
-        constant(4, 'BT_CLR_ALL'),
-        constant(5, 'BT_DISC'),
+    sets: [
+        {
+            param1: [
+                constant(0, 'BT_CLR'),
+                constant(1, 'BT_NXT'),
+                constant(2, 'BT_PRV'),
+                constant(4, 'BT_CLR_ALL'),
+            ],
+        },
+        {
+            param1: [constant(3, 'BT_SEL')],
+            param2: [range(0, 4, 'profile')],
+        },
+        {
+            param1: [constant(5, 'BT_DISC')],
+            param2: [range(0, 4, 'profile')],
+        },
     ],
-    param2: [nil('none'), range(0, 4, 'profile')],
 })
 
 // &out — single enum.

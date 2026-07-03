@@ -28,7 +28,10 @@ import {
     REMAPPR_KIND_LAYER_MOMENTARY,
     REMAPPR_KIND_LAYER_TAP,
     REMAPPR_KIND_LAYER_TOGGLE,
+    REMAPPR_KIND_MACRO,
+    REMAPPR_KIND_MOD_MORPH,
     REMAPPR_KIND_MOD_TAP,
+    REMAPPR_KIND_TAP_DANCE,
     REMAPPR_KIND_TRANSPARENT,
 } from './actions'
 import { remapprCodec } from './codec'
@@ -61,11 +64,26 @@ const MOD_LABEL: Record<Modifier, string> = {
 const transparent = (): KeyAction =>
     buildRemapprKeyAction(REMAPPR_KIND_TRANSPARENT, [])
 
+/** Composite pools (id-only) used to resolve a macro/tap-dance/mod-morph `ref`
+ *  to its pool index for the display KeyAction (§24). */
+interface CompositePools {
+    macros: { id: string }[]
+    tapDances: { id: string }[]
+    modMorphs: { id: string }[]
+}
+
+const poolsOf = (config: ConfigKeymap): CompositePools => ({
+    macros: config.macros ?? [],
+    tapDances: config.tapDances ?? [],
+    modMorphs: config.modMorphs ?? [],
+})
+
 /** Lower a single canonical action to a neutral KeyAction (pure; `diag`/`path`
  *  optional so the merge step can lower without emitting warnings). */
 function lowerAction(
     a: CanonAction,
     layerNames: string[],
+    pools: CompositePools,
     diag?: DiagnosticBag,
     path: (string | number)[] = [],
 ): KeyAction {
@@ -137,6 +155,12 @@ function lowerAction(
             )
             return transparent()
         }
+        case 'macro':
+            return composite(REMAPPR_KIND_MACRO, pools.macros, a.ref)
+        case 'tap_dance':
+            return composite(REMAPPR_KIND_TAP_DANCE, pools.tapDances, a.ref)
+        case 'mod_morph':
+            return composite(REMAPPR_KIND_MOD_MORPH, pools.modMorphs, a.ref)
         case 'transparent':
             return transparent()
         default:
@@ -145,6 +169,17 @@ function lowerAction(
             )
             return transparent()
     }
+}
+
+// A composite reference (§24): params[0] = pool index, displayName = the real
+// name (= the ref id) so the key renders "Macro: macro_hi" instead of blank.
+function composite(
+    kind: string,
+    pool: { id: string }[],
+    ref: string,
+): KeyAction {
+    const idx = pool.findIndex((p) => p.id === ref)
+    return buildRemapprKeyAction(kind, [idx < 0 ? 0 : idx], [], undefined, ref)
 }
 
 /* ── lower: config → runtime ───────────────────────────────────────────── */
@@ -159,10 +194,11 @@ export interface LowerResult {
 export function lowerConfigToNeutral(config: ConfigKeymap): LowerResult {
     const diag = new DiagnosticBag()
     const names = config.layers.map((l) => l.name)
+    const pools = poolsOf(config)
     const layers = config.layers.map((layer, li) => ({
         name: layer.name,
         keys: layer.bindings.map((b, bi) =>
-            lowerAction(b, names, diag, ['layers', li, 'bindings', bi]),
+            lowerAction(b, names, pools, diag, ['layers', li, 'bindings', bi]),
         ),
     }))
     return { layers, diagnostics: [...diag.all] }
@@ -173,7 +209,11 @@ export function lowerConfigToNeutral(config: ConfigKeymap): LowerResult {
 const keyPress = (key: string): CanonKeyPress => ({ type: 'key_press', key })
 
 /** Raise one runtime KeyAction to a canonical action, or `null` if unrecognized. */
-function raiseAction(ka: KeyAction, layerNames: string[]): CanonAction | null {
+function raiseAction(
+    ka: KeyAction,
+    layerNames: string[],
+    pools: CompositePools,
+): CanonAction | null {
     switch (ka.kind) {
         case REMAPPR_KIND_TRANSPARENT:
             return { type: 'transparent' }
@@ -216,6 +256,21 @@ function raiseAction(ka: KeyAction, layerNames: string[]): CanonAction | null {
                 ? { type: 'transparent' }
                 : { type: 'layer', mode: 'toggle', layer }
         }
+        // Composite references (§24): map the pool index in params[0] back to its
+        // canonical ref — the inverse of lowerAction's composite(). An out-of-range
+        // index returns null so the merge keeps the prior binding (never wipes it).
+        case REMAPPR_KIND_MACRO: {
+            const ref = pools.macros[ka.params[0] ?? 0]?.id
+            return ref ? { type: 'macro', ref } : null
+        }
+        case REMAPPR_KIND_TAP_DANCE: {
+            const ref = pools.tapDances[ka.params[0] ?? 0]?.id
+            return ref ? { type: 'tap_dance', ref } : null
+        }
+        case REMAPPR_KIND_MOD_MORPH: {
+            const ref = pools.modMorphs[ka.params[0] ?? 0]?.id
+            return ref ? { type: 'mod_morph', ref } : null
+        }
         default:
             return null
     }
@@ -243,15 +298,16 @@ export function raiseNeutralToConfig(
     prevConfig: ConfigKeymap,
 ): ConfigKeymap {
     const layerNames = runtimeLayers.map((l) => l.name)
+    const prevPools = poolsOf(prevConfig)
 
     const layers = runtimeLayers.map((rl, li) => {
         const prevLayer = prevConfig.layers[li]
         const bindings = rl.keys.map((ka, bi) => {
             const prev = prevLayer?.bindings[bi]
-            if (prev && sameRuntimeForm(ka, lowerAction(prev, layerNames))) {
+            if (prev && sameRuntimeForm(ka, lowerAction(prev, layerNames, prevPools))) {
                 return prev
             }
-            const raised = raiseAction(ka, layerNames)
+            const raised = raiseAction(ka, layerNames, prevPools)
             return raised ?? prev ?? { type: 'transparent' }
         })
         return {

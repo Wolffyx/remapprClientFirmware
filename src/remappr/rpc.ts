@@ -29,6 +29,7 @@ import {
     parseUch,
     PLAINTEXT_CMDS,
     SEALED_TAG,
+    Status,
     UchFlag,
     UCH_LEN,
     UCH_REQ_FIRE_AND_FORGET,
@@ -37,6 +38,22 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 1500
 const MAX_ACC_BYTES = 1024 * 1024
+// A relayed read (targetNode > 0) can hit the transient §10 ERR_STATE / a dropped
+// packet. Pause this long between retries — short, since a lost packet recovers
+// on the next TDMA cycle (this is not the seconds-long link-flap case).
+const RELAY_RETRY_BACKOFF_MS = 100
+// A valid relayed node reply lands in ~100 ms; don't wait the dongle's full 1 s
+// §10 ERR_STATE on a dropped packet. Fast-fail the read here and retry — a late
+// reply for the abandoned request_id is dropped by the rid filter, so it's safe.
+const RELAY_READ_TIMEOUT_MS = 500
+
+/** Default retry budget for an idempotent relayed read over a flapping link. At
+ *  ~87 %/attempt (bench-measured) 4 retries clears a multi-chunk read (layout)
+ *  well past 99 %. Pass as `callUniversalPlain(..., { retries: RELAY_READ_RETRIES })`. */
+export const RELAY_READ_RETRIES = 4
+
+const delay = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms))
 
 export interface UniversalReply {
     status: number
@@ -55,12 +72,15 @@ export interface RemapprRpc {
         arg?: Uint8Array,
         opts?: { expectedDataLen?: number; timeoutMs?: number },
     ): Promise<ControlResponse>
-    /** A direct-attach universal (0xE2) request with inbound FRAG reassembly. */
+    /** A direct-attach universal (0xE2) request with inbound FRAG reassembly.
+     *  `retries` (default 0) re-issues the request on a transient ERR_STATE — the
+     *  §10 relay-timeout a flapping 2.4 GHz link produces. Only pass it for
+     *  idempotent reads (never the AUTH handshake or a mutation). */
     callUniversalPlain(
         namespace: number,
         verb: number,
         arg?: Uint8Array,
-        opts?: { targetNode?: number; timeoutMs?: number },
+        opts?: { targetNode?: number; timeoutMs?: number; retries?: number },
     ): Promise<UniversalReply>
     /** A sealed (mutating) verb relayed to a node behind a dongle (§6.3 outer-UCH
      *  form). The session must have been established with that node (handshake over
@@ -262,14 +282,14 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
         })
     }
 
-    async function callUniversalPlain(
+    // One universal (0xE2) request → reassembled reply. Serialized by exchange().
+    async function universalRoundTrip(
         namespace: number,
         verb: number,
-        arg: Uint8Array = new Uint8Array(),
-        opts: { targetNode?: number; timeoutMs?: number } = {},
+        arg: Uint8Array,
+        target: number,
+        baseTimeout: number,
     ): Promise<UniversalReply> {
-        const baseTimeout = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-        const target = opts.targetNode ?? 0
         return exchange(async () => {
             const rid = nextReqId()
             const inner = buildRequest(verb, nextSeq(), arg)
@@ -317,6 +337,46 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
             const resp = parseResponse(assembled)
             return { status: resp.status, data: resp.data }
         })
+    }
+
+    async function callUniversalPlain(
+        namespace: number,
+        verb: number,
+        arg: Uint8Array = new Uint8Array(),
+        opts: { targetNode?: number; timeoutMs?: number; retries?: number } = {},
+    ): Promise<UniversalReply> {
+        const target = opts.targetNode ?? 0
+        // Retry only the transient §10 ERR_STATE / dropped-packet timeout, and only
+        // when the caller opted in — the read is idempotent. A relayed retriable
+        // read fast-fails (RELAY_READ_TIMEOUT_MS) so a dropped packet costs ~0.5 s,
+        // not the dongle's 1 s ERR_STATE; the handshake/direct keep the long wait.
+        const wantsRetry = (opts.retries ?? 0) > 0
+        const baseTimeout =
+            opts.timeoutMs ??
+            (wantsRetry && target > 0 ? RELAY_READ_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
+        const maxAttempts = wantsRetry ? (opts.retries as number) + 1 : 1
+        for (let attempt = 1; ; attempt++) {
+            try {
+                const reply = await universalRoundTrip(
+                    namespace,
+                    verb,
+                    arg,
+                    target,
+                    baseTimeout,
+                )
+                if (reply.status !== Status.ERR_STATE || attempt >= maxAttempts) {
+                    return reply
+                }
+            } catch (e) {
+                // A reply frame (or a FRAG continuation) lost on a flapping relay
+                // makes nextFrame() reject with a timeout. Retry that transient
+                // like ERR_STATE; rethrow a closed transport or a spent budget.
+                const retriable =
+                    e instanceof TransportError && /timeout/i.test(e.message)
+                if (!retriable || attempt >= maxAttempts) throw e
+            }
+            await delay(RELAY_RETRY_BACKOFF_MS)
+        }
     }
 
     async function callSealedRelay(

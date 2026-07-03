@@ -81,36 +81,18 @@ function kp(a: CanonKeyPress): string {
 // discriminant to be handled (compile error on a new action type, the same
 // safety the old `switch` gave) while keeping each variant's logic isolated;
 // emitKeycode is then just a dispatch. Handlers receive the narrowed action.
-type EmitHandlers = {
+// The actions QMK can render, each to its keycode token. This table *is* QMK's
+// capability declaration: a discriminant present here is supported; one absent
+// (a ZMK-only builtin, a Remappr-firmware-only §5.2 kind) is not, and emitKeycode
+// drops it to the `fallback` KC_NO. Partial over CanonAction. Handlers receive
+// the narrowed action.
+type EmitHandlers = Partial<{
     [T in CanonAction['type']]: (
         a: Extract<CanonAction, { type: T }>,
         ctx: Ctx,
         path: Path,
     ) => string
-}
-
-// ZMK-only actions: no QMK keycode exists, warn + KC_NO placeholder.
-const zmkOnly =
-    () =>
-    (a: { type: string }, ctx: Ctx, path: Path): string => {
-        ctx.diag.warn(
-            `"${a.type}" is ZMK-specific; no QMK keycode; emitted KC_NO`,
-            path,
-        )
-        return 'KC_NO'
-    }
-
-// §5.2 Remappr-firmware behaviors have no QMK keycode; warn + KC_NO.
-// pattern-check: skip — shared fallback handler mirroring zmkOnly.
-const remapprOnly =
-    () =>
-    (a: { type: string }, ctx: Ctx, path: Path): string => {
-        ctx.diag.warn(
-            `"${a.type}" is a Remappr-specific behavior; no QMK keycode; emitted KC_NO`,
-            path,
-        )
-        return 'KC_NO'
-    }
+}>
 
 const HANDLERS: EmitHandlers = {
     key_press: (a) => kp(a),
@@ -217,35 +199,22 @@ const HANDLERS: EmitHandlers = {
         )
         return qmkKeyName(a.key)
     },
-    soft_off: zmkOnly(),
-    studio_unlock: zmkOnly(),
-    ext_power: zmkOnly(),
-    // pattern-check: skip — §5.2 Remappr-only kinds → KC_NO fallback
-    auto_shift: remapprOnly(),
-    alt_repeat: remapprOnly(),
-    layer_lock: remapprOnly(),
-    layer_mod: remapprOnly(),
-    tap_toggle: remapprOnly(),
-    set_base_saved: remapprOnly(),
-    auto_layer: remapprOnly(),
-    gui_lock: remapprOnly(),
-    secure: remapprOnly(),
-    autocorrect: remapprOnly(),
-    tune_tap_term: remapprOnly(),
-    unicode: remapprOnly(),
-    macro_record: remapprOnly(),
-    macro_play: remapprOnly(),
-    leader: remapprOnly(),
-    peripheral: remapprOnly(),
 }
 
+// An action QMK has no keycode for (a ZMK-only builtin, a Remappr-firmware-only
+// §5.2 kind): warn + KC_NO so the table still compiles.
+const fallback = (a: CanonAction, ctx: Ctx, path: Path): string => {
+    ctx.diag.warn(`"${a.type}" has no QMK keycode; emitted KC_NO`, path)
+    return 'KC_NO'
+}
+
+// pattern-check: skip — refactor of the existing Strategy dispatch: presence-check
+// on QMK's own partial handler table, no new abstraction introduced.
 function emitKeycode(a: CanonAction, ctx: Ctx, path: Path): string {
-    const handler = HANDLERS[a.type] as (
-        a: CanonAction,
-        ctx: Ctx,
-        path: Path,
-    ) => string
-    return handler(a, ctx, path)
+    const handler = HANDLERS[a.type] as
+        | ((a: CanonAction, ctx: Ctx, path: Path) => string)
+        | undefined
+    return handler ? handler(a, ctx, path) : fallback(a, ctx, path)
 }
 
 // pattern-check: skip additive pure QMK encoder_map C-block emitter, no abstraction

@@ -26,10 +26,12 @@ export interface CatalogEntry {
     // search includes these.
     aliases?: string[]
     // Runtime-injected entries for ZMK user-defined `&macro_*` / `&combo_*`
-    // behaviors. Picker click skips the slot-fill flow and emits a
-    // complete KeyAction { kind, params: [] } via onActionChosen instead
-    // of a codec-encoded number. Static catalog entries leave this unset.
-    behaviorRef?: { kind: string }
+    // behaviors and Remappr §24 named macros. Picker click skips the
+    // slot-fill flow and emits a complete KeyAction { kind, params } via
+    // onActionChosen instead of a codec-encoded number. `params` carries the
+    // composite pool index for Remappr macros; ZMK behaviors omit it (empty
+    // params). Static catalog entries leave this unset.
+    behaviorRef?: { kind: string; params?: number[] }
     // Display-only tile (e.g. parsed ZMK combo from a side-loaded
     // .keymap file). Picker click shows a toast instead of dispatching
     // a binding because there's no firmware path to set the entry.

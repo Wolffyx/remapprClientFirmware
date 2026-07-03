@@ -40,6 +40,11 @@ export interface Capabilities {
     macros?: { count: number; bufferSize: number }
     behaviors?: FirmwareBehaviorFlags
     layoutSideloadable?: boolean
+    /** Whole-device read-only: the service serves reads but rejects every edit
+     *  (setKey/commit/addLayer/…). Set for behind-dongle node views, whose
+     *  relayed-write path is HW-proof-pending. The UI gates editing affordances
+     *  on this — never on a firmware name. */
+    readOnly?: boolean
 }
 
 // Pattern check: Facade (Tier 1) — applied — group related optional methods into 3 cohesive feature facades for renderer single-guard reads
@@ -83,6 +88,13 @@ export interface MacroApi {
     getMacro(idx: number): Promise<MacroAction[]>
 
     setMacro?(idx: number, actions: MacroAction[]): Promise<void>
+
+    /** Real per-index macro names (e.g. §24 config-blob DT names); index =
+     *  pool position. Only the Remappr adapter implements this; the keycode
+     *  picker keys off its presence to list macros as named tiles in the
+     *  Macros tab. View-only firmwares whose macros aren't key-assignable
+     *  (ZMK, QMK/Vial) omit it. */
+    listNames?(): readonly string[]
 }
 
 // Pattern check: Facade (Tier 1) — extended — mirrors EncoderApi/MacroApi/RgbApi:
@@ -262,9 +274,73 @@ export interface RgbApi {
     setMixedEffect?(payload: Uint8Array): Promise<void>
 }
 
+// Pattern check: Facade (Tier 1) — applied — the behind-dongle node roster behind
+// one optional service member (sibling of keyTest/wireless/rgb). The renderer reads
+// `service.nodes` once instead of threading the relay RPC; the dongle's adapter
+// owns the wire (listNodes + relayed reads), the consumer just sees views.
+
+/** A node reachable through a dongle, as surfaced to the UI. Decoupled from the
+ *  wire NodeRecord so the contract stays firmware-neutral. */
+export interface NodeView {
+    /** Short-id used to address the node over the relay (stable per bond). */
+    id: number
+    /** Adapter-formatted human label (e.g. "Node 0x0007"). */
+    label: string
+    /** Firmware personality byte (board kind); 0 when unknown. */
+    personality: number
+    /** Link is up right now. */
+    online: boolean
+    /** Node is bonded to the dongle (vs. a transient sighting). */
+    bonded: boolean
+    /** Last-seen signal strength in dBm (0 when unknown). */
+    rssi: number
+    /** Mesh hops to reach the node (0 = direct child of the dongle). */
+    hopCount: number
+    /** The node holds the §5 master (MAIN) election role. Exactly one bonded node
+     *  is master in a cluster; false for every node until one reports a role. */
+    isMaster: boolean
+    /** Raw §5 election-role low byte (0 = unknown); `isMaster` is the decoded bit. */
+    nodeRole: number
+}
+
+export interface NodesApi {
+    /** Enumerate the nodes reachable through this device. Empty for a
+     *  directly-attached (non-dongle) device. */
+    list(): Promise<NodeView[]>
+
+    /** Open a **read-only** KeyboardService view of one node (relayed read of its
+     *  device-info + active config + geometry). The returned service has
+     *  `capabilities.readOnly === true`; every editing call throws. Editing a
+     *  behind-dongle node is gated on the relayed-write HW-proof. */
+    open(id: number): Promise<KeyboardService>
+
+    /** Open (or close) the dongle's pairing window so a new node can bond — the
+     *  remote equivalent of the physical pairing button. Resolves to the window
+     *  state; rejects when the roster is full (all pipes bonded). */
+    openPairWindow(open?: boolean): Promise<boolean>
+
+    /** Unbond a node by id, clearing a stale dongle bond so its pipe is free to
+     *  re-pair. Rejects on an unknown id. */
+    forgetNode(id: number): Promise<void>
+
+    /** Tell a node to forget its dongle bond and re-arm for a fresh pair
+     *  (owner-sealed COMMON.UNPAIR_RADIO, §19). Establishes a node session over
+     *  the relay, then sends the sealed verb. Rejects on a failed handshake or a
+     *  refused seal. The relayed-seal data plane is HW-proof-pending. */
+    unpairRadio(id: number): Promise<void>
+
+    /** Wipe the dongle's entire bond table (recovery for stale bonds that
+     *  forgetNode can't reach). Resolves to the number of pipes unbonded. */
+    clearAllBonds(): Promise<number>
+}
+
 export interface KeyboardService {
     readonly deviceInfo: DeviceInfo
     readonly capabilities: Capabilities
+    /** Device class for the renderer's landing decision. `'dongle'` lands on the
+     *  node roster (no keymap of its own); omitted/`'keyboard'` opens the editor.
+     *  A behind-dongle node view is a keyboard, not a dongle. */
+    readonly kind?: 'keyboard' | 'dongle'
 
     getLockState(): Promise<LockState>
 
@@ -307,6 +383,9 @@ export interface KeyboardService {
     /** Hardware default-layer reporting (Keychron Mac/Win DIP). Named `layerControl`
      *  to avoid colliding with adapters' internal keymap `layers`. */
     layerControl?: LayersApi
+    /** Behind-dongle node roster (present on dongle devices; `list()` is empty for
+     *  a directly-attached keyboard). Views are read-only today. */
+    nodes?: NodesApi
 
     addLayer(): Promise<Layer>
 

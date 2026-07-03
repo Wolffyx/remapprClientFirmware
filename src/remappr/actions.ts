@@ -13,6 +13,12 @@ export const REMAPPR_KIND_LAYER_MOMENTARY = 'remappr:mo'
 export const REMAPPR_KIND_LAYER_TOGGLE = 'remappr:tog'
 export const REMAPPR_KIND_MOD_TAP = 'remappr:mt'
 export const REMAPPR_KIND_LAYER_TAP = 'remappr:lt'
+// Composite references (§24). params[0] = the pool index; the display name is
+// threaded in as `displayName` and preserved across relabel via label.secondary.
+// Step/slot editing happens in the Macros / Tap-Dance tabs, not the key grid.
+export const REMAPPR_KIND_MACRO = 'remappr:macro'
+export const REMAPPR_KIND_TAP_DANCE = 'remappr:td'
+export const REMAPPR_KIND_MOD_MORPH = 'remappr:mm'
 
 // Renderer (`HidUsageLabel`, `KeycodePickerGrid`) consumes ZMK-style encoded
 // usages: (page << 16) | id. Keep the adapter on the same encoding so the picker
@@ -62,6 +68,8 @@ const HID_VALUES = (): { value: number; label: string }[] => {
     return out
 }
 
+// pattern-check: skip — mechanical revert of the enum-slot experiment back to the
+// original bare ActionType factory (named-macro picking moves to the Macros tab).
 export function buildRemapprActionTypes(maxLayers: number): ActionType[] {
     return [
         {
@@ -122,6 +130,27 @@ export function buildRemapprActionTypes(maxLayers: number): ActionType[] {
                 },
             ],
         },
+        // Composite references (§24): no inline slots — the key just points at a
+        // macro / tap-dance / mod-morph defined in its own tab. Listed so the
+        // editor recognises the kind and renders its label.
+        {
+            id: REMAPPR_KIND_MACRO,
+            displayName: 'Macro',
+            description: 'Play a macro (edit steps in the Macros tab)',
+            slots: [],
+        },
+        {
+            id: REMAPPR_KIND_TAP_DANCE,
+            displayName: 'Tap Dance',
+            description: 'Tap-count behavior (edit in the Tap Dance tab)',
+            slots: [],
+        },
+        {
+            id: REMAPPR_KIND_MOD_MORPH,
+            displayName: 'Mod Morph',
+            description: 'Morphs under held modifiers (read-only)',
+            slots: [],
+        },
     ]
 }
 
@@ -152,6 +181,7 @@ function labelFor(
     params: number[],
     layerNames: string[],
     modifiers?: string,
+    displayName?: string,
 ): KeyLabel {
     if (kind === REMAPPR_KIND_TRANSPARENT) {
         return { primary: 'Transparent', bindingPrefix: 'trans' }
@@ -230,6 +260,31 @@ function labelFor(
             },
         }
     }
+    if (
+        kind === REMAPPR_KIND_MACRO ||
+        kind === REMAPPR_KIND_TAP_DANCE ||
+        kind === REMAPPR_KIND_MOD_MORPH
+    ) {
+        const primary =
+            kind === REMAPPR_KIND_MACRO
+                ? 'Macro'
+                : kind === REMAPPR_KIND_TAP_DANCE
+                  ? 'Tap Dance'
+                  : 'Mod Morph'
+        const prefix =
+            kind === REMAPPR_KIND_MACRO
+                ? 'macro'
+                : kind === REMAPPR_KIND_TAP_DANCE
+                  ? 'td'
+                  : 'mm'
+        const name = displayName ?? `#${params[0] ?? 0}`
+        return {
+            primary,
+            secondary: name,
+            bindingPrefix: prefix,
+            description: `${primary}: ${name}`,
+        }
+    }
     return { primary: '?' }
 }
 
@@ -238,11 +293,12 @@ export function buildRemapprKeyAction(
     params: number[],
     layerNames: string[] = [],
     modifiers?: string,
+    displayName?: string,
 ): KeyAction {
     return {
         kind,
         params: [...params],
-        label: labelFor(kind, params, layerNames, modifiers),
+        label: labelFor(kind, params, layerNames, modifiers, displayName),
     }
 }
 
@@ -251,6 +307,14 @@ export function relabelLayer(
     layerNames: string[],
 ): KeyAction[] {
     return keys.map((k) =>
-        buildRemapprKeyAction(k.kind, k.params, layerNames, k.label.modifiers),
+        buildRemapprKeyAction(
+            k.kind,
+            k.params,
+            layerNames,
+            k.label.modifiers,
+            // Preserve a composite's resolved name (§24) across relabel — it's
+            // not derivable from kind+params alone.
+            k.label.secondary,
+        ),
     )
 }

@@ -9,26 +9,24 @@ import type {
     Probe,
     ProbeHint,
 } from '../adapter'
+import type { ConfigKeymap } from '../config'
 import { TransportError } from '../errors'
 import type { KeyboardService } from '../service'
 import { readTransportIds, type Transport } from '../transport'
 import type { DeviceInfo } from '../types'
-import { type ConfigKeymap } from '../config'
-import {
-    decodeRemapprBlob,
-    DecodeCode,
-} from '../config/compilers/remappr/decode'
-
 import { loadOrCreateIdentity, RemapprSession } from './auth'
+import { loadDeviceConfig } from './configRead'
 import { discover, type DiscoveryResult } from './discovery'
-import { fetchPhysicalLayouts } from './geometry'
+import { buildNodesApi } from './nodeView'
 import {
     BLE_CONTROL_CHAR_UUID,
     BLE_SERVICE_UUID,
-    buildReadChunkArg,
     Cmd,
     type DeviceInfo as RawDeviceInfo,
+    DongleVerb,
+    Namespace,
     parseCapabilities,
+    Role,
     Status,
     statusName,
     USB_USAGE,
@@ -39,9 +37,6 @@ import { createRemapprRpc, type RemapprRpc } from './rpc'
 import { RemapprKeyboardService } from './service'
 
 const PROBE_TIMEOUT_MS = 1000
-// Response data shares the 64-byte frame with a 6-byte response header, so a
-// single READ_CONFIG_CHUNK can carry at most 58 blob bytes.
-const READ_CHUNK_WANT = 58
 
 const REMAPPR_DISCOVERY: Discovery = {
     hid: {
@@ -60,6 +55,8 @@ interface ProbedRemappr {
     discovery: DiscoveryResult
     deviceInfo: DeviceInfo
     capBits: number
+    /** The device self-identified (or was detected) as a ROLE_DONGLE hub. */
+    isDongle: boolean
 }
 
 const probedSessions = new WeakMap<Transport, ProbedRemappr>()
@@ -68,14 +65,53 @@ const probedSessions = new WeakMap<Transport, ProbedRemappr>()
 function toClientDeviceInfo(
     raw: RawDeviceInfo,
     transport: Transport,
+    isDongle = false,
 ): DeviceInfo {
     const ids = readTransportIds(transport)
     return {
-        name: 'Remappr Keyboard',
+        name: isDongle ? 'Remappr Dongle' : 'Remappr Keyboard',
         firmware: 'remappr',
         firmwareVersion: `${raw.fwMajor}.${raw.fwMinor}.${raw.fwPatch}`,
         vid: ids.vid,
         pid: ids.pid,
+    }
+}
+
+/** Detect a dongle that does NOT self-identify via COMMON discovery (older
+ *  firmware serves only the DONGLE namespace). A LIST_NODES probe that answers OK
+ *  marks it a dongle; synthesize a minimal discovery result with role = DONGLE.
+ *  Throws when the device is not a dongle (the caller then reports "not Remappr").*/
+async function probeDongleFallback(rpc: RemapprRpc): Promise<DiscoveryResult> {
+    const r = await rpc.callUniversalPlain(Namespace.DONGLE, DongleVerb.LIST_NODES)
+    if (r.status !== Status.OK) {
+        throw new TransportError('not a Remappr dongle (LIST_NODES refused)')
+    }
+    return {
+        protoMax: 2,
+        role: Role.DONGLE,
+        deviceInfo: {
+            protoMin: 1,
+            protoMax: 2,
+            schemaVersion: 0,
+            fwMajor: 0,
+            fwMinor: 0,
+            fwPatch: 0,
+            hwRev: 0,
+            hasActive: false,
+            configVersion: 0,
+        },
+    }
+}
+
+/** A minimal empty keymap for the dongle's own service — it has no config store,
+ *  and the renderer lands on the node roster rather than the editor. */
+function makeDongleConfig(): ConfigKeymap {
+    return {
+        schemaVersion: 1,
+        kind: 'remappr.keymap',
+        meta: { name: 'Remappr Dongle', target: null },
+        keyboard: { id: 'remappr-dongle', name: 'Remappr Dongle', keys: [] },
+        layers: [],
     }
 }
 
@@ -84,23 +120,43 @@ function toClientDeviceInfo(
 async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null> {
     const rpc = createRemapprRpc(transport)
     try {
-        const discovery = await discover(rpc)
-        let capBits = 0
+        let discovery: DiscoveryResult
         try {
-            const caps = await rpc.callPlain(
-                Cmd.GET_CAPABILITIES,
-                undefined,
-                PROBE_TIMEOUT_MS,
-            )
-            if (caps.status === Status.OK) capBits = parseCapabilities(caps.data)
+            discovery = await discover(rpc)
         } catch {
-            /* capabilities are optional on older firmware */
+            // Not a self-identifying device. It may still be a dongle running
+            // older firmware that serves only the DONGLE namespace — last resort,
+            // probe LIST_NODES (throws here when it is not a dongle either).
+            discovery = await probeDongleFallback(rpc)
+        }
+        const isDongle = discovery.role === Role.DONGLE
+
+        // GET_CAPABILITIES is a keyboard verb on the legacy path; a dongle drops
+        // it (and would cost a probe-timeout), so skip it for a dongle.
+        let capBits = 0
+        if (!isDongle) {
+            try {
+                const caps = await rpc.callPlain(
+                    Cmd.GET_CAPABILITIES,
+                    undefined,
+                    PROBE_TIMEOUT_MS,
+                )
+                if (caps.status === Status.OK)
+                    capBits = parseCapabilities(caps.data)
+            } catch {
+                /* capabilities are optional on older firmware */
+            }
         }
         return {
             rpc,
             discovery,
-            deviceInfo: toClientDeviceInfo(discovery.deviceInfo, transport),
+            deviceInfo: toClientDeviceInfo(
+                discovery.deviceInfo,
+                transport,
+                isDongle,
+            ),
             capBits,
+            isDongle,
         }
     } catch {
         await rpc.close({ abortTransport: true }).catch(() => undefined)
@@ -122,53 +178,6 @@ async function establishSession(rpc: RemapprRpc): Promise<RemapprSession> {
     }
     session.resetCounters()
     return session
-}
-
-/** Read the full active blob over the plaintext READ_CONFIG_CHUNK loop. */
-async function readConfigBlob(
-    rpc: RemapprRpc,
-    hasActive: boolean,
-): Promise<Uint8Array> {
-    if (!hasActive) return new Uint8Array()
-    const chunks: Uint8Array[] = []
-    let offset = 0
-    let total = 0
-    let guard = 0
-    while (guard++ < 8192) {
-        const r = await rpc.callPlain(
-            Cmd.READ_CONFIG_CHUNK,
-            buildReadChunkArg(offset, READ_CHUNK_WANT),
-        )
-        if (r.status !== Status.OK || r.data.length === 0) break // EOF
-        chunks.push(r.data)
-        offset += r.data.length
-        total += r.data.length
-    }
-    const out = new Uint8Array(total)
-    let off = 0
-    for (const c of chunks) {
-        out.set(c, off)
-        off += c.length
-    }
-    return out
-}
-
-/** A minimal single-layer config for a node with no active blob. */
-function defaultConfig(keyCount: number): ConfigKeymap {
-    return {
-        schemaVersion: 1,
-        kind: 'remappr.keymap',
-        meta: { name: 'Remappr', target: null },
-        keyboard: { id: 'remappr', name: 'Remappr', keys: [] },
-        layers: [
-            {
-                name: 'Base',
-                bindings: Array.from({ length: Math.max(1, keyCount) }, () => ({
-                    type: 'transparent' as const,
-                })),
-            },
-        ],
-    }
 }
 
 export const remapprAdapter: FirmwareAdapter = {
@@ -202,7 +211,7 @@ export const remapprAdapter: FirmwareAdapter = {
                 throw new TransportError('Remappr probe failed during connect')
             }
         }
-        const { rpc, discovery, deviceInfo } = probed
+        const { rpc, discovery, deviceInfo, isDongle } = probed
 
         if (signal.aborted) {
             await rpc.close({ abortTransport: true }).catch(() => undefined)
@@ -217,47 +226,43 @@ export const remapprAdapter: FirmwareAdapter = {
         )
 
         try {
+            if (isDongle) {
+                // A dongle has no auth session or config of its own (§7.2): skip
+                // the §19 handshake and config load, and surface the node roster.
+                // The service owns the transport (closes it on disconnect) but
+                // rejects edits (no keymap) and lands on the roster (kind).
+                return new RemapprKeyboardService({
+                    rpc,
+                    deviceInfo,
+                    config: makeDongleConfig(),
+                    configVersion: 0,
+                    layouts: [],
+                    activeLayoutId: 0,
+                    maxLayers: 0,
+                    limits: discovery.limits,
+                    readOnly: true,
+                    kind: 'dongle',
+                    nodes: buildNodesApi(rpc),
+                })
+            }
+
             const session = await establishSession(rpc)
 
-            const blob = await readConfigBlob(
-                rpc,
-                discovery.deviceInfo.hasActive,
-            )
-            const decoded =
-                blob.length > 0
-                    ? decodeRemapprBlob(blob)
-                    : { code: DecodeCode.MISSING as number }
-            let config: ConfigKeymap | null = null
-            let configVersion = discovery.deviceInfo.configVersion
-            if (decoded.code === DecodeCode.OK && 'config' in decoded && decoded.config) {
-                config = decoded.config
-                configVersion = decoded.configVersion ?? configVersion
-            }
-
-            const fallbackCount = config?.layers[0]?.bindings.length ?? 0
-            const geometry = await fetchPhysicalLayouts(rpc, {
-                protoMax: discovery.protoMax,
-                fallbackKeyCount: fallbackCount,
-            })
-
-            if (!config) {
-                config = defaultConfig(geometry.layouts[0]?.keys.length ?? 0)
-            }
-
-            const maxLayers = discovery.personality
-                ? Math.max(config.layers.length, 16)
-                : Math.max(config.layers.length, 8)
+            const loaded = await loadDeviceConfig(rpc, discovery)
 
             return new RemapprKeyboardService({
                 rpc,
                 session,
                 deviceInfo,
-                config,
-                configVersion,
-                layouts: geometry.layouts,
-                activeLayoutId: geometry.activeLayoutId,
-                maxLayers,
+                config: loaded.config,
+                configVersion: loaded.configVersion,
+                layouts: loaded.layouts,
+                activeLayoutId: loaded.activeLayoutId,
+                maxLayers: loaded.maxLayers,
                 limits: discovery.limits,
+                // A dongle relays to bonded nodes; a direct keyboard returns an
+                // empty roster. Read-only views today (relayed-write HW-pending).
+                nodes: buildNodesApi(rpc),
             })
         } catch (err) {
             await rpc.close({ abortTransport: true }).catch(() => undefined)

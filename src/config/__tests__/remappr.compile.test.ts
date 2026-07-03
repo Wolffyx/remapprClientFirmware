@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { getCompiler, hasCompiler, parseKeymap } from '../index'
+import { buildRemapprBlob } from '../compilers/remappr/index'
+import { decodeRemapprBlob, DecodeCode } from '../compilers/remappr/decode'
+import { defaultConfig } from '../../remappr/configRead'
 
 // Read a little-endian u16 out of a blob.
 const u16 = (b: Uint8Array, off: number): number => b[off] | (b[off + 1] << 8)
@@ -38,6 +41,31 @@ const TINY = `{
         { "name": "fn", "bindings": [{ "type": "transparent" }, "A", { "type": "none" }] }
     ]
 }`
+
+describe('fresh-device default config (no stored geometry)', () => {
+    it('encodes num_positions from the binding count when keyboard.keys is empty', () => {
+        // The live "Save on a freshly-connected keyboard" path: with no stored
+        // config the editor uses defaultConfig(), which leaves keyboard.keys
+        // empty but carries one transparent binding per physical position.
+        // Regression for COMMIT_CONFIG → ERR_ACTIVATE (the firmware rejects a
+        // LAYER table with num_positions=0 as ERR_BOUNDS in decode_keymap).
+        const cfg = defaultConfig(15)
+        expect(cfg.keyboard.keys).toHaveLength(0)
+
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const layer = findTable(blob, 1) // TBL_LAYER
+        expect(layer).not.toBeNull()
+        const [start] = layer!
+        expect(u16(blob, start)).toBe(1) // num_layers
+        expect(u16(blob, start + 2)).toBe(15) // num_positions — was 0 before the fix
+        expect(diagnostics.some((d) => d.level === 'error')).toBe(false)
+
+        // The firmware re-validates on commit; the app's decoder shares that
+        // logic, so a clean round-trip proves the blob now activates.
+        const decoded = decodeRemapprBlob(blob)
+        expect(decoded.code).toBe(DecodeCode.OK)
+    })
+})
 
 describe('remappr (canonical → RMBC) target', () => {
     it('is registered alongside the text targets', () => {
@@ -298,6 +326,33 @@ describe('remappr system behaviors (BH_SYSTEM)', () => {
         expect(typeOf(2)).toBe(16)
         expect(tapOf(2)).toBe(2) // soft_off
     })
+
+    it('lowers ext_power toggle/on/off to BH_SYSTEM action codes', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "EP", "target": "zmk" },
+                "keyboard": { "id": "ep", "name": "EP",
+                    "keys": [{"x":0,"y":0},{"x":1,"y":0},{"x":2,"y":0}] },
+                "layers": [{ "name": "base", "bindings": [
+                    { "type": "ext_power", "action": "toggle" },
+                    { "type": "ext_power", "action": "on" },
+                    { "type": "ext_power", "action": "off" }
+                ] }]
+            }`),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        const recAt = (i: number) => beh[0] + 2 + i * 16
+        const typeOf = (i: number) => b[recAt(i)]
+        const tapOf = (i: number) => u16(b, recAt(i) + 4)
+        // toggle = 3 (existing), on = 9, off = 10 (8 is the unpair control verb).
+        expect([typeOf(0), typeOf(1), typeOf(2)]).toEqual([16, 16, 16])
+        expect(tapOf(0)).toBe(3)
+        expect(tapOf(1)).toBe(9)
+        expect(tapOf(2)).toBe(10)
+    })
 })
 
 // Mouse behaviors (§44.3): mouse_key/move/scroll lower to BH_MOUSE (type 17)
@@ -426,5 +481,168 @@ describe('remappr conditional layers (TBL_CONDITIONAL)', () => {
         expect(b[o + 1]).toBe(3) // then_layer = adjust (index 3)
         expect(b[o + 2]).toBe(1) // if[0] = raise (index 1)
         expect(b[o + 3]).toBe(2) // if[1] = lower (index 2)
+    })
+})
+
+// Consumer-page media keys (§44.4): canonical ids on HID page 12 lower to
+// BH_CONSUMER (37) carrying the bare Consumer usage, not BH_KEY. The firmware
+// already routes these through its dedicated consumer HID interface.
+// pattern-check: skip — test fixtures + assertions, no production logic
+const CONSUMER = `{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Media", "target": "zmk" },
+    "keyboard": { "id": "m", "name": "M",
+        "keys": [{"x":0,"y":0},{"x":1,"y":0},{"x":2,"y":0},{"x":3,"y":0}] },
+    "layers": [{ "name": "base", "bindings": [
+        "media.volume_increment", "media.volume_decrement",
+        "media.mute", "media.transport.play_pause"
+    ] }]
+}`
+
+describe('remappr consumer-page (media) keys', () => {
+    it('lowers page-12 usages to BH_CONSUMER (37)', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(CONSUMER),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        const recAt = (i: number) => beh[0] + 2 + i * 16
+        const typeOf = (i: number) => b[recAt(i)]
+        const tapOf = (i: number) => u16(b, recAt(i) + 4)
+        // Four distinct consumer usages → behaviors 0..3 in binding order.
+        expect([typeOf(0), typeOf(1), typeOf(2), typeOf(3)]).toEqual([
+            37, 37, 37, 37,
+        ])
+        expect(tapOf(0)).toBe(0xe9) // Volume Increment
+        expect(tapOf(1)).toBe(0xea) // Volume Decrement
+        expect(tapOf(2)).toBe(0xe2) // Mute
+        expect(tapOf(3)).toBe(0xb0) // Play/Pause
+    })
+
+    it('keeps a keyboard-page volume usage on BH_KEY (page 7)', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "K", "target": "zmk" },
+                "keyboard": { "id": "k", "name": "K", "keys": [{"x":0,"y":0}] },
+                "layers": [{ "name": "base", "bindings": ["Volume Up"] }]
+            }`),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        expect(b[beh[0] + 2]).toBe(2) // BH_KEY — keyboard-page volume usage
+    })
+
+    // Byte-exact lock for the firmware cross-check: a tiny 2-key consumer
+    // fixture whose identical bytes are embedded + decoded firmware-side in
+    // tests/config_blob/golden_canonical.h. The BH_CONSUMER wire ABI cannot
+    // drift silently — change either side and one of the two tests fails.
+    // pattern-check: skip — locked golden bytes, no production logic
+    it('matches the locked consumer golden bytes (firmware cross-check)', () => {
+        const TINY_CONSUMER = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "Media", "target": "zmk" },
+            "keyboard": { "id": "m", "name": "M",
+                "keys": [{"x":0,"y":0},{"x":1,"y":0}] },
+            "layers": [{ "name": "base",
+                "bindings": ["media.mute", "media.volume_increment"] }]
+        }`
+        // prettier-ignore
+        const golden = Uint8Array.from([
+            0x52, 0x4d, 0x42, 0x43, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x46, 0x00, 0x00, 0x00, 0x85, 0x46, 0x33, 0x15, 0x01, 0x00, 0x01, 0x00,
+            0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0xc8, 0x00, 0x00, 0x00,
+            0x04, 0x00, 0x01, 0x00, 0x22, 0x00, 0x00, 0x00, 0x02, 0x00, 0x25, 0x00,
+            0x00, 0x00, 0xe2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x25, 0x00, 0x00, 0x00, 0xe9, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x04, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        ])
+        expect(bytesOf(parseKeymap(TINY_CONSUMER))).toEqual(golden)
+    })
+})
+
+// GD System Control (§44.4): canonical ids on HID page 1 lower to BH_SYS_CTRL
+// (38) carrying the bare GD usage, not BH_KEY. The firmware routes these through
+// its dedicated system-control HID interface (power / sleep / wake).
+// pattern-check: skip — test fixtures + assertions, no production logic
+const SYS_CTRL = `{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Sys", "target": "zmk" },
+    "keyboard": { "id": "s", "name": "S",
+        "keys": [{"x":0,"y":0},{"x":1,"y":0},{"x":2,"y":0}] },
+    "layers": [{ "name": "base", "bindings": [
+        "sys_ctrl.system_power_down", "sys_ctrl.system_sleep",
+        "sys_ctrl.system_wake_up"
+    ] }]
+}`
+
+describe('remappr GD system-control keys', () => {
+    it('lowers page-1 usages to BH_SYS_CTRL (38)', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(SYS_CTRL),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        const recAt = (i: number) => beh[0] + 2 + i * 16
+        const typeOf = (i: number) => b[recAt(i)]
+        const tapOf = (i: number) => u16(b, recAt(i) + 4)
+        // Three distinct GD usages → behaviors 0..2 in binding order.
+        expect([typeOf(0), typeOf(1), typeOf(2)]).toEqual([38, 38, 38])
+        expect(tapOf(0)).toBe(0x81) // System Power Down
+        expect(tapOf(1)).toBe(0x82) // System Sleep
+        expect(tapOf(2)).toBe(0x83) // System Wake Up
+    })
+
+    it('drops modifiers on a system-control binding (warns, no error)', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "S", "target": "zmk" },
+                "keyboard": { "id": "s", "name": "S", "keys": [{"x":0,"y":0}] },
+                "layers": [{ "name": "base", "bindings": [
+                    { "type": "key_press", "key": "sys_ctrl.system_sleep",
+                      "mods": ["LEFT_CTRL"] }
+                ] }]
+            }`),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        expect(
+            diagnostics.some((d) => /system-control key/.test(d.message)),
+        ).toBe(true)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        expect(b[beh[0] + 2]).toBe(38) // still BH_SYS_CTRL, mods dropped
+    })
+
+    // Byte-exact lock for the firmware cross-check (mirrors the consumer golden):
+    // a tiny 2-key fixture whose identical bytes are embedded + decoded firmware-
+    // side in tests/config_blob/golden_canonical.h. The BH_SYS_CTRL wire ABI
+    // cannot drift silently — change either side and one of the two tests fails.
+    // pattern-check: skip — locked golden bytes, no production logic
+    it('matches the locked system-control golden bytes (firmware cross-check)', () => {
+        const TINY_SYS = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "Sys", "target": "zmk" },
+            "keyboard": { "id": "s", "name": "S",
+                "keys": [{"x":0,"y":0},{"x":1,"y":0}] },
+            "layers": [{ "name": "base",
+                "bindings": ["sys_ctrl.system_power_down", "sys_ctrl.system_sleep"] }]
+        }`
+        // prettier-ignore
+        const golden = Uint8Array.from([
+            0x52, 0x4d, 0x42, 0x43, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x46, 0x00, 0x00, 0x00, 0x12, 0x2a, 0xf1, 0x46, 0x01, 0x00, 0x01, 0x00,
+            0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0xc8, 0x00, 0x00, 0x00,
+            0x04, 0x00, 0x01, 0x00, 0x22, 0x00, 0x00, 0x00, 0x02, 0x00, 0x26, 0x00,
+            0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x26, 0x00, 0x00, 0x00, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x04, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        ])
+        expect(bytesOf(parseKeymap(TINY_SYS))).toEqual(golden)
     })
 })

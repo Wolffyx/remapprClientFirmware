@@ -13,6 +13,8 @@ export {
     type LowerResult,
 } from './configBridge'
 export { fetchPhysicalLayouts } from './geometry'
+export { buildNodesApi } from './nodeView'
+export { readConfigBlob, loadDeviceConfig } from './configRead'
 
 // Control client (Workstream B) re-exports for advanced / Electron consumers.
 export {
@@ -32,6 +34,8 @@ export {
     listNodes,
     getNodeInfo,
     establishNodeSession,
+    unpairRadio,
+    clearAllBonds,
     type NodeRecord,
 } from './nodes'
 export * as remapprProtocol from './protocol'

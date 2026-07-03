@@ -35,6 +35,7 @@ import {
     MouseDirCode,
     MouseOp,
     LockAction,
+    NameKind,
     OUTPUT_NO_PROFILE,
     OutputActionCode,
     PeripheralKind,
@@ -46,6 +47,7 @@ import {
     type LeaderRecord,
     type MacroRecord,
     type MacroStep,
+    type NameRecord,
 } from './blobWriter'
 import type {
     CanonHoldTapDef,
@@ -58,9 +60,16 @@ import type {
 import { MODIFIERS, resolveKeycode, type Modifier } from '../../keycodes'
 
 const COMBO_ANY_LAYER = 0xff
-// HID Keyboard usage page. Consumer/System pages (12, …) are a deferred gap
-// (§44.4): the firmware HID layer exposes keyboard usages only for now.
 const HID_PAGE_KEYBOARD = 7
+// Consumer page (media/volume + AC/AL). The firmware emits these through a
+// dedicated Consumer-control HID interface as BH_CONSUMER, so the behavior type
+// — not a usage-page tag in the record — disambiguates the page on the wire
+// (§44.4). GD System Control (page 1) has no catalog entries yet.
+const HID_PAGE_CONSUMER = 12
+// GD System Control (page 1): power / sleep / wake → BH_SYS_CTRL. Same shape as
+// Consumer — the firmware emits the bare GD usage through its system-control HID
+// interface; the record carries no modifier field (§44.4).
+const HID_PAGE_SYSTEM = 1
 
 const NONE_REC: BehaviorRecord = {
     type: BehaviorType.None,
@@ -80,8 +89,10 @@ const rec = (p: Partial<BehaviorRecord> & { type: number }): BehaviorRecord => (
     ...p,
 })
 
-// Resolve a CanonicalKeyId to its HID keyboard usage, or null with a diagnostic
-// for consumer-page / unknown keys (the §44.4 usage-page gap).
+// Resolve a CanonicalKeyId to its HID keyboard usage, or null with a diagnostic.
+// Consumer / GD-system usages are bindable as standalone keys (BH_CONSUMER /
+// BH_SYS_CTRL via the key_press path) but cannot be a macro step, hold-tap tap-
+// key, or sequence target — those positions are keyboard-page only.
 function keyUsage(
     keyId: string,
     diag: DiagnosticBag,
@@ -94,8 +105,8 @@ function keyUsage(
     }
     if (u.page !== HID_PAGE_KEYBOARD) {
         diag.error(
-            `key "${keyId}" is on HID page ${u.page} (consumer/system not yet ` +
-                `on the wire — §44.4)`,
+            `key "${keyId}" is on HID page ${u.page} — only keyboard-page ` +
+                `usages can be a macro / tap / sequence target (§44.4)`,
             path,
         )
         return null
@@ -374,6 +385,9 @@ interface CompCtx {
     memo: Map<string, BehaviorRecord>
     /** ref-keys currently being lowered, to break a self-referential cycle. */
     inProgress: Set<string>
+    /** TBL_NAMES entries (§24) collected as composites are first lowered, keyed
+     *  by the assigned sub_index so the firmware/app see the real name. */
+    names: NameRecord[]
 }
 
 // Memoize a composite record by ref-key and guard against a definition that
@@ -411,19 +425,58 @@ function lowerAction(
 ): BehaviorRecord {
     switch (action.type) {
         case 'key_press': {
-            const usage = keyUsage(action.key, diag, path)
-            if (usage === null) return rec({ type: BehaviorType.None })
+            const u = HID_USAGE_BY_CANONICAL.get(action.key)
+            if (!u) {
+                diag.error(`no HID usage for key "${action.key}"`, path)
+                return rec({ type: BehaviorType.None })
+            }
+            if (u.page === HID_PAGE_CONSUMER) {
+                // BH_CONSUMER (37): a Consumer-page (media/volume/AC/AL) usage.
+                // The firmware asserts it on press and releases it on the up
+                // edge via the consumer HID interface; the record has no
+                // modifier field, so any mods on the binding are dropped.
+                if (action.mods?.length) {
+                    diag.warn(
+                        `consumer key "${action.key}" carries modifiers — ` +
+                            `dropped (BH_CONSUMER emits a bare Consumer usage)`,
+                        path,
+                    )
+                }
+                return rec({ type: BehaviorType.Consumer, tap: u.usage })
+            }
+            if (u.page === HID_PAGE_SYSTEM) {
+                // BH_SYS_CTRL (38): a GD System Control usage (power/sleep/wake).
+                // Like BH_CONSUMER it is asserted on press and released (usage 0)
+                // on the up edge via the system-control HID interface; the record
+                // has no modifier field, so any mods on the binding are dropped.
+                if (action.mods?.length) {
+                    diag.warn(
+                        `system-control key "${action.key}" carries modifiers — ` +
+                            `dropped (BH_SYS_CTRL emits a bare GD usage)`,
+                        path,
+                    )
+                }
+                return rec({ type: BehaviorType.SysCtrl, tap: u.usage })
+            }
+            if (u.page !== HID_PAGE_KEYBOARD) {
+                diag.error(
+                    `key "${action.key}" is on HID page ${u.page} (not yet on ` +
+                        `the wire — §44.4)`,
+                    path,
+                )
+                return rec({ type: BehaviorType.None })
+            }
             if (action.mods?.length) {
                 // KEY_MODS (22): a modded key_press (e.g. Ctrl+C). tap = usage,
                 // hold = modifier mask; the firmware emits the mods + usage as
                 // one chord and retracts both on release. (§5.2, no longer a gap.)
                 return rec({
                     type: BehaviorType.KeyMods,
-                    tap: usage,
+                    tap: u.usage,
                     hold: modsToMask(action.mods),
                 })
             }
-            return rec({ type: BehaviorType.Key, tap: usage })
+            return rec({ type: BehaviorType.Key, tap: u.usage })
         }
         case 'tap_hold': {
             // MOD_TAP (3) when hold is a modifier; LAYER_TAP (4) when hold is a
@@ -528,19 +581,17 @@ function lowerAction(
                 tap: SystemAction[action.type],
             })
         case 'ext_power':
-            // Firmware exposes a single EXT_POWER_TOGGLE system action; absolute
-            // on/off can't be expressed, so only `toggle` lowers cleanly.
-            if (action.action !== 'toggle') {
-                diag.error(
-                    `ext_power "${action.action}" not on the wire — firmware ` +
-                        `only has EXT_POWER_TOGGLE (use "toggle")`,
-                    path,
-                )
-                return rec({ type: BehaviorType.None })
-            }
+            // EXT_POWER toggle / on / off → BH_SYSTEM with the matching system
+            // action code; the keyboard_node sink drives the board's ext_power
+            // GPIO (toggle relative, on/off absolute). §44.3, §5.2-I.
             return rec({
                 type: BehaviorType.System,
-                tap: SystemAction.ext_power_toggle,
+                tap:
+                    action.action === 'on'
+                        ? SystemAction.ext_power_on
+                        : action.action === 'off'
+                          ? SystemAction.ext_power_off
+                          : SystemAction.ext_power_toggle,
             })
         case 'mouse_key':
             // op in `tap`, button code in `hold`; engine reports press/release
@@ -719,6 +770,11 @@ function lowerAction(
                         )
                 const subIndex = comp.subs.length
                 comp.subs.push(...slots)
+                comp.names.push({
+                    kind: NameKind.TapDance,
+                    ref: subIndex,
+                    name: action.ref,
+                })
                 return rec({
                     type: BehaviorType.TapDance,
                     subCount: maxCount,
@@ -752,6 +808,11 @@ function lowerAction(
                 )
                 const subIndex = comp.subs.length
                 comp.subs.push(sub0, sub1)
+                comp.names.push({
+                    kind: NameKind.ModMorph,
+                    ref: subIndex,
+                    name: action.ref,
+                })
                 // ZMK keep-mods: trigger mods are suppressed from the morphed
                 // report unless kept. The firmware flag is all-or-nothing, so any
                 // keep-mods list keeps them all; a partial list warns.
@@ -792,7 +853,15 @@ function encodeBlob(
     configVersion: number,
 ): Uint8Array {
     const numLayers = config.layers.length
-    const numPositions = config.keyboard.keys.length
+    // numPositions is the physical key count. Prefer the declared geometry, but a
+    // device with no stored geometry (a fresh/default config) leaves
+    // keyboard.keys empty while the per-layer bindings already carry one entry
+    // per position (§44.7 invariant). Fall back to the binding count so the LAYER
+    // table never emits num_positions=0 — the firmware rejects that with
+    // ERR_BOUNDS in decode_keymap, surfacing to the app as COMMIT_CONFIG →
+    // ERR_ACTIVATE.
+    const numPositions =
+        config.keyboard.keys.length || config.layers[0]?.bindings.length || 0
 
     if (numLayers === 0) diag.error('keymap has no layers', ['layers'])
     if (numPositions === 0) diag.error('keyboard has no keys', ['keyboard', 'keys'])
@@ -814,6 +883,7 @@ function encodeBlob(
         holdTapById: new Map((config.holdTaps ?? []).map((h) => [h.id, h])),
         memo: new Map(),
         inProgress: new Set(),
+        names: [],
     }
 
     // De-duplicated behavior table; bindings index into it.
@@ -962,6 +1032,17 @@ function encodeBlob(
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
     if (leaders.length > 0) builder.leaderTable(leaders)
+    // NAMES (§24): real labels for the macros + composites this blob emits, so a
+    // device round-trip (decode → edit → re-commit) keeps the names the app shows.
+    // Macros are keyed by their table index; composites by sub_index (collected in
+    // comp.names as each was lowered). Emitted last; absent when there are none.
+    const names: NameRecord[] = [
+        ...[...macroIndex].map(
+            ([name, ref]): NameRecord => ({ kind: NameKind.Macro, ref, name }),
+        ),
+        ...comp.names,
+    ]
+    if (names.length > 0) builder.namesTable(names)
 
     return builder.finalize(
         config.schemaVersion,
