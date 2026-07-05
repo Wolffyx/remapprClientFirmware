@@ -330,11 +330,17 @@ export class ZmkKeyboardService implements KeyboardService {
             this.cachedKeymap.layers.push(zmkLayer)
             this.cachedKeymap.availableLayers--
         }
+        // Build labels against ALL layer names (cachedKeymap now includes the
+        // new layer) so layer-index lookups (&mo / &lt hold legends) resolve the
+        // right name — a one-element {layers:[zmkLayer]} would mislabel them.
+        const layers = this.cachedKeymap?.layers.map((l) => ({
+            name: l.name,
+        })) ?? [zmkLayer]
         return {
             id: zmkLayer.id,
             name: zmkLayer.name,
             keys: zmkLayer.bindings.map((b) =>
-                bindingToKeyAction(b, this.behaviors, { layers: [zmkLayer] }),
+                bindingToKeyAction(b, this.behaviors, { layers }),
             ),
         }
     }
@@ -411,11 +417,16 @@ export class ZmkKeyboardService implements KeyboardService {
             this.cachedKeymap.availableLayers--
         }
         this.markPending(true)
+        // Label against ALL layer names (cachedKeymap now includes the restored
+        // layer) so layer-index lookups resolve correctly.
+        const layers = this.cachedKeymap?.layers.map((l) => ({
+            name: l.name,
+        })) ?? [ok]
         return {
             id: ok.id,
             name: ok.name,
             keys: ok.bindings.map((b) =>
-                bindingToKeyAction(b, this.behaviors, { layers: [ok] }),
+                bindingToKeyAction(b, this.behaviors, { layers }),
             ),
         }
     }
