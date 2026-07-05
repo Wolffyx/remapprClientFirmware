@@ -199,17 +199,21 @@ function labelFor(
     }
     if (kind === REMAPPR_KIND_LAYER_MOMENTARY) {
         const layer = params[0] ?? 0
+        const name = layerNames[layer] ?? `L${layer}`
         return {
             primary: 'Momentary Layer',
-            secondary: layerNames[layer] ?? `L${layer}`,
+            secondary: name,
+            paramText: name,
             bindingPrefix: 'mo',
         }
     }
     if (kind === REMAPPR_KIND_LAYER_TOGGLE) {
         const layer = params[0] ?? 0
+        const name = layerNames[layer] ?? `L${layer}`
         return {
             primary: 'Toggle Layer',
-            secondary: layerNames[layer] ?? `L${layer}`,
+            secondary: name,
+            paramText: name,
             bindingPrefix: 'tog',
         }
     }
