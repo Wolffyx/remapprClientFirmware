@@ -10,15 +10,15 @@ const layerName = (i: number): string | undefined => layers[i]
 describe('shortenToken — generic fallback', () => {
     it('strips through the first underscore and title-cases the tail', () => {
         expect(shortenToken('RGB_HUI')).toBe('Hui')
-        expect(shortenToken('FOO_BAR_BAZ')).toBe('Bar B…')
+        expect(shortenToken('FOO_BAR_BAZ')).toBe('Bar Baz')
     })
 
     it('handles a token with no underscore', () => {
         expect(shortenToken('MB1')).toBe('Mb1')
     })
 
-    it('truncates to 6 chars with an ellipsis', () => {
-        expect(shortenToken('X_LONGWORD').length).toBeLessThanOrEqual(6)
+    it('returns the full text (cap clips via CSS, tooltip shows all)', () => {
+        expect(shortenToken('X_LONGWORD')).toBe('Longword')
     })
 })
 

@@ -22,9 +22,10 @@ export interface ParamLabel {
 }
 
 /**
- * Title-case-and-shorten fallback for an enum token with no explicit mapping.
- * `RGB_FOO_BAR` → strip through the first `_` → `FOO_BAR` → "Foo Bar" → ≤6 chars.
- * Keeps unknown / future tokens legible without a hand-written table entry.
+ * Title-case fallback for an enum token with no explicit mapping.
+ * `RGB_FOO_BAR` → strip through the first `_` → `FOO_BAR` → "Foo Bar".
+ * Returns the FULL text — the cap clips it to an ellipsis in CSS while the
+ * hover tooltip shows the whole value, so no characters are dropped here.
  */
 export function shortenToken(token: string): string {
     const underscore = token.indexOf('_')
@@ -34,8 +35,7 @@ export function shortenToken(token: string): string {
         .filter((w) => w.length > 0)
         .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
         .join(' ')
-    const out = titled || token
-    return out.length > 6 ? out.slice(0, 5) + '…' : out
+    return titled || token
 }
 
 /** True when the (conditional) trailing value slot applies to this command. */
