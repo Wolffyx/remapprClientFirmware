@@ -79,6 +79,33 @@ describe('buildKeyLabel — RGB / output / mouse enums', () => {
     })
 })
 
+describe('buildKeyLabel — custom behaviors render as Macro', () => {
+    // A user macro surfaces over Studio only as its node name with no params —
+    // displayNameToBinding yields an &<slug> that isn't a known builtin.
+    const macroBehaviors = {
+        50: {
+            id: 50,
+            displayName: 'm_hello',
+            metadata: [{ param1: [{ name: '', nil: {} }] }],
+        },
+    } as unknown as typeof FIXTURE_MAP
+
+    it('&m_hello → header "Macro", legend "m_hello"', () => {
+        const l = buildKeyLabel(bind(50), macroBehaviors, keymap)
+        expect(l.primary).toBe('Macro')
+        expect(l.paramText).toBe('m_hello')
+        expect(l.description).toBe('Macro: m_hello')
+        expect(l.holdTap).toBeUndefined()
+    })
+
+    it('built-in zero-param behaviors keep their own name (not Macro)', () => {
+        // Caps Word is a known builtin → header stays "Caps Word".
+        const caps = buildKeyLabel(bind(12), FIXTURE_MAP, keymap)
+        expect(caps.primary).toBe('Caps Word')
+        expect(caps.paramText).toBeUndefined()
+    })
+})
+
 describe('buildKeyLabel — regressions', () => {
     it('&kp keeps primaryUsage and has no paramText', () => {
         const l = labelOf(KP.id, 0x07_0004)

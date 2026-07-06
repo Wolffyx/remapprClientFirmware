@@ -16,7 +16,10 @@ import {
     formatMomentaryLayer,
 } from '@firmware/_app/lib/keyAbbreviations'
 import { buildParamLabel } from '../paramLabel'
-import { displayNameToBinding } from './displayNameToBinding'
+import {
+    displayNameToBinding,
+    KNOWN_BINDING_PREFIXES,
+} from './displayNameToBinding'
 import { behaviorToActionType } from './actionTypes'
 import { ZMK_SHORT_TOKENS } from './paramLabel'
 
@@ -121,6 +124,23 @@ export function buildKeyLabel(
             description: holdTap.tooltip,
             bindingPrefix,
             holdTap,
+        }
+    }
+    // A custom behavior (macro / tap-dance / vendor) is any whose displayName
+    // doesn't map to a built-in ZMK binding — displayNameToBinding falls back to
+    // an &<slug> that isn't in the known set. Over the live Studio protocol a
+    // macro surfaces only as its node name (e.g. "m_hello") with no params and no
+    // steps, so render it as a "Macro" cap with the name as the legend.
+    if (
+        !holdTap &&
+        bindingPrefix &&
+        !KNOWN_BINDING_PREFIXES.includes(bindingPrefix)
+    ) {
+        return {
+            primary: 'Macro',
+            paramText: behavior.displayName,
+            description: `Macro: ${behavior.displayName}`,
+            bindingPrefix,
         }
     }
     const primaryUsage = slots[0]?.kind === 'hid' ? binding.param1 : undefined
