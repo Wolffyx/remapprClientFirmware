@@ -22,6 +22,7 @@ export interface HoldTapLabelData {
     tooltip: string
 }
 
+// pattern-check: skip — additive optional field on existing plain data interface
 export interface KeyLabel {
     primary: string
     primaryUsage?: number
@@ -30,6 +31,10 @@ export interface KeyLabel {
     description?: string
     bindingPrefix?: string
     holdTap?: HoldTapLabelData
+    /** Short cap-legend text for a non-HID primary param (e.g. "FN1", "BT 0",
+     *  "Hue+"). Rendered as the main glyph when {@link primaryUsage} is absent.
+     *  Produced firmware-agnostically by buildParamLabel from the neutral slots. */
+    paramText?: string
 }
 
 // Pattern check: no GoF pattern (-) — rejected — additive optional fields on plain data interfaces; no abstraction.

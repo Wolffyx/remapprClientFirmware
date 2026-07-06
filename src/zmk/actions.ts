@@ -15,8 +15,10 @@ import {
     abbreviateLayerName,
     formatMomentaryLayer,
 } from '@firmware/_app/lib/keyAbbreviations'
+import { buildParamLabel } from '../paramLabel'
 import { displayNameToBinding } from './displayNameToBinding'
 import { behaviorToActionType } from './actionTypes'
+import { ZMK_SHORT_TOKENS } from './paramLabel'
 
 export type BehaviorMap = Record<number, GetBehaviorDetailsResponse>
 
@@ -99,7 +101,14 @@ export function buildKeyLabel(
     }
     const slots = behaviorToActionType(behavior).slots
     const bindingPrefix = displayNameToBinding(behavior.displayName)
-    const holdTap = buildHoldTapLabelData(binding, behavior, slots, keymap)
+    // A 2-slot behavior whose first slot is an enum is a COMMAND-style behavior
+    // (e.g. &bt: Command + gated profile), not a hold-tap — mirrors the
+    // discriminator in actionTypes.ts. Without this guard &bt renders through
+    // the hold-tap path as garbage describeUsage() text (issue #147 / #148).
+    const isCommandStyle = slots.length === 2 && slots[0].kind === 'enum'
+    const holdTap = isCommandStyle
+        ? undefined
+        : buildHoldTapLabelData(binding, behavior, slots, keymap)
     if (holdTap) {
         return {
             primary: holdTap.tapDesc,
@@ -115,10 +124,21 @@ export function buildKeyLabel(
         }
     }
     const primaryUsage = slots[0]?.kind === 'hid' ? binding.param1 : undefined
+    // Surface non-HID primary params (layer index, enum command, number) as a
+    // short cap legend via the firmware-neutral engine.
+    const param = buildParamLabel(
+        slots,
+        [binding.param1, binding.param2],
+        (i) => keymap.layers[i]?.name,
+        ZMK_SHORT_TOKENS,
+    )
     return {
         primary: behavior.displayName,
         primaryUsage,
-        description: behavior.displayName,
+        ...(param.paramText ? { paramText: param.paramText } : {}),
+        description: param.longText
+            ? `${behavior.displayName}: ${param.longText}`
+            : behavior.displayName,
         bindingPrefix,
     }
 }

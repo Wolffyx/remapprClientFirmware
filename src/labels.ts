@@ -10,6 +10,10 @@ export interface ResolvedBindingPosition {
     holdTap?: HoldTapLabelData
     bindingParam1?: number
     actionTypeName?: string
+    /** Short cap-legend text for a non-HID param (from KeyLabel.paramText). */
+    paramText?: string
+    /** Tooltip for the param legend (from KeyLabel.description). */
+    paramTitle?: string
     outOfRange: boolean
     x: number
     y: number
@@ -38,6 +42,8 @@ export function resolveBindingLabels(
             holdTap: label?.holdTap,
             bindingParam1: label?.primaryUsage,
             actionTypeName: label?.primary,
+            paramText: label?.paramText,
+            paramTitle: label?.description,
             outOfRange,
             x: k.x / 100.0,
             y: k.y / 100.0,
