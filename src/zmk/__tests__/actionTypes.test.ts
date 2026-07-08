@@ -33,6 +33,8 @@ describe('behaviorToActionType — &bt multi-set merge (issue #148)', () => {
         expect(prof.kind).toBe('number')
         expect(prof.range).toEqual({ min: 0, max: 4 })
         expect(prof.enabledFor).toEqual([3, 5])
+        // &bt's profile is 0-based on the wire but shown one-based in the UI.
+        expect(prof.oneBased).toBe(true)
     })
 
     it('labels command-style slots by role, not Hold / Tap', () => {
@@ -66,6 +68,9 @@ describe('behaviorToActionType — merges params from non-first sets', () => {
         expect(at.slots[1].kind).toBe('number')
         expect(at.slots[1].range).toEqual({ min: 0, max: 9 })
         expect(at.slots[1].enabledFor).toEqual([1])
+        // One-based display is keyed on &bt identity, not on gated numbers —
+        // an unrelated behavior's numeric param stays 0-based.
+        expect(at.slots[1].oneBased).toBeUndefined()
     })
 })
 

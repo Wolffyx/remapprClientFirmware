@@ -146,6 +146,12 @@ export function behaviorToActionType(
         // Command-style behavior (e.g. &bt), not a hold-tap. Gate the trailing
         // slot on the commands that actually take it and label by role.
         const enabledFor = conditionalParam1Values(sets)
+        // &bt's profile is a 0-based index but reads naturally as 1..N; surface
+        // it one-based (the raw index is still what we store / send). Keyed on
+        // the behavior identity, not the range, so other numeric params are
+        // unaffected. displayName 'Bluetooth' is &bt (see displayNameToBinding).
+        const oneBasedProfile =
+            behavior.displayName === 'Bluetooth' && slots[1].kind === 'number'
         slots[0] = { ...slots[0], label: 'Command' }
         slots[1] = {
             ...slots[1],
@@ -154,6 +160,7 @@ export function behaviorToActionType(
                     ? slots[1].label
                     : 'Value',
             ...(enabledFor ? { enabledFor } : {}),
+            ...(oneBasedProfile ? { oneBased: true } : {}),
         }
     } else if (slots.length === 2) {
         slots[0] = { ...slots[0], label: 'Hold' }

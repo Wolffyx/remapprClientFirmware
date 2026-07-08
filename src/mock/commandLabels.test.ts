@@ -14,9 +14,10 @@ const paramText = (kind: string, params: number[]): string | undefined =>
     buildMockKeyAction(kind, params, []).label.paramText
 
 describe('mock command behaviors — param legends', () => {
-    it('&bt BT_SEL 0 → "BT 0", BT_CLR → "Clr" (no profile)', () => {
-        expect(paramText(MOCK_KIND_BLUETOOTH, [3, 0])).toBe('BT 0')
-        expect(paramText(MOCK_KIND_BLUETOOTH, [5, 2])).toBe('Disc 2')
+    it('&bt profile shows one-based (index 0 → "BT 1"), BT_CLR → "Clr"', () => {
+        // Stored index stays 0-based; the legend counts profiles from 1.
+        expect(paramText(MOCK_KIND_BLUETOOTH, [3, 0])).toBe('BT 1')
+        expect(paramText(MOCK_KIND_BLUETOOTH, [5, 2])).toBe('Disc 3')
         expect(paramText(MOCK_KIND_BLUETOOTH, [0])).toBe('Clr')
     })
 
@@ -53,5 +54,7 @@ describe('mock action-type catalog exposes the command behaviors', () => {
         expect(bt?.slots[0].kind).toBe('enum')
         expect(bt?.slots[1].kind).toBe('number')
         expect(bt?.slots[1].enabledFor).toEqual([3, 5])
+        // Profile index is 0-based on the wire but shown one-based in the UI.
+        expect(bt?.slots[1].oneBased).toBe(true)
     })
 })

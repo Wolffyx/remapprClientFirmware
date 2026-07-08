@@ -46,14 +46,14 @@ describe('buildKeyLabel — layer behaviors show the layer name', () => {
 })
 
 describe('buildKeyLabel — &bt is command-style, not hold-tap (issue #147/#148)', () => {
-    it('BT_SEL 0 → "BT 0"', () => {
+    it('BT_SEL index 0 → "BT 1" (profiles shown one-based)', () => {
         const l = labelOf(BT.id, 3, 0)
-        expect(l.paramText).toBe('BT 0')
+        expect(l.paramText).toBe('BT 1')
         expect(l.holdTap).toBeUndefined()
     })
 
-    it('BT_DISC 2 → "Disc 2"', () => {
-        expect(labelOf(BT.id, 5, 2).paramText).toBe('Disc 2')
+    it('BT_DISC index 2 → "Disc 3" (profiles shown one-based)', () => {
+        expect(labelOf(BT.id, 5, 2).paramText).toBe('Disc 3')
     })
 
     it('BT_CLR → "Clr" with no trailing profile', () => {

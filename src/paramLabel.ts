@@ -71,7 +71,8 @@ export function buildParamLabel(
     }
 
     if (first.kind === 'number') {
-        return { paramText: String(param1), longText: String(param1) }
+        const shown = first.oneBased ? param1 + 1 : param1
+        return { paramText: String(shown), longText: String(shown) }
     }
 
     if (first.kind === 'enum') {
@@ -81,7 +82,8 @@ export function buildParamLabel(
             : String(param1)
         const second = slots[1]
         if (second && trailingValueApplies(second, param1)) {
-            const value = params[1] ?? 0
+            const raw = params[1] ?? 0
+            const value = second.oneBased ? raw + 1 : raw
             return {
                 paramText: `${short} ${value}`,
                 longText: token ? `${token} ${value}` : `${param1} ${value}`,

@@ -107,6 +107,13 @@ export interface ActionSlot {
      * e.g. `&bt`'s profile index applies only to BT_SEL / BT_DISC.
      */
     enabledFor?: number[]
+    /**
+     * Display the (0-based) numeric value one-based in the UI while storing and
+     * sending the raw index unchanged — e.g. `&bt`'s profile 0..4 shows as
+     * "Profile 1..5". Firmware-neutral: any adapter sets it on a slot whose
+     * users count from 1; the picker and cap legend honour it automatically.
+     */
+    oneBased?: boolean
 }
 
 export interface DeviceInfo {

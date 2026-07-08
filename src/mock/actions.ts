@@ -57,7 +57,14 @@ const COMMAND_SLOTS: Record<string, ActionSlot[]> = {
     [MOCK_KIND_BLUETOOTH]: [
         { label: 'Command', kind: 'enum', values: BT_COMMANDS },
         // Profile applies only to BT_SEL (3) / BT_DISC (5), like real &bt.
-        { label: 'profile', kind: 'number', range: { min: 0, max: 4 }, enabledFor: [3, 5] },
+        // Shown one-based (Profile 1..5); the stored index stays 0..4.
+        {
+            label: 'profile',
+            kind: 'number',
+            range: { min: 0, max: 4 },
+            enabledFor: [3, 5],
+            oneBased: true,
+        },
     ],
     [MOCK_KIND_RGB]: [{ label: 'Command', kind: 'enum', values: RGB_COMMANDS }],
     [MOCK_KIND_MOUSE_BUTTON]: [

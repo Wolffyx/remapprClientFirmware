@@ -72,6 +72,30 @@ describe('buildParamLabel — slot-kind dispatch', () => {
         )
     })
 
+    it('one-based number slot labels the value from 1 (raw index unchanged)', () => {
+        const slots: ActionSlot[] = [
+            {
+                label: 'Command',
+                kind: 'enum',
+                values: [{ value: 3, label: 'BT_SEL' }],
+            },
+            {
+                label: 'profile',
+                kind: 'number',
+                enabledFor: [3, 5],
+                oneBased: true,
+            },
+        ]
+        const map = { BT_SEL: 'BT' }
+        // Stored profile index 0 → shown as "BT 1"; index 2 → "BT 3".
+        expect(buildParamLabel(slots, [3, 0], layerName, map).paramText).toBe(
+            'BT 1',
+        )
+        expect(buildParamLabel(slots, [3, 2], layerName, map).longText).toBe(
+            'BT_SEL 3',
+        )
+    })
+
     it('unknown enum value → the raw number', () => {
         const slots: ActionSlot[] = [
             { label: 'E', kind: 'enum', values: [{ value: 1, label: 'A' }] },
