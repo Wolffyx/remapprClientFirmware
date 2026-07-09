@@ -100,6 +100,16 @@ export interface ActionType {
     slots: ActionSlot[]
 }
 
+// Pattern check: no GoF pattern (-) — rejected — plain data ref {kind, params}
+// shared by CatalogEntry and composite slot values; no abstraction.
+/** A pointer to a firmware behavior to emit directly — its id (`kind`) and raw
+ *  params — bypassing the normal keycode/slot flow. Used by catalog tiles and by
+ *  composite ActionType slot values (see {@link ActionSlot}). */
+export interface BehaviorRef {
+    kind: string
+    params?: number[]
+}
+
 export type ActionSlotKind =
     | 'hid'
     | 'modifier'
@@ -113,8 +123,16 @@ export interface ActionSlot {
     label: string
     kind: ActionSlotKind
     /** Enum options; each may carry a neutral icon id for its dropdown row and
-     *  composite cap legend (e.g. BT_NXT → "next"). */
-    values?: { value: number; label: string; icon?: string }[]
+     *  composite cap legend (e.g. BT_NXT → "next"). A value may also carry a
+     *  {@link BehaviorRef}: picking it emits that behavior directly instead of
+     *  `{ ActionType.id, [value] }` — lets one composite ActionType dispatch to
+     *  several real behaviors (unified Mouse → &mkp / &mmv / &msc). */
+    values?: {
+        value: number
+        label: string
+        icon?: string
+        behaviorRef?: BehaviorRef
+    }[]
     range?: { min: number; max: number }
     innerKinds?: string[]
     /**
