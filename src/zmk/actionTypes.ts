@@ -6,7 +6,13 @@ import type {
 } from '@zmkfirmware/zmk-studio-ts-client/behaviors'
 import type { ActionSlot, ActionSlotKind, ActionType } from '@firmware/types'
 import { hidUsagePageAndIdFromUsage } from '@firmware/_app/lib/actions/hidUsages'
-import { displayNameToBinding, prettyBehaviorName } from './displayNameToBinding'
+import { MOUSE_COMMANDS } from '@firmware/mouseCommands'
+import {
+    displayNameToBinding,
+    KNOWN_BINDING_PREFIXES,
+    prettyBehaviorName,
+} from './displayNameToBinding'
+import { mouseCanonToZmk } from './mouseZmk'
 import {
     ZMK_BEHAVIOR_LEGENDS,
     zmkCommandLegend,
@@ -197,6 +203,69 @@ export function behaviorsToActionTypes(
     behaviors: Record<number, GetBehaviorDetailsResponse>,
 ): ActionType[] {
     return Object.values(behaviors).map(behaviorToActionType)
+}
+
+// The ZMK mouse bindings the unified Mouse dropdown folds into one behavior.
+const MOUSE_BINDINGS = new Set<string>(['&mkp', '&mmv', '&msc'])
+
+/**
+ * Synthesize the composite "Mouse" ActionType from the live behaviors: one enum
+ * "Command" slot whose values each carry a {@link BehaviorRef} dispatching to the
+ * real &mkp / &mmv / &msc behavior (button mask or packed move/scroll delta), plus
+ * any `/mouse/i` user macro folded in as a command. Returns undefined when the
+ * device exposes none of these — so a non-mouse keyboard gets no Mouse entry.
+ *
+ * Behavior ids are per-firmware, so they're resolved here from displayName, never
+ * hardcoded. Picking a value emits its behaviorRef verbatim (KeyActionPicker), which
+ * is why the raw &mkp / &mmv / &msc types are hidden from the dropdown.
+ */
+export function synthesizeMouseActionType(
+    behaviors: Record<number, GetBehaviorDetailsResponse>,
+): ActionType | undefined {
+    // Resolve the runtime id for each mouse binding + collect /mouse/i macros.
+    const idFor = new Map<string, number>()
+    const macros: { id: number; name: string }[] = []
+    for (const b of Object.values(behaviors)) {
+        const binding = displayNameToBinding(b.displayName)
+        if (MOUSE_BINDINGS.has(binding)) {
+            if (!idFor.has(binding)) idFor.set(binding, b.id)
+        } else if (
+            !KNOWN_BINDING_PREFIXES.includes(binding) &&
+            /mouse/i.test(b.displayName)
+        ) {
+            macros.push({ id: b.id, name: prettyBehaviorName(b.displayName) })
+        }
+    }
+    if (idFor.size === 0 && macros.length === 0) return undefined
+
+    const values: NonNullable<ActionSlot['values']> = []
+    for (const c of MOUSE_COMMANDS) {
+        const enc = mouseCanonToZmk(c.canon)
+        if (!enc) continue
+        const id = idFor.get(enc.binding)
+        if (id === undefined) continue // binding not present on this device
+        values.push({
+            value: values.length,
+            label: c.label,
+            ...(c.icon ? { icon: c.icon } : {}),
+            behaviorRef: { kind: String(id), params: [enc.param] },
+        })
+    }
+    for (const m of macros) {
+        values.push({
+            value: values.length,
+            label: m.name,
+            behaviorRef: { kind: String(m.id), params: [] },
+        })
+    }
+    if (values.length === 0) return undefined
+
+    return {
+        id: 'mouse',
+        displayName: 'Mouse',
+        icon: 'mouse-button',
+        slots: [{ label: 'Command', kind: 'enum', values }],
+    }
 }
 
 export function validateSlotValue(

@@ -7,7 +7,7 @@
 // merge them rather than reading only metadata[0].
 import { describe, expect, it } from 'vitest'
 import type { GetBehaviorDetailsResponse } from '@zmkfirmware/zmk-studio-ts-client/behaviors'
-import { behaviorToActionType } from '../actionTypes'
+import { behaviorToActionType, synthesizeMouseActionType } from '../actionTypes'
 import { zmkCommandLegend, zmkShortMap } from '../paramLabel'
 import { BT, MT, OUT } from './behaviorFixtures'
 
@@ -226,5 +226,95 @@ describe('ZMK mouse behaviors (issue #147)', () => {
             text: 'MB2',
             icon: 'mouse-right',
         })
+    })
+})
+
+// The unified Mouse behavior: one enum whose values dispatch (via behaviorRef) to
+// the real &mkp / &mmv / &msc behaviors, resolved from the live behavior ids.
+describe('synthesizeMouseActionType', () => {
+    const mkp: GetBehaviorDetailsResponse = {
+        id: 5,
+        displayName: 'Mouse Button Press',
+        metadata: [
+            {
+                param1: [
+                    { name: 'MB1', constant: 1 },
+                    { name: 'MB2', constant: 2 },
+                    { name: 'MB3', constant: 4 },
+                    { name: 'MB4', constant: 8 },
+                    { name: 'MB5', constant: 16 },
+                ],
+                param2: [{ name: '', nil: {} }],
+            },
+        ],
+    }
+    // Real hardware exposes &mmv / &msc with no param metadata (nil-only).
+    const node = (id: number, displayName: string): GetBehaviorDetailsResponse => ({
+        id,
+        displayName,
+        metadata: [
+            { param1: [{ name: '', nil: {} }], param2: [{ name: '', nil: {} }] },
+        ],
+    })
+    const behaviors: Record<number, GetBehaviorDetailsResponse> = {
+        5: mkp,
+        6: node(6, 'mouse_move'),
+        7: node(7, 'mouse_scroll'),
+        8: node(8, 'mouse_warp'), // /mouse/i user macro (unknown &slug, no slots)
+        9: node(9, 'my_macro'), // unrelated macro — must be ignored
+    }
+    const at = synthesizeMouseActionType(behaviors)!
+
+    it('produces one Mouse enum type', () => {
+        expect(at.id).toBe('mouse')
+        expect(at.displayName).toBe('Mouse')
+        expect(at.icon).toBe('mouse-button')
+        expect(at.slots).toHaveLength(1)
+        expect(at.slots[0].kind).toBe('enum')
+    })
+
+    it('buttons dispatch to the resolved &mkp id with the HID bitmask', () => {
+        const vals = at.slots[0].values ?? []
+        const lmb = vals.find((v) => v.label === 'LMB')
+        expect(lmb?.icon).toBe('mouse-left')
+        expect(lmb?.behaviorRef).toEqual({ kind: '5', params: [1] })
+        expect(vals.find((v) => v.label === 'MB5')?.behaviorRef).toEqual({
+            kind: '5',
+            params: [16],
+        })
+    })
+
+    it('move / scroll dispatch to &mmv / &msc with packed deltas', () => {
+        const vals = at.slots[0].values ?? []
+        expect(vals.find((v) => v.label === 'Move →')?.behaviorRef).toEqual({
+            kind: '6',
+            params: [0x02580000],
+        })
+        expect(vals.find((v) => v.label === 'Scroll ↓')?.behaviorRef).toEqual({
+            kind: '7',
+            params: [0x0000fff6],
+        })
+    })
+
+    it('folds a /mouse/i macro as a command; ignores unrelated macros', () => {
+        const vals = at.slots[0].values ?? []
+        const labels = vals.map((v) => v.label)
+        expect(labels).toContain('mouse_warp')
+        expect(labels).not.toContain('my_macro')
+        expect(vals.find((v) => v.label === 'mouse_warp')?.behaviorRef).toEqual({
+            kind: '8',
+            params: [],
+        })
+    })
+
+    it('gives every value a unique enum key', () => {
+        const vals = at.slots[0].values ?? []
+        expect(new Set(vals.map((v) => v.value)).size).toBe(vals.length)
+    })
+
+    it('returns undefined when no mouse behaviors are present', () => {
+        expect(
+            synthesizeMouseActionType({ 1: node(1, 'Key Press') }),
+        ).toBeUndefined()
     })
 })
