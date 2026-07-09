@@ -81,6 +81,9 @@ const VIAL_CAPABILITIES_BASE: Omit<Capabilities, 'maxLayers'> = {
     reorderLayers: false,
     variableLayerCount: false,
     exportFormats: ['vial.json', 'keymap.c'],
+    // Vial writes immediately (like VIA); `commit()` only clears the pending flag
+    // and `discardChanges` is unsupported — so no Save button is shown.
+    saveMode: 'automatic',
     behaviors: {
         capsWord: true,
         leader: true,
@@ -446,7 +449,8 @@ export class VialKeyboardService implements KeyboardService {
             this.customNames,
         )
         this.layers[idx] = { ...this.layers[idx], keys: next }
-        this.setPending(true)
+        // saveMode 'automatic': write already durable (echo-verified) — nothing
+        // pends; raising the flag strands the UI with Save/Discard hidden.
     }
 
     async setKeys(updates: KeyUpdate[]): Promise<void> {
@@ -483,7 +487,7 @@ export class VialKeyboardService implements KeyboardService {
                 ? { cw: action, ccw: current.ccw }
                 : { cw: current.cw, ccw: action }
         this.layers[idx] = { ...layer, encoders: encs }
-        this.setPending(true)
+        // saveMode 'automatic': see setKey — durable write, nothing pends.
     }
 
     async addLayer(): Promise<Layer> {
@@ -638,7 +642,7 @@ export class VialKeyboardService implements KeyboardService {
 
     async setTapDance(idx: number, entry: TapDanceEntry): Promise<void> {
         await setTapDance(this.client, idx, entry)
-        this.setPending(true)
+        // saveMode 'automatic': durable write, nothing pends.
     }
 
     async getCombo(idx: number): Promise<ComboEntry> {

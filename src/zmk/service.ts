@@ -11,6 +11,7 @@ import type {
     Keymap as ZmkKeymap,
     PhysicalLayouts as ZmkPhysicalLayouts,
 } from '@zmkfirmware/zmk-studio-ts-client/keymap'
+import { SaveChangesErrorCode } from '@zmkfirmware/zmk-studio-ts-client/keymap'
 import { LockState as ZmkLockState } from '@zmkfirmware/zmk-studio-ts-client/core'
 import type { Notification } from '@zmkfirmware/zmk-studio-ts-client/studio'
 
@@ -49,6 +50,10 @@ const ZMK_CAPABILITIES: Capabilities = {
     reorderLayers: true,
     variableLayerCount: true,
     exportFormats: ['devicetree'],
+    // ZMK Studio "save": edits live in RAM until the user saves; `commit()` sends
+    // `saveChanges` (can fail — SaveChangesErrorCode). Mirrors ZMK Studio's Save
+    // button. NOT firmware persistence (the debounced flash write is separate).
+    saveMode: 'manual',
     behaviors: { capsWord: true },
     // No `macros`: ZMK macros are compile-time devicetree nodes, and the Studio
     // protocol exposes only keymap *bindings* (`&macro_name`), not the macro step
@@ -58,6 +63,20 @@ const ZMK_CAPABILITIES: Capabilities = {
     // definitions becomes available (e.g. a builder-seeded board), expose `macros`
     // with `readonly: true` and no `setMacro`; the Advanced sheet's MacrosTab already
     // renders that view-only with a banner. Never fabricate macros the device can't read.
+}
+
+/** Human-readable reason for a ZMK Studio `saveChanges` failure, mapped from the
+ *  SaveChangesErrorCode the keyboard returned, so the UI tells the user WHY a save
+ *  failed instead of surfacing a bare numeric code. */
+function saveChangesErrorMessage(err: SaveChangesErrorCode | undefined): string {
+    switch (err) {
+        case SaveChangesErrorCode.SAVE_CHANGES_ERR_NO_SPACE:
+            return 'Save failed: the keyboard’s settings storage is full.'
+        case SaveChangesErrorCode.SAVE_CHANGES_ERR_NOT_SUPPORTED:
+            return 'Save failed: this firmware build does not support saving keymap changes.'
+        default:
+            return "Save failed: the keyboard couldn't write to its settings storage — its firmware may be built without a persistent-settings (NVS) partition."
+    }
 }
 
 function mapLockState(state: ZmkLockState): LockState {
@@ -454,13 +473,12 @@ export class ZmkKeyboardService implements KeyboardService {
 
     async commit(): Promise<void> {
         const resp = await this.call({ keymap: { saveChanges: true } })
-        if (resp.keymap?.saveChanges?.ok !== undefined) {
+        const save = resp.keymap?.saveChanges
+        if (save?.ok !== undefined) {
             this.markPending(false)
             return
         }
-        throw new ProtocolError(
-            `saveChanges failed: ${resp.keymap?.saveChanges?.err}`,
-        )
+        throw new ProtocolError(saveChangesErrorMessage(save?.err))
     }
 
     async discardChanges(): Promise<void> {

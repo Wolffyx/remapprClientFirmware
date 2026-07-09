@@ -34,6 +34,27 @@ export interface Capabilities {
     reorderLayers: boolean
     variableLayerCount: boolean
     exportFormats: string[]
+    /** How the editor commits edits — declared per firmware so the UI shows the
+     *  right save affordance. This models the CLIENT save ACTION, not any
+     *  firmware-internal flash "persistence" (e.g. ZMK's debounced settings
+     *  storage, https://zmk.dev/docs/config/settings, is a separate concern the
+     *  client does not manage).
+     *  - `'manual'`: the user saves explicitly; `commit()` sends the firmware's
+     *    save command (ZMK Studio `saveChanges`, Remappr blob write) and can
+     *    fail. UI shows Save + Discard + unsaved-change tracking. This is exactly
+     *    the ZMK-Studio "save" the ZMK client mirrors.
+     *  - `'automatic'`: every edit is written immediately (VIA / Vial / Keychron
+     *    EEPROM); `commit()` only clears the pending flag. No Save button needed.
+     *  - `'none'`: edits are session-only (mock). UI shows no save affordance. */
+    saveMode: 'manual' | 'automatic' | 'none'
+    /** The firmware owns a durable persistence save as a first-class feature —
+     *  a committed edit is guaranteed written to non-volatile device storage.
+     *  Declared only by firmwares that guarantee it (e.g. Remappr's config-blob
+     *  commit); omitted elsewhere. Distinct from {@link saveMode}, which is the
+     *  client save ACTION: ZMK has `saveMode: 'manual'` (ZMK Studio save) but
+     *  does NOT set this — its studio save persists only if the firmware was
+     *  built with settings storage, so persistence isn't a guaranteed capability. */
+    persistence?: boolean
     maxLayers?: number
     encoders?: number
     dynamicEntries?: { tapDance: number; combo: number; keyOverride: number }

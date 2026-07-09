@@ -74,6 +74,8 @@ const MOCK_CAPABILITIES: Capabilities = {
     reorderLayers: true,
     variableLayerCount: true,
     exportFormats: ['mock-json'],
+    // Mock keeps edits in memory only; nothing is saved across a reconnect.
+    saveMode: 'none',
     maxLayers: 8,
     encoders: MOCK_ENCODER_COUNT,
     dynamicEntries: MOCK_DYNAMIC_COUNTS,
@@ -473,6 +475,11 @@ export class MockKeyboardService implements KeyboardService {
     }
 
     private markPending(pending: boolean): void {
+        // saveMode 'none': the demo is session-only — nothing is ever
+        // save-pending, and with Save/Discard hidden a raised flag could never
+        // be cleared. Keep the Observer plumbing (and the call sites marking
+        // where a manual-save firmware WOULD pend) but pin the flag false.
+        if (pending) return
         if (this.pendingChanges === pending) return
         this.pendingChanges = pending
         for (const cb of this.pendingChangesListeners) cb(pending)
