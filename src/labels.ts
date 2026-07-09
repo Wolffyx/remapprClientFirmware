@@ -1,5 +1,6 @@
 // Pattern check: no GoF pattern (-) — rejected — pure mapper from neutral KeyAction.label + PhysicalLayout geometry to renderer-shaped per-position descriptor.
 import type { HoldTapLabelData, Keymap, PhysicalLayout } from './types'
+import type { LegendPart } from './paramLabel'
 
 export type ResolvedHoldTapDescriptor = HoldTapLabelData
 
@@ -12,6 +13,8 @@ export interface ResolvedBindingPosition {
     actionTypeName?: string
     /** Short cap-legend text for a non-HID param (from KeyLabel.paramText). */
     paramText?: string
+    /** Composite icon+text legend parts (from KeyLabel.paramParts). */
+    paramParts?: LegendPart[]
     /** Tooltip for the param legend (from KeyLabel.description). */
     paramTitle?: string
     outOfRange: boolean
@@ -43,6 +46,7 @@ export function resolveBindingLabels(
             bindingParam1: label?.primaryUsage,
             actionTypeName: label?.primary,
             paramText: label?.paramText,
+            paramParts: label?.paramParts,
             paramTitle: label?.description,
             outOfRange,
             x: k.x / 100.0,

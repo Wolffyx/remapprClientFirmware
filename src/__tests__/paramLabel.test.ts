@@ -113,3 +113,55 @@ describe('buildParamLabel — slot-kind dispatch', () => {
         expect(buildParamLabel([], [5], layerName)).toEqual({})
     })
 })
+
+describe('buildParamLabel — composite icon parts', () => {
+    const cmd = (values: { value: number; label: string }[]): ActionSlot => ({
+        label: 'Command',
+        kind: 'enum',
+        values,
+    })
+
+    it('emits a single icon part for an enum token that carries an icon', () => {
+        const slots: ActionSlot[] = [cmd([{ value: 1, label: 'BT_NXT' }])]
+        const map = { BT_NXT: { text: 'Next', icon: 'next' } }
+        const out = buildParamLabel(slots, [1], layerName, map)
+        expect(out.parts).toEqual([{ icon: 'next', text: 'Next' }])
+        expect(out.paramText).toBe('Next')
+    })
+
+    it('trailing number is always a plain-text part', () => {
+        const slots: ActionSlot[] = [
+            cmd([{ value: 3, label: 'BT_SEL' }]),
+            {
+                label: 'profile',
+                kind: 'number',
+                enabledFor: [3],
+                oneBased: true,
+            },
+        ]
+        const map = { BT_SEL: { text: 'BT', icon: 'bluetooth' } }
+        const out = buildParamLabel(slots, [3, 1], layerName, map)
+        // Stored index 1 → shown "2"; icon replaces "BT" text, value stays text.
+        expect(out.parts).toEqual([
+            { icon: 'bluetooth', text: 'BT' },
+            { text: '2' },
+        ])
+        expect(out.paramText).toBe('BT 2')
+    })
+
+    it('no parts when the token map is legacy text-only (back-compat)', () => {
+        const slots: ActionSlot[] = [cmd([{ value: 1, label: 'BT_NXT' }])]
+        const out = buildParamLabel(slots, [1], layerName, { BT_NXT: 'Next' })
+        expect(out.parts).toBeUndefined()
+        expect(out.paramText).toBe('Next')
+    })
+
+    it('no parts when the icon-less fallback is used', () => {
+        const slots: ActionSlot[] = [cmd([{ value: 1, label: 'RGB_HUI' }])]
+        const out = buildParamLabel(slots, [1], layerName, {
+            RGB_HUI: { text: 'Hue+' },
+        })
+        expect(out.parts).toBeUndefined()
+        expect(out.paramText).toBe('Hue+')
+    })
+})

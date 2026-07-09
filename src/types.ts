@@ -1,3 +1,5 @@
+import type { LegendPart } from './paramLabel'
+
 export interface KeyAction {
     kind: string
     params: number[]
@@ -35,6 +37,11 @@ export interface KeyLabel {
      *  "Hue+"). Rendered as the main glyph when {@link primaryUsage} is absent.
      *  Produced firmware-agnostically by buildParamLabel from the neutral slots. */
     paramText?: string
+    /** Composite icon+text legend parts (behavior icon [+ command / value]).
+     *  When present and at least one part resolves to an icon, the renderer
+     *  prefers it over {@link paramText}; `paramText` stays the text join for
+     *  tooltips and non-icon renderers. See LegendPart in paramLabel.ts. */
+    paramParts?: LegendPart[]
 }
 
 // Pattern check: no GoF pattern (-) — rejected — additive optional fields on plain data interfaces; no abstraction.
@@ -83,6 +90,9 @@ export interface ActionType {
     id: string
     displayName: string
     description?: string
+    /** Neutral icon id for the behavior itself (e.g. "bluetooth"), shown next to
+     *  the name in the action dropdown. Resolved by the renderer's registry. */
+    icon?: string
     slots: ActionSlot[]
 }
 
@@ -98,7 +108,9 @@ export interface ActionSlot {
     // pattern-check: skip additive optional field on existing interface
     label: string
     kind: ActionSlotKind
-    values?: { value: number; label: string }[]
+    /** Enum options; each may carry a neutral icon id for its dropdown row and
+     *  composite cap legend (e.g. BT_NXT → "next"). */
+    values?: { value: number; label: string; icon?: string }[]
     range?: { min: number; max: number }
     innerKinds?: string[]
     /**
