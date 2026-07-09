@@ -6,6 +6,18 @@ import type {
 } from '@zmkfirmware/zmk-studio-ts-client/behaviors'
 import type { ActionSlot, ActionSlotKind, ActionType } from '@firmware/types'
 import { hidUsagePageAndIdFromUsage } from '@firmware/_app/lib/actions/hidUsages'
+import { MOUSE_COMMANDS } from '@firmware/mouseCommands'
+import {
+    displayNameToBinding,
+    KNOWN_BINDING_PREFIXES,
+    prettyBehaviorName,
+} from './displayNameToBinding'
+import { mouseCanonToZmk } from './mouseZmk'
+import {
+    ZMK_BEHAVIOR_LEGENDS,
+    zmkCommandLegend,
+    zmkTokenIcon,
+} from './paramLabel'
 
 const MODIFIER_DISPLAY_NAME = 'Modifier'
 
@@ -47,9 +59,20 @@ function buildSlot(
     const range = descriptions.find((d) => d.range)?.range
     if (range) slot.range = { min: range.min, max: range.max }
 
+    // Command icon by value label first (token-named on the mock / fixtures,
+    // whose constants may differ from a live device) then by (behavior &prefix,
+    // constant) — the robust path for ZMK's friendly hardware value names.
+    const prefix = displayNameToBinding(behaviorDisplayName)
     const enumValues = descriptions
         .filter((d) => d.constant !== undefined)
-        .map((d) => ({ value: d.constant as number, label: d.name }))
+        .map((d) => {
+            const icon =
+                zmkTokenIcon(d.name) ??
+                zmkCommandLegend(prefix, d.constant)?.icon
+            return icon
+                ? { value: d.constant as number, label: d.name, icon }
+                : { value: d.constant as number, label: d.name }
+        })
     if (enumValues.length > 0) slot.values = enumValues
 
     return slot
@@ -166,9 +189,12 @@ export function behaviorToActionType(
         slots[0] = { ...slots[0], label: 'Hold' }
         slots[1] = { ...slots[1], label: 'Tap' }
     }
+    const icon = ZMK_BEHAVIOR_LEGENDS[displayNameToBinding(behavior.displayName)]
+        ?.icon
     return {
         id: String(behavior.id),
-        displayName: behavior.displayName,
+        displayName: prettyBehaviorName(behavior.displayName),
+        ...(icon ? { icon } : {}),
         slots,
     }
 }
@@ -176,7 +202,91 @@ export function behaviorToActionType(
 export function behaviorsToActionTypes(
     behaviors: Record<number, GetBehaviorDetailsResponse>,
 ): ActionType[] {
-    return Object.values(behaviors).map(behaviorToActionType)
+    const types = Object.values(behaviors).map(behaviorToActionType)
+    // Fold the ZMK mouse behaviors (&mkp / &mmv / &msc) + any /mouse/i macro into
+    // one composite "Mouse" type. The raw behaviors stay in the list (label /
+    // fallback); the picker hides them (subsumed by the composite's behaviorRefs).
+    const mouse = synthesizeMouseActionType(behaviors)
+    return mouse ? [...types, mouse] : types
+}
+
+// The ZMK mouse bindings the unified Mouse dropdown folds into one behavior.
+const MOUSE_BINDINGS = new Set<string>(['&mkp', '&mmv', '&msc'])
+
+/**
+ * Synthesize the composite "Mouse" ActionType from the live behaviors: one enum
+ * "Command" slot whose values each carry a {@link BehaviorRef} dispatching to the
+ * real &mkp / &mmv / &msc behavior (button mask or packed move/scroll delta), plus
+ * any `/mouse/i` user macro folded in as a command. Returns undefined when the
+ * device exposes none of these — so a non-mouse keyboard gets no Mouse entry.
+ *
+ * Behavior ids are per-firmware, so they're resolved here from displayName, never
+ * hardcoded. Picking a value emits its behaviorRef verbatim (KeyActionPicker), which
+ * is why the raw &mkp / &mmv / &msc types are hidden from the dropdown.
+ */
+export function synthesizeMouseActionType(
+    behaviors: Record<number, GetBehaviorDetailsResponse>,
+): ActionType | undefined {
+    // Resolve each mouse binding's runtime id + whether it's settable, plus any
+    // /mouse/i macro. "Settable" = the behavior exposes a real param slot, so the
+    // Studio protocol can bind it — ZMK's &mmv / &msc carry no param metadata and
+    // the firmware rejects setting them (ProtocolError), so their direction
+    // commands are omitted here (per-firmware capability); the raw behaviors are
+    // still subsumed (hidden) below so they don't reappear as broken raw options.
+    const idFor = new Map<string, number>()
+    const settable = new Set<string>()
+    const macros: { id: number; name: string }[] = []
+    for (const b of Object.values(behaviors)) {
+        const binding = displayNameToBinding(b.displayName)
+        if (MOUSE_BINDINGS.has(binding)) {
+            if (idFor.has(binding)) continue
+            idFor.set(binding, b.id)
+            if (behaviorToActionType(b).slots.length > 0) settable.add(binding)
+        } else if (
+            !KNOWN_BINDING_PREFIXES.includes(binding) &&
+            /mouse/i.test(b.displayName)
+        ) {
+            macros.push({ id: b.id, name: prettyBehaviorName(b.displayName) })
+        }
+    }
+    if (idFor.size === 0 && macros.length === 0) return undefined
+
+    const values: NonNullable<ActionSlot['values']> = []
+    for (const c of MOUSE_COMMANDS) {
+        const enc = mouseCanonToZmk(c.canon)
+        if (!enc) continue
+        const id = idFor.get(enc.binding)
+        // Skip absent behaviors and unsettable ones (&mmv / &msc without metadata).
+        if (id === undefined || !settable.has(enc.binding)) continue
+        values.push({
+            value: values.length,
+            label: c.label,
+            ...(c.icon ? { icon: c.icon } : {}),
+            behaviorRef: { kind: String(id), params: [enc.param] },
+        })
+    }
+    for (const m of macros) {
+        values.push({
+            value: values.length,
+            label: m.name,
+            behaviorRef: { kind: String(m.id), params: [] },
+        })
+    }
+    if (values.length === 0) return undefined
+
+    // Hide every mouse behavior we represent — folded-in (button / macro commands)
+    // and suppressed (unsettable &mmv / &msc) alike.
+    const subsumes = [
+        ...[...idFor.values()].map(String),
+        ...macros.map((m) => String(m.id)),
+    ]
+    return {
+        id: 'mouse',
+        displayName: 'Mouse',
+        icon: 'mouse-button',
+        slots: [{ label: 'Command', kind: 'enum', values }],
+        subsumes,
+    }
 }
 
 export function validateSlotValue(

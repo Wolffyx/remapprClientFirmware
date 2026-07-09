@@ -55,6 +55,9 @@ export const QMK_CAPABILITIES_BASE: Omit<Capabilities, 'maxLayers'> = {
     reorderLayers: false,
     variableLayerCount: false,
     exportFormats: ['keymap.c'],
+    // VIA writes each keycode to EEPROM immediately; there is no separate save
+    // step, so no Save button is shown.
+    saveMode: 'automatic',
     behaviors: {
         capsWord: true,
         leader: true,
@@ -400,7 +403,10 @@ export class QmkKeyboardService implements KeyboardService {
             this.layerNames,
         )
         this.layers[idx] = { ...this.layers[idx], keys: next }
-        this.setPending(true)
+        // saveMode 'automatic': the write above is already durable (EEPROM,
+        // echo-verified), so nothing pends. Raising the flag here would strand
+        // the UI in "unsaved" (Save/Discard are hidden for automatic) and block
+        // applyLayout behind its pending-changes guard.
     }
 
     async setKeys(updates: KeyUpdate[]): Promise<void> {

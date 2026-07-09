@@ -15,13 +15,15 @@ import {
     abbreviateLayerName,
     formatMomentaryLayer,
 } from '@firmware/_app/lib/keyAbbreviations'
-import { buildParamLabel } from '../paramLabel'
+import { buildParamLabel, composeLegendParts } from '../paramLabel'
 import {
     displayNameToBinding,
     KNOWN_BINDING_PREFIXES,
+    prettyBehaviorName,
 } from './displayNameToBinding'
 import { behaviorToActionType } from './actionTypes'
-import { ZMK_SHORT_TOKENS } from './paramLabel'
+import { decodeMouseDelta } from './mouseZmk'
+import { ZMK_BEHAVIOR_LEGENDS, zmkShortMap } from './paramLabel'
 
 export type BehaviorMap = Record<number, GetBehaviorDetailsResponse>
 
@@ -143,22 +145,57 @@ export function buildKeyLabel(
             bindingPrefix,
         }
     }
+    // Mouse move / scroll expose no param metadata on hardware, so their packed
+    // direction delta can't resolve through the enum path. Decode the known deltas
+    // back to a direction glyph (behavior icon + arrow) — the same table the picker
+    // synthesizes from, so the cap and the picker always agree.
+    if (bindingPrefix === '&mmv' || bindingPrefix === '&msc') {
+        const decoded = decodeMouseDelta(bindingPrefix, binding.param1)
+        if (decoded) {
+            const cmdPart = decoded.icon
+                ? { icon: decoded.icon, text: decoded.label }
+                : { text: decoded.label }
+            const paramParts = composeLegendParts(
+                { paramText: decoded.label, parts: [cmdPart] },
+                ZMK_BEHAVIOR_LEGENDS[bindingPrefix],
+            )
+            const pretty = prettyBehaviorName(behavior.displayName)
+            return {
+                primary: pretty,
+                paramText: decoded.label,
+                ...(paramParts ? { paramParts } : {}),
+                valueLong: decoded.label,
+                description: `${pretty}: ${decoded.label}`,
+                bindingPrefix,
+            }
+        }
+    }
     const primaryUsage = slots[0]?.kind === 'hid' ? binding.param1 : undefined
     // Surface non-HID primary params (layer index, enum command, number) as a
     // short cap legend via the firmware-neutral engine.
+    // Cap short-text/icon via a label-keyed map derived from this behavior's
+    // enum values (value-keyed legends → the actual friendly/token labels), so
+    // buildParamLabel resolves whether the firmware names values as friendly
+    // phrases (hardware) or tokens (mock).
+    const enumValues = slots[0]?.kind === 'enum' ? slots[0].values : undefined
     const param = buildParamLabel(
         slots,
         [binding.param1, binding.param2],
         (i) => keymap.layers[i]?.name,
-        ZMK_SHORT_TOKENS,
+        zmkShortMap(bindingPrefix, enumValues),
+    )
+    const pretty = prettyBehaviorName(behavior.displayName)
+    const paramParts = composeLegendParts(
+        param,
+        ZMK_BEHAVIOR_LEGENDS[bindingPrefix],
     )
     return {
-        primary: behavior.displayName,
+        primary: pretty,
         primaryUsage,
         ...(param.paramText ? { paramText: param.paramText } : {}),
-        description: param.longText
-            ? `${behavior.displayName}: ${param.longText}`
-            : behavior.displayName,
+        ...(paramParts ? { paramParts } : {}),
+        ...(param.longText ? { valueLong: param.longText } : {}),
+        description: param.longText ? `${pretty}: ${param.longText}` : pretty,
         bindingPrefix,
     }
 }

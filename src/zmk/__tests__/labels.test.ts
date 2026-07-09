@@ -14,6 +14,7 @@ import {
     OUT,
     RGB_UG,
     TO,
+    SOFT_OFF,
     FIXTURE_MAP,
 } from './behaviorFixtures'
 
@@ -106,6 +107,45 @@ describe('buildKeyLabel — custom behaviors render as Macro', () => {
     })
 })
 
+describe('buildKeyLabel — composite icon parts (issue #147)', () => {
+    it('&bt BT_SEL 0 → bluetooth icon part + one-based profile text part', () => {
+        expect(labelOf(BT.id, 3, 0).paramParts).toEqual([
+            { icon: 'bluetooth', text: 'BT' },
+            { text: '1' },
+        ])
+    })
+
+    it('&bt BT_CLR → bluetooth prefix followed by the clear command part', () => {
+        expect(labelOf(BT.id, 0).paramParts).toEqual([
+            { icon: 'bluetooth', text: '' },
+            { icon: 'clear', text: 'Clr' },
+        ])
+    })
+
+    it('&rgb_ug RGB_HUI → underglow icon prefixes the text-only command', () => {
+        expect(labelOf(RGB_UG.id, 3).paramParts).toEqual([
+            { icon: 'underglow', text: '' },
+            { text: 'Hue+' },
+        ])
+    })
+
+    it('&caps_word → single caps-word icon part (zero-arg)', () => {
+        const caps = buildKeyLabel(bind(12), FIXTURE_MAP, keymap)
+        expect(caps.paramParts).toEqual([{ icon: 'caps-word', text: 'Caps' }])
+    })
+
+    it('&soft_off → single power-off icon part (zero-arg)', () => {
+        expect(labelOf(SOFT_OFF.id).paramParts).toEqual([
+            { icon: 'power-off', text: 'Off' },
+        ])
+    })
+
+    it('layer + &kp keep the plain-text path (no icon parts)', () => {
+        expect(labelOf(MO.id, 1).paramParts).toBeUndefined()
+        expect(labelOf(KP.id, 0x07_0004).paramParts).toBeUndefined()
+    })
+})
+
 describe('buildKeyLabel — regressions', () => {
     it('&kp keeps primaryUsage and has no paramText', () => {
         const l = labelOf(KP.id, 0x07_0004)
@@ -124,5 +164,45 @@ describe('buildKeyLabel — regressions', () => {
         const l = labelOf(MT.id, 0x07_00e1, 0x07_0004)
         expect(l.holdTap).toBeDefined()
         expect(l.holdTap?.holdNodeKind).toBe('usage')
+    })
+})
+
+describe('buildKeyLabel — mouse move/scroll deltas without metadata', () => {
+    // Real hardware exposes &mmv / &msc with no param metadata; the packed
+    // direction delta must decode to a behavior icon + arrow glyph (issue #147).
+    const behaviors = {
+        60: {
+            id: 60,
+            displayName: 'mouse_move',
+            metadata: [{ param1: [{ name: '', nil: {} }] }],
+        },
+        61: {
+            id: 61,
+            displayName: 'mouse_scroll',
+            metadata: [{ param1: [{ name: '', nil: {} }] }],
+        },
+    } as unknown as typeof FIXTURE_MAP
+
+    it('&mmv move-right delta → mouse-move + arrow-right parts', () => {
+        const l = buildKeyLabel(bind(60, 0x02580000), behaviors, keymap)
+        expect(l.paramText).toBe('Move →')
+        expect(l.paramParts).toEqual([
+            { icon: 'mouse-move', text: '' },
+            { icon: 'arrow-right', text: 'Move →' },
+        ])
+    })
+
+    it('&msc scroll-down delta → mouse-scroll + scroll-down parts', () => {
+        const l = buildKeyLabel(bind(61, 0x0000fff6), behaviors, keymap)
+        expect(l.paramText).toBe('Scroll ↓')
+        expect(l.paramParts).toEqual([
+            { icon: 'mouse-scroll', text: '' },
+            { icon: 'scroll-down', text: 'Scroll ↓' },
+        ])
+    })
+
+    it('an unknown delta falls back to the behavior icon only (no crash)', () => {
+        const l = buildKeyLabel(bind(60, 0x11110000), behaviors, keymap)
+        expect(l.paramParts).toEqual([{ icon: 'mouse-move', text: '' }])
     })
 })

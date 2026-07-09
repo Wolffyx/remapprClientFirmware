@@ -89,6 +89,11 @@ export function runContractSuite(name: string, setup: ContractSetup): void {
             expect(svc.capabilities).toBeTruthy()
             expect(typeof svc.capabilities.lock).toBe('boolean')
             expect(Array.isArray(svc.capabilities.exportFormats)).toBe(true)
+            // Every firmware must declare its save mode (drives the Save/Discard
+            // affordance) — one of the three known values.
+            expect(['manual', 'automatic', 'none']).toContain(
+                svc.capabilities.saveMode,
+            )
         })
 
         it('listActionTypes returns at least one ActionType', async () => {
@@ -144,7 +149,16 @@ export function runContractSuite(name: string, setup: ContractSetup): void {
             await svc.setKey(layer0.id, 0, action)
             const km1 = await svc.getKeymap()
             expect(km1.layers[0].keys[0].kind).toBe(trans.id)
-            expect(svc.hasPendingChanges()).toBe(true)
+            // Pending semantics follow saveMode: 'manual' stages the edit until
+            // an explicit save; 'automatic' writes through (already durable) and
+            // 'none' is session-only — neither has anything pending, and a stuck
+            // true would strand the UI (Save/Discard hidden) and block
+            // applyLayout's pending-changes guard.
+            if (svc.capabilities.saveMode === 'manual') {
+                expect(svc.hasPendingChanges()).toBe(true)
+            } else {
+                expect(svc.hasPendingChanges()).toBe(false)
+            }
         })
 
         it('addLayer / removeLayer respects variableLayerCount', async () => {

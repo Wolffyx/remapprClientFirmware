@@ -22,6 +22,7 @@ const VIAL_BASE: ActionType[] = [
         id: 'vial:reset',
         displayName: 'Bootloader',
         description: 'Reset to bootloader.',
+        icon: 'bootloader',
         slots: [],
     },
 ]

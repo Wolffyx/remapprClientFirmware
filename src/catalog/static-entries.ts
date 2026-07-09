@@ -375,23 +375,32 @@ export const BACKLIGHT_ENTRIES: CatalogEntry[] = [
     entry('led_matrix.speed.down', 'LM S-', 'LED matrix speed down'),
 ]
 
+// Mouse-tile helper: entry() plus a picker icon (see src/legendIcons.ts).
+const mentry = (
+    id: string,
+    label: string,
+    name: string,
+    icon: string,
+): CatalogEntry => ({ ...entry(id, label, name), icon })
+
 export const MOUSE_ENTRIES: CatalogEntry[] = [
-    entry('mouse.cursor.up', 'MS Up', 'Mouse cursor up'),
-    entry('mouse.cursor.down', 'MS Dn', 'Mouse cursor down'),
-    entry('mouse.cursor.left', 'MS Lt', 'Mouse cursor left'),
-    entry('mouse.cursor.right', 'MS Rt', 'Mouse cursor right'),
-    entry('mouse.button.1', 'MS B1', 'Mouse button 1'),
-    entry('mouse.button.2', 'MS B2', 'Mouse button 2'),
-    entry('mouse.button.3', 'MS B3', 'Mouse button 3'),
-    entry('mouse.button.4', 'MS B4', 'Mouse button 4'),
-    entry('mouse.button.5', 'MS B5', 'Mouse button 5'),
-    entry('mouse.button.6', 'MS B6', 'Mouse button 6'),
-    entry('mouse.button.7', 'MS B7', 'Mouse button 7'),
-    entry('mouse.button.8', 'MS B8', 'Mouse button 8'),
-    entry('mouse.wheel.up', 'WH Up', 'Mouse wheel up'),
-    entry('mouse.wheel.down', 'WH Dn', 'Mouse wheel down'),
-    entry('mouse.wheel.left', 'WH Lt', 'Mouse wheel left'),
-    entry('mouse.wheel.right', 'WH Rt', 'Mouse wheel right'),
+    mentry('mouse.cursor.up', 'MS Up', 'Mouse cursor up', 'arrow-up'),
+    mentry('mouse.cursor.down', 'MS Dn', 'Mouse cursor down', 'arrow-down'),
+    mentry('mouse.cursor.left', 'MS Lt', 'Mouse cursor left', 'arrow-left'),
+    mentry('mouse.cursor.right', 'MS Rt', 'Mouse cursor right', 'arrow-right'),
+    mentry('mouse.button.1', 'MS B1', 'Mouse button 1', 'mouse-left'),
+    mentry('mouse.button.2', 'MS B2', 'Mouse button 2', 'mouse-right'),
+    mentry('mouse.button.3', 'MS B3', 'Mouse button 3', 'mouse'),
+    mentry('mouse.button.4', 'MS B4', 'Mouse button 4', 'mouse'),
+    mentry('mouse.button.5', 'MS B5', 'Mouse button 5', 'mouse'),
+    mentry('mouse.button.6', 'MS B6', 'Mouse button 6', 'mouse'),
+    mentry('mouse.button.7', 'MS B7', 'Mouse button 7', 'mouse'),
+    mentry('mouse.button.8', 'MS B8', 'Mouse button 8', 'mouse'),
+    mentry('mouse.wheel.up', 'WH Up', 'Mouse wheel up', 'scroll-up'),
+    mentry('mouse.wheel.down', 'WH Dn', 'Mouse wheel down', 'scroll-down'),
+    mentry('mouse.wheel.left', 'WH Lt', 'Mouse wheel left', 'scroll-left'),
+    mentry('mouse.wheel.right', 'WH Rt', 'Mouse wheel right', 'scroll-right'),
+    // Acceleration presets have no natural glyph — text only.
     entry('mouse.accel.0', 'Acl0', 'Mouse acceleration 0'),
     entry('mouse.accel.1', 'Acl1', 'Mouse acceleration 1'),
     entry('mouse.accel.2', 'Acl2', 'Mouse acceleration 2'),

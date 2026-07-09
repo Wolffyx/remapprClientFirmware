@@ -14,11 +14,74 @@
 // firmware capability philosophy.
 import type { ActionSlot } from './types'
 
+/**
+ * One visual unit of a composite cap legend. The renderer shows {@link icon}
+ * (resolved against its own id→component registry) when set and resolvable,
+ * otherwise {@link text}; `text` doubles as the plain-text fallback and the
+ * accessible label. Icon ids are neutral strings — no renderer/icon-library
+ * types leak into the firmware layer.
+ */
+export interface LegendPart {
+    icon?: string
+    text: string
+}
+
+/** A per-token cap legend: short text plus an optional neutral icon id. A bare
+ *  string in a token map is shorthand for `{ text }` (icon-less, back-compat). */
+export interface TokenLegend {
+    text: string
+    icon?: string
+}
+
+/** A token map value is either legacy text-only or a {@link TokenLegend}. */
+export type TokenMap = Record<string, string | TokenLegend>
+
 export interface ParamLabel {
     /** Short glyph text for the cap (undefined ⇒ adapter keeps its own path). */
     paramText?: string
     /** Long, human-readable form for tooltips (e.g. "profile 0"). */
     longText?: string
+    /**
+     * Composite legend parts (command part [+ trailing value part]). Present
+     * only when a token in the map carries an icon; otherwise the text path
+     * ({@link paramText}) is used unchanged.
+     */
+    parts?: LegendPart[]
+}
+
+/** Normalize a token-map entry to a {@link TokenLegend} (string ⇒ text-only). */
+function normalizeLegend(
+    entry: string | TokenLegend | undefined,
+): TokenLegend | undefined {
+    if (entry === undefined) return undefined
+    return typeof entry === 'string' ? { text: entry } : entry
+}
+
+/**
+ * Assemble a composite cap legend from an engine {@link ParamLabel} and an
+ * optional behavior-level legend. The behavior icon prefixes the command/value
+ * parts (deduped when the command already leads with it, e.g. `&bt` BT_SEL), and
+ * IS the whole legend for a zero-arg behavior (its `text` the icon-less
+ * fallback). Returns undefined when nothing carries an icon so the cap keeps its
+ * plain-text path. Firmware-neutral — each adapter passes its own behavior
+ * legend (see zmk/paramLabel.ts).
+ */
+export function composeLegendParts(
+    param: ParamLabel,
+    behaviorLegend: TokenLegend | undefined,
+): LegendPart[] | undefined {
+    const behaviorIcon = behaviorLegend?.icon
+    if (param.parts || param.paramText) {
+        const base = param.parts ?? [{ text: param.paramText as string }]
+        if (behaviorIcon && base[0]?.icon !== behaviorIcon) {
+            return [{ icon: behaviorIcon, text: '' }, ...base]
+        }
+        return base.some((p) => p.icon) ? base : undefined
+    }
+    if (behaviorIcon) {
+        return [{ icon: behaviorIcon, text: behaviorLegend?.text ?? '' }]
+    }
+    return undefined
 }
 
 /**
@@ -52,13 +115,13 @@ function trailingValueApplies(slot: ActionSlot, command: number): boolean {
  * @param slots    neutral ActionType slots for the behavior
  * @param params   binding params ([param1, param2, ...])
  * @param layerName resolver: layer index → layer name (undefined when unnamed)
- * @param shortMap  optional per-firmware enum-token → short-text table
+ * @param shortMap  optional per-firmware enum-token → short-text/icon table
  */
 export function buildParamLabel(
     slots: ActionSlot[],
     params: number[],
     layerName: (index: number) => string | undefined,
-    shortMap?: Record<string, string>,
+    shortMap?: TokenMap,
 ): ParamLabel {
     const first = slots[0]
     if (!first) return {}
@@ -66,8 +129,14 @@ export function buildParamLabel(
 
     if (first.kind === 'layer') {
         const name = layerName(param1)
-        const text = name && name.trim().length > 0 ? name : `L${param1}`
-        return { paramText: text, longText: name ?? `Layer ${param1}` }
+        const named = !!name && name.trim().length > 0
+        // Short glyph is the layer name or "L3"; the tooltip's full form is the
+        // name or "Layer 3". `layerName` returns "" for an unnamed layer (not
+        // undefined), so a `??` fallback wouldn't fire — test truthiness.
+        return {
+            paramText: named ? name : `L${param1}`,
+            longText: named ? name : `Layer ${param1}`,
+        }
     }
 
     if (first.kind === 'number') {
@@ -77,9 +146,14 @@ export function buildParamLabel(
 
     if (first.kind === 'enum') {
         const token = first.values?.find((v) => v.value === param1)?.label
-        const short = token
-            ? (shortMap?.[token] ?? shortenToken(token))
-            : String(param1)
+        const legend = normalizeLegend(token ? shortMap?.[token] : undefined)
+        const short = legend?.text ?? (token ? shortenToken(token) : String(param1))
+        // Composite parts are emitted only when the token carries an icon; the
+        // command part's text is the per-part fallback, the trailing number is
+        // always a plain-text part (icons never replace a raw index).
+        const commandPart: LegendPart = legend?.icon
+            ? { icon: legend.icon, text: short }
+            : { text: short }
         const second = slots[1]
         if (second && trailingValueApplies(second, param1)) {
             const raw = params[1] ?? 0
@@ -87,9 +161,16 @@ export function buildParamLabel(
             return {
                 paramText: `${short} ${value}`,
                 longText: token ? `${token} ${value}` : `${param1} ${value}`,
+                ...(legend?.icon
+                    ? { parts: [commandPart, { text: String(value) }] }
+                    : {}),
             }
         }
-        return { paramText: short, longText: token ?? String(param1) }
+        return {
+            paramText: short,
+            longText: token ?? String(param1),
+            ...(legend?.icon ? { parts: [commandPart] } : {}),
+        }
     }
 
     return {}

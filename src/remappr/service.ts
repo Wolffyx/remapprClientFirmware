@@ -182,6 +182,13 @@ export class RemapprKeyboardService implements KeyboardService {
             reorderLayers: !this.readOnly,
             variableLayerCount: !this.readOnly,
             exportFormats: ['remappr.keymap.json'],
+            // Edits raise into a config blob that `commit()` writes + validates on
+            // the device; the write can fail, so it's a manual Save (unless the
+            // node is read-only, where the UI hides editing via `readOnly`).
+            saveMode: 'manual',
+            // Remappr firmware owns its persistence: the committed config blob is
+            // written durably to device storage as a first-class feature.
+            persistence: true,
             maxLayers: this.maxLayers,
             readOnly: this.readOnly,
         }

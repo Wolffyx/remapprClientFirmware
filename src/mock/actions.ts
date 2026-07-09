@@ -1,7 +1,7 @@
 // pattern-check: skip — neutral action catalog for mock adapter
 import type { ActionSlot, ActionType, KeyAction, KeyLabel } from '@firmware/types'
-import { buildParamLabel } from '../paramLabel'
-import { ZMK_SHORT_TOKENS } from '../zmk/paramLabel'
+import { buildParamLabel, composeLegendParts } from '../paramLabel'
+import { ZMK_BEHAVIOR_LEGENDS, ZMK_SHORT_TOKENS } from '../zmk/paramLabel'
 
 export const MOCK_KIND_TRANSPARENT = 'mock:trans'
 export const MOCK_KIND_KEYPRESS = 'mock:kp'
@@ -220,12 +220,17 @@ export function buildMockActionTypes(maxLayers: number): ActionType[] {
                 },
             ],
         },
-        ...Object.keys(COMMAND_SLOTS).map((kind) => ({
-            id: kind,
-            displayName: COMMAND_META[kind].displayName,
-            description: COMMAND_META[kind].description,
-            slots: COMMAND_SLOTS[kind],
-        })),
+        ...Object.keys(COMMAND_SLOTS).map((kind) => {
+            const icon = ZMK_BEHAVIOR_LEGENDS[`&${COMMAND_META[kind].prefix}`]
+                ?.icon
+            return {
+                id: kind,
+                displayName: COMMAND_META[kind].displayName,
+                description: COMMAND_META[kind].description,
+                ...(icon ? { icon } : {}),
+                slots: COMMAND_SLOTS[kind],
+            }
+        }),
     ]
 }
 
@@ -330,9 +335,17 @@ function labelFor(
             (i) => layerNames[i],
             ZMK_SHORT_TOKENS,
         )
+        // Mock prefixes drop the leading &; the ZMK behavior-legend table is
+        // keyed with it, so the composite cap picks up the same behavior icon.
+        const paramParts = composeLegendParts(
+            p,
+            ZMK_BEHAVIOR_LEGENDS[`&${meta.prefix}`],
+        )
         return {
             primary: meta.displayName,
             ...(p.paramText ? { paramText: p.paramText } : {}),
+            ...(paramParts ? { paramParts } : {}),
+            ...(p.longText ? { valueLong: p.longText } : {}),
             bindingPrefix: meta.prefix,
             description: p.longText
                 ? `${meta.displayName}: ${p.longText}`

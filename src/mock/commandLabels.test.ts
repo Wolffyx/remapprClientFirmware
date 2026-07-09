@@ -34,6 +34,25 @@ describe('mock command behaviors — param legends', () => {
     })
 })
 
+describe('mock command behaviors — composite icon parts (#147)', () => {
+    const parts = (kind: string, params: number[]) =>
+        buildMockKeyAction(kind, params, []).label.paramParts
+
+    it('&bt BT_SEL → bluetooth icon + one-based profile text part', () => {
+        expect(parts(MOCK_KIND_BLUETOOTH, [3, 0])).toEqual([
+            { icon: 'bluetooth', text: 'BT' },
+            { text: '1' },
+        ])
+    })
+
+    it('&rgb_ug RGB_HUI → underglow icon prefixes the text command', () => {
+        expect(parts(MOCK_KIND_RGB, [3])).toEqual([
+            { icon: 'underglow', text: '' },
+            { text: 'Hue+' },
+        ])
+    })
+})
+
 describe('mock action-type catalog exposes the command behaviors', () => {
     const types = buildMockActionTypes(8)
     const ids = types.map((t) => t.id)

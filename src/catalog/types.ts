@@ -1,6 +1,6 @@
 // Pattern check: no GoF pattern (-) — rejected — plain data type definitions for catalog entries/pages, no abstraction needed.
 // pattern-check: skip adding optional notes field to existing CatalogEntry data interface — mechanical extension
-import type { ActionSlotKind } from '../types'
+import type { ActionSlotKind, BehaviorRef } from '../types'
 
 // Neutral domain id for a pickable key, e.g. 'key.letter.a',
 // 'wireless.profile.1', 'mouse.cursor.up'. Stable across firmwares.
@@ -12,6 +12,10 @@ export interface CatalogEntry {
     label: string
     name: string
     description?: string
+    // Neutral icon id (see src/legendIcons.ts) shown on the picker tile before
+    // the label — e.g. a mouse-cursor key gets an arrow, a button gets a mouse
+    // glyph. The renderer resolves it; an unknown id just shows the label.
+    icon?: string
     // Platform-support / caveats (e.g. "Globe — iOS full, macOS partial").
     // Sourced from external-names EXTERNAL_NOTES; surfaced in tooltips.
     notes?: string
@@ -31,7 +35,7 @@ export interface CatalogEntry {
     // onActionChosen instead of a codec-encoded number. `params` carries the
     // composite pool index for Remappr macros; ZMK behaviors omit it (empty
     // params). Static catalog entries leave this unset.
-    behaviorRef?: { kind: string; params?: number[] }
+    behaviorRef?: BehaviorRef
     // Display-only tile (e.g. parsed ZMK combo from a side-loaded
     // .keymap file). Picker click shows a toast instead of dispatching
     // a binding because there's no firmware path to set the entry.

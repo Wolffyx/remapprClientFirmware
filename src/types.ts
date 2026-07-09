@@ -1,3 +1,5 @@
+import type { LegendPart } from './paramLabel'
+
 export interface KeyAction {
     kind: string
     params: number[]
@@ -35,6 +37,15 @@ export interface KeyLabel {
      *  "Hue+"). Rendered as the main glyph when {@link primaryUsage} is absent.
      *  Produced firmware-agnostically by buildParamLabel from the neutral slots. */
     paramText?: string
+    /** Composite icon+text legend parts (behavior icon [+ command / value]).
+     *  When present and at least one part resolves to an icon, the renderer
+     *  prefers it over {@link paramText}; `paramText` stays the text join for
+     *  tooltips and non-icon renderers. See LegendPart in paramLabel.ts. */
+    paramParts?: LegendPart[]
+    /** Full, untruncated value name for the tooltip (e.g. "Select Profile 1",
+     *  "Toggle On/Off") when {@link paramText} is an abbreviated cap glyph
+     *  ("Sel 1", "Tog"). Unprefixed by the behavior name (that is {@link primary}). */
+    valueLong?: string
 }
 
 // Pattern check: no GoF pattern (-) — rejected — additive optional fields on plain data interfaces; no abstraction.
@@ -83,7 +94,26 @@ export interface ActionType {
     id: string
     displayName: string
     description?: string
+    /** Neutral icon id for the behavior itself (e.g. "bluetooth"), shown next to
+     *  the name in the action dropdown. Resolved by the renderer's registry. */
+    icon?: string
     slots: ActionSlot[]
+    /** Behavior ids this composite type replaces — hidden from the action
+     *  dropdown so each behavior keeps one pick path. Covers behaviors folded in
+     *  as commands (also reachable via a slot value's {@link BehaviorRef}) AND
+     *  ones suppressed without a command because this firmware can't set them
+     *  (e.g. ZMK &mmv / &msc expose no param metadata). */
+    subsumes?: string[]
+}
+
+// Pattern check: no GoF pattern (-) — rejected — plain data ref {kind, params}
+// shared by CatalogEntry and composite slot values; no abstraction.
+/** A pointer to a firmware behavior to emit directly — its id (`kind`) and raw
+ *  params — bypassing the normal keycode/slot flow. Used by catalog tiles and by
+ *  composite ActionType slot values (see {@link ActionSlot}). */
+export interface BehaviorRef {
+    kind: string
+    params?: number[]
 }
 
 export type ActionSlotKind =
@@ -98,7 +128,17 @@ export interface ActionSlot {
     // pattern-check: skip additive optional field on existing interface
     label: string
     kind: ActionSlotKind
-    values?: { value: number; label: string }[]
+    /** Enum options; each may carry a neutral icon id for its dropdown row and
+     *  composite cap legend (e.g. BT_NXT → "next"). A value may also carry a
+     *  {@link BehaviorRef}: picking it emits that behavior directly instead of
+     *  `{ ActionType.id, [value] }` — lets one composite ActionType dispatch to
+     *  several real behaviors (unified Mouse → &mkp / &mmv / &msc). */
+    values?: {
+        value: number
+        label: string
+        icon?: string
+        behaviorRef?: BehaviorRef
+    }[]
     range?: { min: number; max: number }
     innerKinds?: string[]
     /**
