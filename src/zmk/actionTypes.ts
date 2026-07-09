@@ -227,13 +227,21 @@ const MOUSE_BINDINGS = new Set<string>(['&mkp', '&mmv', '&msc'])
 export function synthesizeMouseActionType(
     behaviors: Record<number, GetBehaviorDetailsResponse>,
 ): ActionType | undefined {
-    // Resolve the runtime id for each mouse binding + collect /mouse/i macros.
+    // Resolve each mouse binding's runtime id + whether it's settable, plus any
+    // /mouse/i macro. "Settable" = the behavior exposes a real param slot, so the
+    // Studio protocol can bind it — ZMK's &mmv / &msc carry no param metadata and
+    // the firmware rejects setting them (ProtocolError), so their direction
+    // commands are omitted here (per-firmware capability); the raw behaviors are
+    // still subsumed (hidden) below so they don't reappear as broken raw options.
     const idFor = new Map<string, number>()
+    const settable = new Set<string>()
     const macros: { id: number; name: string }[] = []
     for (const b of Object.values(behaviors)) {
         const binding = displayNameToBinding(b.displayName)
         if (MOUSE_BINDINGS.has(binding)) {
-            if (!idFor.has(binding)) idFor.set(binding, b.id)
+            if (idFor.has(binding)) continue
+            idFor.set(binding, b.id)
+            if (behaviorToActionType(b).slots.length > 0) settable.add(binding)
         } else if (
             !KNOWN_BINDING_PREFIXES.includes(binding) &&
             /mouse/i.test(b.displayName)
@@ -248,7 +256,8 @@ export function synthesizeMouseActionType(
         const enc = mouseCanonToZmk(c.canon)
         if (!enc) continue
         const id = idFor.get(enc.binding)
-        if (id === undefined) continue // binding not present on this device
+        // Skip absent behaviors and unsettable ones (&mmv / &msc without metadata).
+        if (id === undefined || !settable.has(enc.binding)) continue
         values.push({
             value: values.length,
             label: c.label,
@@ -265,11 +274,18 @@ export function synthesizeMouseActionType(
     }
     if (values.length === 0) return undefined
 
+    // Hide every mouse behavior we represent — folded-in (button / macro commands)
+    // and suppressed (unsettable &mmv / &msc) alike.
+    const subsumes = [
+        ...[...idFor.values()].map(String),
+        ...macros.map((m) => String(m.id)),
+    ]
     return {
         id: 'mouse',
         displayName: 'Mouse',
         icon: 'mouse-button',
         slots: [{ label: 'Command', kind: 'enum', values }],
+        subsumes,
     }
 }
 

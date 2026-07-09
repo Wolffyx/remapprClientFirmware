@@ -98,6 +98,12 @@ export interface ActionType {
      *  the name in the action dropdown. Resolved by the renderer's registry. */
     icon?: string
     slots: ActionSlot[]
+    /** Behavior ids this composite type replaces — hidden from the action
+     *  dropdown so each behavior keeps one pick path. Covers behaviors folded in
+     *  as commands (also reachable via a slot value's {@link BehaviorRef}) AND
+     *  ones suppressed without a command because this firmware can't set them
+     *  (e.g. ZMK &mmv / &msc expose no param metadata). */
+    subsumes?: string[]
 }
 
 // Pattern check: no GoF pattern (-) — rejected — plain data ref {kind, params}

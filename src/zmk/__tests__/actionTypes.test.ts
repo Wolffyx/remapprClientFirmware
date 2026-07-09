@@ -284,16 +284,29 @@ describe('synthesizeMouseActionType', () => {
         })
     })
 
-    it('move / scroll dispatch to &mmv / &msc with packed deltas', () => {
-        const vals = at.slots[0].values ?? []
-        expect(vals.find((v) => v.label === 'Move →')?.behaviorRef).toEqual({
-            kind: '6',
-            params: [0x02580000],
-        })
-        expect(vals.find((v) => v.label === 'Scroll ↓')?.behaviorRef).toEqual({
-            kind: '7',
-            params: [0x0000fff6],
-        })
+    it('omits move / scroll when &mmv / &msc have no param metadata (unsettable)', () => {
+        const labels = (at.slots[0].values ?? []).map((v) => v.label)
+        expect(labels.some((l) => /^Move|^Scroll/.test(l))).toBe(false)
+    })
+
+    it('subsumes every mouse behavior + macro so none reappear raw', () => {
+        expect(new Set(at.subsumes)).toEqual(new Set(['5', '6', '7', '8']))
+    })
+
+    it('includes move commands when &mmv exposes param metadata (settable)', () => {
+        const mmvSettable: GetBehaviorDetailsResponse = {
+            id: 6,
+            displayName: 'mouse_move',
+            metadata: [
+                {
+                    param1: [{ name: 'dir', constant: 0 }],
+                    param2: [{ name: '', nil: {} }],
+                },
+            ],
+        }
+        const at2 = synthesizeMouseActionType({ 5: mkp, 6: mmvSettable })!
+        const move = (at2.slots[0].values ?? []).find((v) => v.label === 'Move →')
+        expect(move?.behaviorRef).toEqual({ kind: '6', params: [0x02580000] })
     })
 
     it('folds a /mouse/i macro as a command; ignores unrelated macros', () => {

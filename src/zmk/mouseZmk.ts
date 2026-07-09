@@ -13,10 +13,12 @@
 // vertical signs differ between move and scroll — hence explicit per-direction
 // tables, not one shared formula.
 //
-// ⚠️ Only move-right (x=+600) and scroll-down (y=−10) are hardware-confirmed; the
-// other 6 rows are inferred from ZMK's MOVE_* / SCRL_* conventions and MUST be
-// verified on hardware (assign each, read back param1) before this is final — see
-// the plan's Phase 5.
+// All 8 encodings match ZMK's canonical MOVE_* / SCRL_* defines (mouse.h) and were
+// read back verbatim from the device's synthesized Mouse type (PM Test ZMK). NOTE:
+// ZMK Studio cannot actually *set* &mmv / &msc — they expose no param metadata, so
+// the protocol rejects the write — hence the editor omits move/scroll on such
+// firmware (see synthesizeMouseActionType). These encodings still drive the
+// builder / export path and keycap decoding, ready for firmware that exposes them.
 
 import type { CanonAction } from '@firmware/config'
 import { MOUSE_COMMANDS, type MouseCommand } from '@firmware/mouseCommands'
@@ -44,18 +46,18 @@ export function packDelta(x: number, y: number): number {
 }
 
 // Per-direction (x, y). Explicit because move and scroll disagree on vertical sign.
-// ✅ = hardware-confirmed; the rest are inferred (Phase 5 HW-verify).
+// All rows HW-confirmed against the device's synthesized params (ZMK mouse.h).
 const MOVE_XY: Record<Direction, [number, number]> = {
-    right: [MOVE_MAG, 0], // ✅ 0x02580000
-    left: [-MOVE_MAG, 0], // inferred
-    up: [0, -MOVE_MAG], // inferred
-    down: [0, MOVE_MAG], // inferred
+    right: [MOVE_MAG, 0], // 0x02580000
+    left: [-MOVE_MAG, 0], // 0xFDA80000
+    up: [0, -MOVE_MAG], // 0x0000FDA8
+    down: [0, MOVE_MAG], // 0x00000258
 }
 const SCROLL_XY: Record<Direction, [number, number]> = {
-    up: [0, SCROLL_MAG], // inferred
-    down: [0, -SCROLL_MAG], // ✅ 0x0000fff6
-    left: [-SCROLL_MAG, 0], // inferred
-    right: [SCROLL_MAG, 0], // inferred
+    up: [0, SCROLL_MAG], // 0x0000000A
+    down: [0, -SCROLL_MAG], // 0x0000FFF6
+    left: [-SCROLL_MAG, 0], // 0xFFF60000
+    right: [SCROLL_MAG, 0], // 0x000A0000
 }
 
 /** ZMK binding + param for a neutral mouse CanonAction, or undefined for a
