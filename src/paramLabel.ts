@@ -58,6 +58,33 @@ function normalizeLegend(
 }
 
 /**
+ * Assemble a composite cap legend from an engine {@link ParamLabel} and an
+ * optional behavior-level legend. The behavior icon prefixes the command/value
+ * parts (deduped when the command already leads with it, e.g. `&bt` BT_SEL), and
+ * IS the whole legend for a zero-arg behavior (its `text` the icon-less
+ * fallback). Returns undefined when nothing carries an icon so the cap keeps its
+ * plain-text path. Firmware-neutral — each adapter passes its own behavior
+ * legend (see zmk/paramLabel.ts).
+ */
+export function composeLegendParts(
+    param: ParamLabel,
+    behaviorLegend: TokenLegend | undefined,
+): LegendPart[] | undefined {
+    const behaviorIcon = behaviorLegend?.icon
+    if (param.parts || param.paramText) {
+        const base = param.parts ?? [{ text: param.paramText as string }]
+        if (behaviorIcon && base[0]?.icon !== behaviorIcon) {
+            return [{ icon: behaviorIcon, text: '' }, ...base]
+        }
+        return base.some((p) => p.icon) ? base : undefined
+    }
+    if (behaviorIcon) {
+        return [{ icon: behaviorIcon, text: behaviorLegend?.text ?? '' }]
+    }
+    return undefined
+}
+
+/**
  * Title-case fallback for an enum token with no explicit mapping.
  * `RGB_FOO_BAR` → strip through the first `_` → `FOO_BAR` → "Foo Bar".
  * Returns the FULL text — the cap clips it to an ellipsis in CSS while the

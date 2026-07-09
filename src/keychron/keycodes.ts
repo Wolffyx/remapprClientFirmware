@@ -11,6 +11,7 @@
 // string (0xA1) and pick a per-build table.
 
 import type { KeyAction, KeyLabel } from '@firmware/types'
+import type { LegendPart } from '../paramLabel'
 
 export const KEYCHRON_QK_KB_BASE = 0x7e00
 export const KEYCHRON_QK_KB_END = 0x7e1f
@@ -61,6 +62,24 @@ const TABLE: KeychronKeycode[] = [
     kc(0x0f, 'p2p4g', '2.4G', '2.4 GHz wireless'),
     kc(0x10, 'bat_lvl', 'Bat', 'Show battery level'),
 ]
+
+// Composite icon legends for the icon-worthy Keychron keycodes (issue #147).
+// Keyed by table offset; the part text is the icon-less fallback. Entries not
+// listed keep their plain-text label. Icon ids come from the neutral vocabulary
+// (src/legendIcons.ts) and resolve in the renderer's registry.
+const ICON_PARTS: Readonly<Record<number, LegendPart[]>> = {
+    0x08: [{ icon: 'screenshot', text: 'Snip' }],
+    0x0a: [{ icon: 'lock', text: 'Lock' }],
+    0x0c: [{ icon: 'bluetooth', text: 'BT' }, { text: '1' }],
+    0x0d: [{ icon: 'bluetooth', text: 'BT' }, { text: '2' }],
+    0x0e: [{ icon: 'bluetooth', text: 'BT' }, { text: '3' }],
+    0x0f: [{ icon: 'wireless', text: '2.4G' }],
+    0x10: [{ icon: 'battery', text: 'Bat' }],
+}
+for (const e of TABLE) {
+    const parts = ICON_PARTS[e.offset]
+    if (parts) e.label = { ...e.label, paramParts: parts }
+}
 
 const BY_KEYCODE = new Map<number, KeychronKeycode>(
     TABLE.map((e) => [KEYCHRON_QK_KB_BASE + e.offset, e]),

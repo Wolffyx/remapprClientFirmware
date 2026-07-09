@@ -44,7 +44,11 @@ function buildVialLabel(
                 description: `Dynamic macro #${params[0] ?? 0}`,
             }
         case VIAL_KIND.RESET:
-            return { primary: 'Reset', description: 'Jump to bootloader' }
+            return {
+                primary: 'Reset',
+                description: 'Jump to bootloader',
+                paramParts: [{ icon: 'bootloader', text: 'Boot' }],
+            }
         case VIAL_KIND.USER: {
             const idx = params[0] ?? 0
             const name = customNames?.[idx]

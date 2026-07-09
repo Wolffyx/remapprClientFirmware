@@ -7,7 +7,6 @@ import type {
     KeyAction,
     KeyLabel,
 } from '@firmware/types'
-import type { LegendPart, ParamLabel, TokenLegend } from '../paramLabel'
 import {
     hid_usage_get_labels,
     hidUsagePageAndIdFromUsage,
@@ -16,7 +15,7 @@ import {
     abbreviateLayerName,
     formatMomentaryLayer,
 } from '@firmware/_app/lib/keyAbbreviations'
-import { buildParamLabel } from '../paramLabel'
+import { buildParamLabel, composeLegendParts } from '../paramLabel'
 import {
     displayNameToBinding,
     KNOWN_BINDING_PREFIXES,
@@ -24,31 +23,6 @@ import {
 } from './displayNameToBinding'
 import { behaviorToActionType } from './actionTypes'
 import { ZMK_BEHAVIOR_LEGENDS, ZMK_SHORT_TOKENS } from './paramLabel'
-
-/**
- * Assemble the composite icon legend for a binding: the behavior icon (e.g.
- * bluetooth) prefixes the engine's command/value parts, and IS the whole legend
- * for a zero-arg behavior. Returns undefined when nothing carries an icon so the
- * cap keeps its plain-text path.
- */
-function composeParamParts(
-    param: ParamLabel,
-    behaviorLegend: TokenLegend | undefined,
-): LegendPart[] | undefined {
-    const behaviorIcon = behaviorLegend?.icon
-    if (param.parts || param.paramText) {
-        const base = param.parts ?? [{ text: param.paramText as string }]
-        if (behaviorIcon && base[0]?.icon !== behaviorIcon) {
-            return [{ icon: behaviorIcon, text: '' }, ...base]
-        }
-        return base.some((p) => p.icon) ? base : undefined
-    }
-    // Zero-arg behavior: the behavior icon is the legend, its text the fallback.
-    if (behaviorIcon) {
-        return [{ icon: behaviorIcon, text: behaviorLegend?.text ?? '' }]
-    }
-    return undefined
-}
 
 export type BehaviorMap = Record<number, GetBehaviorDetailsResponse>
 
@@ -180,7 +154,7 @@ export function buildKeyLabel(
         ZMK_SHORT_TOKENS,
     )
     const pretty = prettyBehaviorName(behavior.displayName)
-    const paramParts = composeParamParts(
+    const paramParts = composeLegendParts(
         param,
         ZMK_BEHAVIOR_LEGENDS[bindingPrefix],
     )
