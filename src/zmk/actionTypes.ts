@@ -202,7 +202,12 @@ export function behaviorToActionType(
 export function behaviorsToActionTypes(
     behaviors: Record<number, GetBehaviorDetailsResponse>,
 ): ActionType[] {
-    return Object.values(behaviors).map(behaviorToActionType)
+    const types = Object.values(behaviors).map(behaviorToActionType)
+    // Fold the ZMK mouse behaviors (&mkp / &mmv / &msc) + any /mouse/i macro into
+    // one composite "Mouse" type. The raw behaviors stay in the list (label /
+    // fallback); the picker hides them (subsumed by the composite's behaviorRefs).
+    const mouse = synthesizeMouseActionType(behaviors)
+    return mouse ? [...types, mouse] : types
 }
 
 // The ZMK mouse bindings the unified Mouse dropdown folds into one behavior.
