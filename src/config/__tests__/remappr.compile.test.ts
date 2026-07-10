@@ -185,6 +185,75 @@ describe('remappr macros (TBL_MACRO + BH_MACRO)', () => {
     })
 })
 
+// Parameterized macro (§44.3 host clone-per-instance): the `param` marker makes
+// the NEXT key step take the binding's argument; each distinct argument clones
+// the template into its own TBL_MACRO record (the template itself emits none),
+// and identical (ref, argument) bindings share one clone.
+const PARAM_MACRO = `{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Par", "target": "zmk" },
+    "keyboard": { "id": "par", "name": "Par",
+        "keys": [{"x":0,"y":0},{"x":1,"y":0},{"x":2,"y":0}] },
+    "layers": [{ "name": "base", "bindings": [
+        { "type": "macro", "ref": "wrap", "param": "A" },
+        { "type": "macro", "ref": "wrap", "param": "B" },
+        { "type": "macro", "ref": "wrap", "param": "A" }
+    ] }],
+    "macros": [{ "id": "wrap", "params": 1, "steps": [
+        { "type": "press", "key": "LCTRL" },
+        { "type": "param" },
+        { "type": "tap", "key": "C" },
+        { "type": "release", "key": "LCTRL" }
+    ] }]
+}`
+
+describe('remappr parameterized macros (§44.3 clone-per-instance)', () => {
+    it('clones the template per distinct argument and dedupes repeats', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(PARAM_MACRO),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+
+        // MACRO table: exactly TWO records — wrap(A) and wrap(B); the third
+        // binding reuses the wrap(A) clone and the template emits no record.
+        const mac = findTable(b, 6)!
+        let o = mac[0]
+        expect(u16(b, o)).toBe(2) // num_macros == distinct arguments
+        o += 2
+        expect(u16(b, o)).toBe(3) // wrap(A): 3 steps
+        o += 2
+        expect([b[o], u16(b, o + 2)]).toEqual([1, 0xe0]) // PRESS LCTRL
+        expect([b[o + 4], u16(b, o + 6)]).toEqual([0, 0x04]) // TAP A (the arg)
+        expect([b[o + 8], u16(b, o + 10)]).toEqual([2, 0xe0]) // RELEASE LCTRL
+        o += 12
+        expect(u16(b, o)).toBe(3) // wrap(B): 3 steps
+        o += 2
+        expect([b[o + 4], u16(b, o + 6)]).toEqual([0, 0x05]) // TAP B (the arg)
+
+        // BEHAVIOR table: two distinct BH_MACRO records (tap = 0 / 1) — the
+        // duplicate wrap(A) binding deduped onto the first.
+        const beh = findTable(b, 4)!
+        expect(u16(b, beh[0])).toBe(2)
+    })
+
+    it('rejects binding a parameterized macro without an argument', () => {
+        const bare = PARAM_MACRO.replace(
+            '{ "type": "macro", "ref": "wrap", "param": "B" }',
+            '{ "type": "macro", "ref": "wrap" }',
+        )
+        const { diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(bare),
+        )
+        expect(
+            diagnostics.some(
+                (d) =>
+                    d.level === 'error' && /takes a parameter/.test(d.message),
+            ),
+        ).toBe(true)
+    })
+})
+
 // Layer + toggle + sticky behaviors (§43.6). base has all four; fn has keys.
 const LAYERS = `{
     "schemaVersion": 1, "kind": "remappr.keymap",

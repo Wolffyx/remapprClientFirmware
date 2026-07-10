@@ -50,6 +50,7 @@ import {
     type NameRecord,
     type PosholdRecord,
 } from './blobWriter'
+import type { CanonicalKeyId } from '../../../catalog/types'
 import type {
     CanonHoldTapDef,
     CanonMacro,
@@ -174,8 +175,8 @@ function textToSteps(
 }
 
 // Lower one canonical macro step to zero or more wire steps. Structured tap/
-// press/release/wait + text are supported; param/tap_time/pause_for_release are
-// §44.3 gaps (advanced macros) and emit a diagnostic.
+// press/release/wait + text + pause_for_release are supported; param/tap_time
+// are step MARKERS handled by lowerMacroSteps and never reach here.
 function lowerMacroStep(
     step: CanonMacroStep,
     diag: DiagnosticBag,
@@ -202,8 +203,6 @@ function lowerMacroStep(
         case 'pause_for_release':
             return [{ op: MacroOp.PauseForRelease, arg: 0 }]
         default:
-            // `param` (macro argument forwarding) remains a gap — it needs
-            // per-instance macro cloning at compile time (§44.3).
             diag.error(
                 `macro step "${step.type}" not yet on the wire — §44.3 gap`,
                 path,
@@ -212,41 +211,112 @@ function lowerMacroStep(
     }
 }
 
-// Encode all macros into wire records and an id→index map for BH_MACRO refs.
+// Lower one macro's canonical steps to wire steps. Two step MARKERS shape the
+// lowering rather than emit steps themselves:
+//  - `tap_time` (ZMK &macro_tap_time): every LATER `tap` lowers to
+//    press / wait(tap_time) / release so the host sees the key held that long.
+//  - `param` (ZMK &macro_param_1to1): the NEXT key step takes the BINDING's
+//    argument (@substKey) instead of its own key. The wire has no parameter
+//    slot, so a parameterized macro is CLONED per distinct argument at compile
+//    time — "host clone-per-instance" (§44.3); substKey is that instance's
+//    argument, undefined while lowering a plain (non-template) macro.
+function lowerMacroSteps(
+    m: CanonMacro,
+    mi: number,
+    diag: DiagnosticBag,
+    substKey?: CanonicalKeyId,
+): MacroStep[] {
+    let tapMs = 0
+    let pendingParam = false
+    const steps: MacroStep[] = []
+    m.steps.forEach((s, si) => {
+        const path = ['macros', mi, 'steps', si]
+        if (s.type === 'tap_time') {
+            tapMs = Math.min(Math.max(s.ms, 0), 0xffff)
+            return
+        }
+        if (s.type === 'param') {
+            if ((s.from ?? 1) !== 1 || (s.to ?? 1) !== 1) {
+                diag.error(
+                    `multi-parameter macros (param ${s.from ?? 1}→${s.to ?? 1}) ` +
+                        `are not supported — only the one-param 1→1 form`,
+                    path,
+                )
+                return
+            }
+            if (substKey === undefined) {
+                // Defensive: templates are only lowered with an argument.
+                diag.error(
+                    `macro "${m.id}" takes a parameter — bind it with an argument`,
+                    path,
+                )
+                return
+            }
+            pendingParam = true
+            return
+        }
+        const keyStep =
+            s.type === 'tap' || s.type === 'press' || s.type === 'release'
+        const step =
+            keyStep && pendingParam && substKey !== undefined
+                ? { ...s, key: substKey }
+                : s
+        if (keyStep) pendingParam = false
+        if (step.type === 'tap' && tapMs > 0) {
+            const usage = keyUsage(step.key, diag, path)
+            if (usage !== null)
+                steps.push(
+                    { op: MacroOp.Press, arg: usage },
+                    { op: MacroOp.Wait, arg: tapMs },
+                    { op: MacroOp.Release, arg: usage },
+                )
+            return
+        }
+        steps.push(...lowerMacroStep(step, diag, path))
+    })
+    if (pendingParam)
+        diag.warn(
+            `macro "${m.id}": trailing param marker has no following key step`,
+            ['macros', mi, 'steps'],
+        )
+    return steps
+}
+
+// pattern-check: skip — plain compile-context DTO (records + lookup maps),
+// same idiom as the other wire-DTO interfaces in this compiler.
+// Macro compile context: plain macros are encoded up front (records + id→index
+// for BH_MACRO refs); macros containing a `param` marker are TEMPLATES — they
+// get no record of their own and are instantiated (cloned with the argument
+// substituted) per distinct (ref, param) binding, deduped via `instances`.
+interface MacroCtx {
+    records: MacroRecord[]
+    index: Map<string, number>
+    templates: Map<string, { m: CanonMacro; mi: number }>
+    instances: Map<string, number>
+    instanceNames: NameRecord[]
+}
+
+// Encode all plain macros into wire records; collect parameterized templates.
 function buildMacros(
     macros: CanonMacro[] | undefined,
     diag: DiagnosticBag,
-): { records: MacroRecord[]; index: Map<string, number> } {
-    const records: MacroRecord[] = []
-    const index = new Map<string, number>()
+): MacroCtx {
+    const ctx: MacroCtx = {
+        records: [],
+        index: new Map(),
+        templates: new Map(),
+        instances: new Map(),
+        instanceNames: [],
+    }
     ;(macros ?? []).forEach((m, mi) => {
-        index.set(m.id, mi)
-        // `tap_time` is a per-macro playback setting, not a wire step: it makes
-        // every LATER `tap` lower to press / wait(tap_time) / release so the
-        // host sees the key held that long (ZMK &macro_tap_time).
-        let tapMs = 0
-        const steps: MacroStep[] = []
-        m.steps.forEach((s, si) => {
-            const path = ['macros', mi, 'steps', si]
-            if (s.type === 'tap_time') {
-                tapMs = Math.min(Math.max(s.ms, 0), 0xffff)
-                return
-            }
-            if (s.type === 'tap' && tapMs > 0) {
-                const usage = keyUsage(s.key, diag, path)
-                if (usage !== null)
-                    steps.push(
-                        { op: MacroOp.Press, arg: usage },
-                        { op: MacroOp.Wait, arg: tapMs },
-                        { op: MacroOp.Release, arg: usage },
-                    )
-                return
-            }
-            steps.push(...lowerMacroStep(s, diag, path))
-        })
-        records.push({ steps })
+        if (m.steps.some((s) => s.type === 'param')) {
+            ctx.templates.set(m.id, { m, mi })
+            return
+        }
+        ctx.index.set(m.id, ctx.records.length)
+        ctx.records.push({ steps: lowerMacroSteps(m, mi, diag) })
     })
-    return { records, index }
+    return ctx
 }
 
 // HID modifier usages are 0xE0..0xE7 → modifier-byte bit (1 << usage-0xE0).
@@ -449,7 +519,7 @@ function lowerAction(
     action: CanonAction,
     diag: DiagnosticBag,
     path: (string | number)[],
-    macroIndex: Map<string, number>,
+    macroCtx: MacroCtx,
     layerIndex: Map<string, number>,
     comp: CompCtx,
 ): BehaviorRecord {
@@ -546,15 +616,54 @@ function lowerAction(
         case 'none':
             return rec({ type: BehaviorType.None })
         case 'macro': {
-            const idx = macroIndex.get(action.ref)
+            // pattern-check: skip — case-body extension of the existing
+            // lowerAction switch; functional clone + memo map, no new type.
+            // A parameterized macro (one with a `param` marker) is a TEMPLATE:
+            // clone it per distinct (ref, argument) pair — the wire has no
+            // parameter slot (§44.3 host clone-per-instance). Identical
+            // bindings share one clone via the instances map.
+            const tpl = macroCtx.templates.get(action.ref)
+            if (tpl) {
+                if (action.param === undefined) {
+                    diag.error(
+                        `macro "${action.ref}" takes a parameter — ` +
+                            `bind it with an argument`,
+                        path,
+                    )
+                    return rec({ type: BehaviorType.None })
+                }
+                const ikey = `${action.ref} ${action.param}`
+                let idx = macroCtx.instances.get(ikey)
+                if (idx === undefined) {
+                    idx = macroCtx.records.length
+                    macroCtx.records.push({
+                        steps: lowerMacroSteps(
+                            tpl.m,
+                            tpl.mi,
+                            diag,
+                            action.param,
+                        ),
+                    })
+                    macroCtx.instances.set(ikey, idx)
+                    // §24 display name: the template's id plus the argument, so
+                    // a round-trip shows which instance a key is bound to.
+                    macroCtx.instanceNames.push({
+                        kind: NameKind.Macro,
+                        ref: idx,
+                        name: `${action.ref}(${action._paramSrc ?? action.param})`,
+                    })
+                }
+                return rec({ type: BehaviorType.Macro, tap: idx })
+            }
+            const idx = macroCtx.index.get(action.ref)
             if (idx === undefined) {
                 diag.error(`unknown macro ref "${action.ref}"`, path)
                 return rec({ type: BehaviorType.None })
             }
             if (action.param !== undefined) {
-                diag.error(
-                    `parametrized macro "${action.ref}" not yet on the wire ` +
-                        `(§44.3 gap)`,
+                diag.warn(
+                    `macro "${action.ref}" has no param step — ` +
+                        `binding argument ignored`,
                     path,
                 )
             }
@@ -781,7 +890,7 @@ function lowerAction(
                         tap.action,
                         diag,
                         [...path, 'taps', tap.count],
-                        macroIndex,
+                        macroCtx,
                         layerIndex,
                         comp,
                     )
@@ -820,7 +929,7 @@ function lowerAction(
                     def.bindings[0],
                     diag,
                     [...path, 'bindings', 0],
-                    macroIndex,
+                    macroCtx,
                     layerIndex,
                     comp,
                 )
@@ -828,7 +937,7 @@ function lowerAction(
                     def.bindings[1],
                     diag,
                     [...path, 'bindings', 1],
-                    macroIndex,
+                    macroCtx,
                     layerIndex,
                     comp,
                 )
@@ -908,7 +1017,7 @@ function encodeBlob(
     if (numPositions === 0) diag.error('keyboard has no keys', ['keyboard', 'keys'])
 
     // Macros first: BH_MACRO cells reference them by index.
-    const { records: macroRecords, index: macroIndex } = buildMacros(
+    const macroCtx = buildMacros(
         config.macros,
         diag,
     )
@@ -958,7 +1067,7 @@ function encodeBlob(
                       action,
                       diag,
                       ['layers', li, 'bindings', pos],
-                      macroIndex,
+                      macroCtx,
                       layerIndex,
                       comp,
                   )
@@ -980,7 +1089,7 @@ function encodeBlob(
                 c.action,
                 diag,
                 ['combos', ci, 'action'],
-                macroIndex,
+                macroCtx,
                 layerIndex,
                 comp,
             ),
@@ -1049,7 +1158,7 @@ function encodeBlob(
                         ls.action,
                         diag,
                         [...p, 'action'],
-                        macroIndex,
+                        macroCtx,
                         layerIndex,
                         comp,
                     ),
@@ -1084,7 +1193,9 @@ function encodeBlob(
         b.posHold?.length ? [{ behaviorIndex: i, positions: b.posHold }] : [],
     )
     if (posholds.length > 0) builder.posholdTable(posholds)
-    if (macroRecords.length > 0) builder.macroTable(macroRecords)
+    // macroCtx.records includes any per-argument clones of parameterized
+    // templates appended while bindings lowered above (§44.3).
+    if (macroCtx.records.length > 0) builder.macroTable(macroCtx.records)
     if (combos.length > 0) builder.comboTable(combos)
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
@@ -1094,9 +1205,10 @@ function encodeBlob(
     // Macros are keyed by their table index; composites by sub_index (collected in
     // comp.names as each was lowered). Emitted last; absent when there are none.
     const names: NameRecord[] = [
-        ...[...macroIndex].map(
+        ...[...macroCtx.index].map(
             ([name, ref]): NameRecord => ({ kind: NameKind.Macro, ref, name }),
         ),
+        ...macroCtx.instanceNames,
         ...comp.names,
     ]
     if (names.length > 0) builder.namesTable(names)
