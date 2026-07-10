@@ -12,10 +12,12 @@ import { discover } from './discovery'
 import {
     clearAllBonds,
     forgetNode,
+    getLinkStats,
     listNodes,
     openPairWindow,
     setDongleNkro,
     unpairRadio,
+    type LinkStats,
 } from './nodes'
 import type { DeviceInfo as RawDeviceInfo, NodeRecord } from './protocol'
 import type { RemapprRpc } from './rpc'
@@ -106,6 +108,10 @@ export function buildNodesApi(rpc: RemapprRpc): NodesApi {
 
         setNkro(enabled?: boolean): Promise<boolean> {
             return setDongleNkro(rpc, enabled)
+        },
+
+        getLinkStats(): Promise<LinkStats> {
+            return getLinkStats(rpc)
         },
     }
 }

@@ -359,6 +359,34 @@ export interface NodesApi {
      *  (default, BIOS-safe). Persists on the dongle across reboots. Resolves to
      *  the current state. */
     setNkro(enabled?: boolean): Promise<boolean>
+
+    /** Read the dongle's radio link stats: the live hop map with per-channel
+     *  packet-error counters and a generation counter that bumps on every
+     *  adaptive channel swap. Idempotent read for a diagnostics view. */
+    getLinkStats(): Promise<RadioLinkStats>
+}
+
+// pattern-check: skip — two plain DTO interfaces mirroring the wire reply;
+// structural typing bridges the firmware adapters, no GoF abstraction.
+/** One radio hop-map slot: the RF channel and its packet-error window so far
+ *  (counters reset each verdict window). */
+export interface RadioChannelStat {
+    channel: number
+    ok: number
+    fail: number
+}
+
+/** Radio link diagnostics for a multi-node receiver (NodesApi.getLinkStats). */
+export interface RadioLinkStats {
+    /** Hop-map generation — bumps (mod 256) on every adaptive channel swap. */
+    mapGeneration: number
+    /** Replacement candidates outside the active map. */
+    poolCount: number
+    /** Samples per channel before a keep/swap verdict. */
+    window: number
+    /** Failure percentage that triggers an adaptive swap. */
+    failPercent: number
+    channels: RadioChannelStat[]
 }
 
 export interface KeyboardService {

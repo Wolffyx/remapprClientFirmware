@@ -180,6 +180,12 @@ export const DongleVerb = {
      *  0 = the boot 6KRO interface (default, BIOS-safe); NO arg = query only.
      *  Reply: u8 current state. The choice persists across dongle reboots. */
     SET_NKRO: 0x07,
+    /** §16 radio observability, no arg: the live hop map + per-channel PER
+     *  window. Reply: 8-byte header {u8 version(=1), u8 map_count, u8 map_gen,
+     *  u8 pool_count, u16 window, u8 fail_pct, u8 rsvd} then map_count 6-byte
+     *  records {u8 channel, u8 rsvd, u16 ok, u16 fail}. map_gen bumps on every
+     *  adaptive channel swap; ok/fail reset after each verdict window. */
+    GET_LINK_STATS: 0x08,
 } as const
 
 /** Device role (enum remappr_role, firmware include/remappr/role.h) — reported as
@@ -592,6 +598,58 @@ export function parseNodeList(d: Uint8Array): NodeRecord[] {
     for (let off = 0; off + NODE_RECORD_LEN <= d.length; off += NODE_RECORD_LEN)
         out.push(parseNodeRecord(d, off))
     return out
+}
+
+// pattern-check: skip — plain wire decoder + typed record, same shape as
+// parseNodeRecord/parseLimits above; no GoF abstraction.
+/** One §16 hop-map slot from DONGLE.GET_LINK_STATS: the RF channel it dwells
+ *  on and its packet-error window so far (counters reset each verdict). */
+export interface ChannelStat {
+    channel: number
+    ok: number
+    fail: number
+}
+
+/** DONGLE.GET_LINK_STATS reply: the live §16 channel map + PER window. */
+export interface LinkStats {
+    /** Active hop-map generation — bumps (mod 256) on every adaptive swap, so
+     *  polling it observes channel-map churn. */
+    mapGeneration: number
+    /** Replacement candidates outside the active map. */
+    poolCount: number
+    /** Samples per channel before a keep/swap verdict. */
+    window: number
+    /** Failure percentage that triggers an adaptive swap. */
+    failPercent: number
+    channels: ChannelStat[]
+}
+
+const LINK_STATS_HDR = 8
+const CHAN_REC = 6
+
+export function parseLinkStats(d: Uint8Array): LinkStats {
+    if (d.length < LINK_STATS_HDR) throw new Error('link-stats reply too short')
+    if (d[0] !== 1) throw new Error(`unknown link-stats version ${d[0]}`)
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const count = d[1]
+    if (d.length < LINK_STATS_HDR + count * CHAN_REC)
+        throw new Error('link-stats reply truncated')
+    const channels: ChannelStat[] = []
+    for (let i = 0; i < count; i++) {
+        const off = LINK_STATS_HDR + i * CHAN_REC
+        channels.push({
+            channel: d[off],
+            ok: dv.getUint16(off + 2, true),
+            fail: dv.getUint16(off + 4, true),
+        })
+    }
+    return {
+        mapGeneration: d[2],
+        poolCount: d[3],
+        window: dv.getUint16(4, true),
+        failPercent: d[6],
+        channels,
+    }
 }
 
 /** Build the `u16 short_id` arg for DONGLE.GET_NODE_INFO. */

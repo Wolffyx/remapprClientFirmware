@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
     clearAllBonds,
     forgetNode,
+    getLinkStats,
     getNodeInfo,
     listNodes,
     openPairWindow,
@@ -239,5 +240,54 @@ describe('dongle pairing control (DONGLE namespace)', () => {
             data: new Uint8Array(),
         }))
         await expect(setDongleNkro(rpc, false)).rejects.toThrow(/SET_NKRO/)
+    })
+
+    it('getLinkStats decodes the header and per-channel records', async () => {
+        // version 1, 2 channels, gen 7, pool 6, window 64 LE, fail 25%, rsvd.
+        const reply = new Uint8Array([
+            1, 2, 7, 6, 64, 0, 25, 0,
+            // ch 2: ok 300 (0x012c), fail 5
+            2, 0, 0x2c, 0x01, 5, 0,
+            // ch 79: ok 10, fail 260 (0x0104)
+            79, 0, 10, 0, 0x04, 0x01,
+        ])
+        const rpc = fakeRpc(async (ns, verb, arg) => {
+            expect(ns).toBe(Namespace.DONGLE)
+            expect(verb).toBe(DongleVerb.GET_LINK_STATS)
+            expect(arg).toBeUndefined()
+            return { status: Status.OK, data: reply }
+        })
+        const stats = await getLinkStats(rpc)
+        expect(stats.mapGeneration).toBe(7)
+        expect(stats.poolCount).toBe(6)
+        expect(stats.window).toBe(64)
+        expect(stats.failPercent).toBe(25)
+        expect(stats.channels).toEqual([
+            { channel: 2, ok: 300, fail: 5 },
+            { channel: 79, ok: 10, fail: 260 },
+        ])
+    })
+
+    it('getLinkStats rejects a truncated or unknown-version reply', async () => {
+        const truncated = fakeRpc(async () => ({
+            status: Status.OK,
+            // header claims 2 channels but carries only one record
+            data: new Uint8Array([1, 2, 0, 0, 64, 0, 25, 0, 2, 0, 1, 0, 0, 0]),
+        }))
+        await expect(getLinkStats(truncated)).rejects.toThrow(/truncated/)
+
+        const badVersion = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([9, 0, 0, 0, 64, 0, 25, 0]),
+        }))
+        await expect(getLinkStats(badVersion)).rejects.toThrow(/version/)
+    })
+
+    it('getLinkStats throws on a non-dongle device (ERR_CMD)', async () => {
+        const rpc = fakeRpc(async () => ({
+            status: Status.ERR_CMD,
+            data: new Uint8Array(),
+        }))
+        await expect(getLinkStats(rpc)).rejects.toThrow(/GET_LINK_STATS/)
     })
 })

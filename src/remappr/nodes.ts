@@ -13,10 +13,12 @@ import {
     DongleVerb,
     Namespace,
     NODE_RECORD_LEN,
+    parseLinkStats,
     parseNodeList,
     parseNodeRecord,
     Status,
     statusName,
+    type LinkStats,
     type NodeRecord,
 } from './protocol'
 import {
@@ -26,7 +28,7 @@ import {
 } from './auth'
 import type { RemapprRpc } from './rpc'
 
-export type { NodeRecord }
+export type { LinkStats, NodeRecord }
 
 /** Enumerate the nodes bonded to a dongle (DONGLE.LIST_NODES). Returns [] for a
  *  directly-attached (non-dongle) device or an empty roster. */
@@ -107,6 +109,22 @@ export async function clearAllBonds(rpc: RemapprRpc): Promise<number> {
     if (reply.status !== Status.OK)
         throw new Error(`CLEAR_ALL_BONDS → ${statusName(reply.status)}`)
     return reply.data.length >= 1 ? reply.data[0] : 0
+}
+
+// pattern-check: skip — thin async wrapper over DONGLE.GET_LINK_STATS, same
+// shape as the wrappers above; no GoF abstraction.
+/** Read the dongle's §16 radio link stats (DONGLE.GET_LINK_STATS): the live
+ *  hop map with its per-channel packet-error window and the map generation
+ *  counter (bumps on every adaptive channel swap). Idempotent read. Throws on
+ *  a non-dongle device (ERR_CMD). */
+export async function getLinkStats(rpc: RemapprRpc): Promise<LinkStats> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.GET_LINK_STATS,
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`GET_LINK_STATS → ${statusName(reply.status)}`)
+    return parseLinkStats(reply.data)
 }
 
 // pattern-check: skip — thin async wrapper over DONGLE.SET_NKRO, same shape as
