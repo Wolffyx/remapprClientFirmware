@@ -353,6 +353,12 @@ export interface NodesApi {
     /** Wipe the dongle's entire bond table (recovery for stale bonds that
      *  forgetNode can't reach). Resolves to the number of pipes unbonded. */
     clearAllBonds(): Promise<number>
+
+    /** Set (or query, when `enabled` is omitted) the dongle's USB keystroke
+     *  routing: true = the NKRO interface, false = the boot 6KRO interface
+     *  (default, BIOS-safe). Persists on the dongle across reboots. Resolves to
+     *  the current state. */
+    setNkro(enabled?: boolean): Promise<boolean>
 }
 
 export interface KeyboardService {

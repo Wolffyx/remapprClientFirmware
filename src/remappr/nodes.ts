@@ -109,6 +109,26 @@ export async function clearAllBonds(rpc: RemapprRpc): Promise<number> {
     return reply.data.length >= 1 ? reply.data[0] : 0
 }
 
+// pattern-check: skip — thin async wrapper over DONGLE.SET_NKRO, same shape as
+// the wrappers above; no GoF abstraction.
+/** Set (or query, when `enabled` is omitted) the dongle's keystroke routing
+ *  (DONGLE.SET_NKRO): true = the NKRO interface, false = the boot 6KRO
+ *  interface (default, BIOS-safe). Persists across dongle reboots. Returns the
+ *  current state. Throws on a non-dongle device (ERR_CMD). */
+export async function setDongleNkro(
+    rpc: RemapprRpc,
+    enabled?: boolean,
+): Promise<boolean> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.SET_NKRO,
+        enabled === undefined ? undefined : new Uint8Array([enabled ? 1 : 0]),
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`SET_NKRO → ${statusName(reply.status)}`)
+    return reply.data.length >= 1 ? reply.data[0] !== 0 : false
+}
+
 // pattern-check: skip — orchestrates establishNodeSession + one callSealedRelay;
 // linear async flow, same idiom as the wrappers above, no GoF abstraction.
 /**

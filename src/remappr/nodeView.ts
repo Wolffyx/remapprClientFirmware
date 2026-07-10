@@ -14,6 +14,7 @@ import {
     forgetNode,
     listNodes,
     openPairWindow,
+    setDongleNkro,
     unpairRadio,
 } from './nodes'
 import type { DeviceInfo as RawDeviceInfo, NodeRecord } from './protocol'
@@ -101,6 +102,10 @@ export function buildNodesApi(rpc: RemapprRpc): NodesApi {
 
         clearAllBonds(): Promise<number> {
             return clearAllBonds(rpc)
+        },
+
+        setNkro(enabled?: boolean): Promise<boolean> {
+            return setDongleNkro(rpc, enabled)
         },
     }
 }

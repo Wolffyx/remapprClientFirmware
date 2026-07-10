@@ -176,6 +176,10 @@ export const DongleVerb = {
      *  when no bonded node reports a MAIN election role. The roster already carries
      *  a `master` flag per record, so this is a convenience lookup. */
     GET_MASTER: 0x06,
+    /** Keystroke routing over the dongle's USB: arg[0] 1 = the NKRO interface,
+     *  0 = the boot 6KRO interface (default, BIOS-safe); NO arg = query only.
+     *  Reply: u8 current state. The choice persists across dongle reboots. */
+    SET_NKRO: 0x07,
 } as const
 
 /** Device role (enum remappr_role, firmware include/remappr/role.h) — reported as
