@@ -6,6 +6,7 @@ import {
     getNodeInfo,
     listNodes,
     openPairWindow,
+    setDongleNkro,
 } from './nodes'
 import {
     DongleVerb,
@@ -211,5 +212,32 @@ describe('dongle pairing control (DONGLE namespace)', () => {
             data: new Uint8Array(),
         }))
         await expect(clearAllBonds(rpc)).rejects.toThrow(/CLEAR_ALL_BONDS/)
+    })
+
+    it('setDongleNkro(true) sends arg [1] and returns the new state', async () => {
+        const rpc = fakeRpc(async (ns, verb, arg) => {
+            expect(ns).toBe(Namespace.DONGLE)
+            expect(verb).toBe(DongleVerb.SET_NKRO)
+            expect(arg).toEqual(new Uint8Array([1]))
+            return { status: Status.OK, data: new Uint8Array([1]) }
+        })
+        await expect(setDongleNkro(rpc, true)).resolves.toBe(true)
+    })
+
+    it('setDongleNkro() with no arg queries without mutating', async () => {
+        const rpc = fakeRpc(async (_ns, verb, arg) => {
+            expect(verb).toBe(DongleVerb.SET_NKRO)
+            expect(arg).toBeUndefined()
+            return { status: Status.OK, data: new Uint8Array([0]) }
+        })
+        await expect(setDongleNkro(rpc)).resolves.toBe(false)
+    })
+
+    it('setDongleNkro throws on a non-dongle device (ERR_CMD)', async () => {
+        const rpc = fakeRpc(async () => ({
+            status: Status.ERR_CMD,
+            data: new Uint8Array(),
+        }))
+        await expect(setDongleNkro(rpc, false)).rejects.toThrow(/SET_NKRO/)
     })
 })

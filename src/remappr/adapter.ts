@@ -21,6 +21,7 @@ import { buildNodesApi } from './nodeView'
 import {
     BLE_CONTROL_CHAR_UUID,
     BLE_SERVICE_UUID,
+    Cap,
     Cmd,
     type DeviceInfo as RawDeviceInfo,
     DongleVerb,
@@ -54,7 +55,9 @@ interface ProbedRemappr {
     rpc: RemapprRpc
     discovery: DiscoveryResult
     deviceInfo: DeviceInfo
-    capBits: number
+    /** GET_CAPABILITIES bitmask, or null when the firmware predates the verb
+     *  (capability unknown — assume features like auth are present). */
+    capBits: number | null
     /** The device self-identified (or was detected) as a ROLE_DONGLE hub. */
     isDongle: boolean
 }
@@ -133,7 +136,7 @@ async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null>
 
         // GET_CAPABILITIES is a keyboard verb on the legacy path; a dongle drops
         // it (and would cost a probe-timeout), so skip it for a dongle.
-        let capBits = 0
+        let capBits: number | null = null
         if (!isDongle) {
             try {
                 const caps = await rpc.callPlain(
@@ -211,7 +214,7 @@ export const remapprAdapter: FirmwareAdapter = {
                 throw new TransportError('Remappr probe failed during connect')
             }
         }
-        const { rpc, discovery, deviceInfo, isDongle } = probed
+        const { rpc, discovery, deviceInfo, isDongle, capBits } = probed
 
         if (signal.aborted) {
             await rpc.close({ abortTransport: true }).catch(() => undefined)
@@ -246,7 +249,14 @@ export const remapprAdapter: FirmwareAdapter = {
                 })
             }
 
-            const session = await establishSession(rpc)
+            // §19 is capability-gated: a dev/no-auth firmware (CAP_AUTH clear)
+            // takes plaintext writes, so skip the handshake entirely there. A
+            // null capBits means the firmware predates GET_CAPABILITIES —
+            // assume auth is present (the pre-capability behavior).
+            const session =
+                capBits === null || (capBits & Cap.AUTH) !== 0
+                    ? await establishSession(rpc)
+                    : undefined
 
             const loaded = await loadDeviceConfig(rpc, discovery)
 
