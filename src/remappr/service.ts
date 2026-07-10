@@ -291,14 +291,6 @@ export class RemapprKeyboardService implements KeyboardService {
         }
     }
 
-    /** The sealed-write session, guaranteed present on a writable service. */
-    private requireSession(): RemapprSession {
-        if (!this.session) {
-            throw new ProtocolError('No control-auth session for this service')
-        }
-        return this.session
-    }
-
     /* ── editing buffer ─────────────────────────────────────────────────── */
 
     /** The macro at `idx` with any pending edit applied (read path). */
@@ -548,7 +540,6 @@ export class RemapprKeyboardService implements KeyboardService {
 
     async commit(): Promise<void> {
         this.assertWritable()
-        const session = this.requireSession()
         // Fold pending macro / tap-dance edits (§24) into the config the layers
         // raise onto, so a committed blob carries them (and their names).
         const next = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
@@ -556,24 +547,22 @@ export class RemapprKeyboardService implements KeyboardService {
         const { blob } = buildRemapprBlob(next, { configVersion: version })
         const padded = padTo(blob, BLOB_ALIGN)
 
-        await this.sealedOk(Cmd.WRITE_CONFIG_BEGIN, undefined, 'WRITE_CONFIG_BEGIN')
+        await this.writeOk(Cmd.WRITE_CONFIG_BEGIN, undefined, 'WRITE_CONFIG_BEGIN')
         for (let off = 0; off < padded.length; off += this.sealedChunk) {
             const slice = padded.subarray(
                 off,
                 Math.min(off + this.sealedChunk, padded.length),
             )
-            await this.sealedOk(Cmd.WRITE_CONFIG_CHUNK, slice, 'WRITE_CONFIG_CHUNK')
+            await this.writeOk(Cmd.WRITE_CONFIG_CHUNK, slice, 'WRITE_CONFIG_CHUNK')
         }
-        const validate = await this.rpc.callSealed(session, Cmd.VALIDATE_CONFIG)
+        const validate = await this.writeCall(Cmd.VALIDATE_CONFIG)
         if (validate.status !== Status.OK) {
-            await this.rpc
-                .callSealed(session, Cmd.ROLLBACK_CONFIG)
-                .catch(() => undefined)
+            await this.writeCall(Cmd.ROLLBACK_CONFIG).catch(() => undefined)
             throw new ProtocolError(
                 `VALIDATE_CONFIG failed: ${statusName(validate.status)}`,
             )
         }
-        await this.sealedOk(Cmd.COMMIT_CONFIG, undefined, 'COMMIT_CONFIG')
+        await this.writeOk(Cmd.COMMIT_CONFIG, undefined, 'COMMIT_CONFIG')
 
         this.config = next
         this.configVersion = version
@@ -581,12 +570,23 @@ export class RemapprKeyboardService implements KeyboardService {
         this.markPending(false)
     }
 
-    private async sealedOk(
+    // pattern-check: skip — sealed-vs-plain fallback inside two existing private
+    // helpers of this service; conditional dispatch, no GoF abstraction.
+    /** A mutating verb: sealed through the §19 session when the device has one,
+     *  plaintext when the firmware advertises no auth (dev/no-auth build — the
+     *  device accepts mutating verbs in the clear there). */
+    private writeCall(cmd: number, arg?: Uint8Array) {
+        return this.session
+            ? this.rpc.callSealed(this.session, cmd, arg)
+            : this.rpc.callPlain(cmd, arg)
+    }
+
+    private async writeOk(
         cmd: number,
         arg: Uint8Array | undefined,
         label: string,
     ): Promise<void> {
-        const r = await this.rpc.callSealed(this.requireSession(), cmd, arg)
+        const r = await this.writeCall(cmd, arg)
         if (r.status !== Status.OK) {
             throw new ProtocolError(`${label} failed: ${statusName(r.status)}`)
         }
@@ -595,11 +595,9 @@ export class RemapprKeyboardService implements KeyboardService {
     async discardChanges(): Promise<void> {
         // Abort any staging the device started, then drop the in-memory edits by
         // re-lowering from the last-known config (source of truth). A read-only
-        // view has no session and never staged anything — just re-seed.
-        if (this.session) {
-            await this.rpc
-                .callSealed(this.session, Cmd.ROLLBACK_CONFIG)
-                .catch(() => undefined)
+        // view never staged anything — just re-seed.
+        if (!this.readOnly) {
+            await this.writeCall(Cmd.ROLLBACK_CONFIG).catch(() => undefined)
         }
         this.clearEdits()
         this.seedLayersFromConfig()
