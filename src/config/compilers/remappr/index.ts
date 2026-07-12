@@ -1288,6 +1288,24 @@ function encodeBlob(
     if (macroCtx.records.length > 0) builder.macroTable(macroCtx.records)
     if (combos.length > 0) builder.comboTable(combos)
     if (encoders.length > 0) builder.encoderTable(encoders)
+    // TBL_MOUSE (§4b): pointer settings from the v2 node.mouse block. Emitted
+    // when the node declares any pointer intent (cpi / auto-layer timeout /
+    // accel curve); flags is reserved (0). Old firmware skips the unknown table.
+    const mouseCfg = config.node?.mouse
+    if (
+        mouseCfg &&
+        (mouseCfg.cpi || mouseCfg.autoLayerTimeoutMs || mouseCfg.accel?.length)
+    ) {
+        builder.mouseTable({
+            cpi: mouseCfg.cpi ?? 0,
+            autoLayerTimeoutMs: mouseCfg.autoLayerTimeoutMs ?? 0,
+            flags: 0,
+            accel: (mouseCfg.accel ?? []).map(([speedIn, multX100]) => ({
+                speedIn,
+                multX100,
+            })),
+        })
+    }
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
     if (leaders.length > 0) builder.leaderTable(leaders)

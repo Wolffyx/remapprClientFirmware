@@ -270,6 +270,44 @@ describe('decodeRemapprBlob TBL_RGB (id 7 per-key colors)', () => {
     })
 })
 
+describe('decodeRemapprBlob TBL_MOUSE (id 8 pointer settings §4b)', () => {
+    // pattern-check: skip — decode fixture, no production logic
+    const mouseJson = (mouse: string): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "Ptr", "target": "zmk" }, ${kb(2)},
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+        "node": { "personality": "mouse", "mouse": ${mouse} }
+    }`
+
+    it('emits cpi + auto-layer timeout + accel curve and decodes them back', () => {
+        const cfg = parseKeymap(
+            mouseJson(
+                '{ "cpi": 1600, "autoLayerTimeoutMs": 400, "accel": [[100,100],[400,180]] }',
+            ),
+        )
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node?.mouse).toEqual({
+            cpi: 1600,
+            autoLayerTimeoutMs: 400,
+            accel: [
+                [100, 100],
+                [400, 180],
+            ],
+        })
+    })
+
+    it('omits the table when node.mouse carries no pointer intent', () => {
+        const cfg = parseKeymap(mouseJson('{}'))
+        const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node).toBeUndefined()
+    })
+})
+
 describe('remappr round-trip (encode → decode → re-encode is byte-stable)', () => {
     it('bare keys + transparent + none', () => {
         roundTrips(`{
@@ -280,6 +318,17 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
                 { "name": "base", "bindings": ["A", "B", "C"] },
                 { "name": "fn", "bindings": [{ "type": "transparent" }, "A", { "type": "none" }] }
             ]
+        }`)
+    })
+
+    // pattern-check: skip — round-trip test data, no production logic
+    it('node.mouse pointer settings (§4b TBL_MOUSE) round-trip', () => {
+        roundTrips(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "Ptr", "target": "zmk" }, ${kb(2)},
+            "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+            "node": { "mouse": { "cpi": 1600, "autoLayerTimeoutMs": 400,
+                                 "accel": [[100,100],[400,180]] } }
         }`)
     })
 

@@ -227,10 +227,14 @@ describe('migrate: node/firmware/board sections', () => {
         expect(round.board).toEqual(cfg.board)
     })
 
-    it('does not affect the compiled blob', () => {
+    it('compiles node.mouse (§4b) but not personality/firmware/board', () => {
+        // node.mouse lowers to TBL_MOUSE (§4b), so the compiled-part twin must
+        // carry it; personality, firmware and board are host-only and never
+        // touch the blob, so dropping them leaves the bytes identical.
         const bare = `{ "version": 2, "kind": "remappr.keymap",
             "meta": { "name": "N" },
-            "layers": [ { "name": "base", "keys": ["A","B"] } ] }`
+            "layers": [ { "name": "base", "keys": ["A","B"] } ],
+            "node": { "mouse": { "cpi": 1600 } } }`
         expect(bytesOf(SRC)).toEqual(bytesOf(bare))
     })
 })

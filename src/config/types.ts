@@ -687,10 +687,23 @@ export interface ConfigBoard {
     [k: string]: unknown
 }
 
-/** Per-personality node configuration (v2). Open shape; only `personality` is
- *  well-known today, the rest is preserved for later phases. */
+/** Pointer/mouse-node settings compiled to TBL_MOUSE (§4b). */
+export interface ConfigMouse {
+    /** Sensor resolution, counts/inch. Omit to keep the firmware default. */
+    cpi?: number
+    /** Auto-layer hold after pointer activity, ms. Omit / 0 = disabled. */
+    autoLayerTimeoutMs?: number
+    /** Acceleration curve: each point is [speedIn, multX100], the multiplier
+     *  scaled ×100 (so 100 = 1.0×). */
+    accel?: Array<[number, number]>
+}
+
+/** Per-personality node configuration (v2). Open shape; `personality` and the
+ *  `mouse` pointer block are well-known, the rest is preserved for later phases. */
 export interface ConfigNode {
     personality?: 'keyboard' | 'mouse' | 'joystick' | 'dongle'
+    /** Pointer settings (§4b, TBL_MOUSE) — present on mouse / hybrid nodes. */
+    mouse?: ConfigMouse
     [k: string]: unknown
 }
 
