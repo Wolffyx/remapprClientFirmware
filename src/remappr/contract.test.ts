@@ -17,6 +17,7 @@ import {
 } from '../config/compilers/remappr/decode'
 
 import { remapprAdapter } from './adapter'
+import { RemapprKeyboardService } from './service'
 import { ccmOpen, ccmSeal } from './auth'
 import { REMAPPR_KIND_KEYPRESS, REMAPPR_KIND_TRANSPARENT } from './actions'
 import {
@@ -453,6 +454,48 @@ describe('RemapprKeyboardService — live config round-trip', () => {
         const decoded = decodeRemapprBlob(pushed!)
         expect(decoded.code).toBe(DecodeCode.OK)
         expect(decoded.configVersion).toBe(SEED_VERSION + 1)
+        await svc.disconnect()
+    })
+
+    it('commits config-blob defaults edits so the pushed blob carries them', async () => {
+        const fake = makeFakeRemappr()
+        const svc = (await connectFake(fake)) as RemapprKeyboardService
+        await svc.getKeymap()
+
+        // Concrete-service API (not on the generic KeyboardService interface).
+        expect(svc.hasPendingChanges()).toBe(false)
+        svc.setConfigDefaults({
+            capsWordIdleMs: 500,
+            stickyReleaseDefaultMs: 250,
+            matrixPollPeriodMs: 2,
+        })
+        expect(svc.hasPendingChanges()).toBe(true)
+        // Read path merges staged edits over device truth.
+        expect(svc.getConfigDefaults().capsWordIdleMs).toBe(500)
+
+        await svc.commit()
+        expect(svc.hasPendingChanges()).toBe(false)
+
+        // The v3 LAYER timing tail in the pushed blob must round-trip the edits.
+        const decoded = decodeRemapprBlob(fake.getCommitted()!)
+        expect(decoded.code).toBe(DecodeCode.OK)
+        expect(decoded.config?.defaults?.capsWordIdleMs).toBe(500)
+        expect(decoded.config?.defaults?.stickyReleaseDefaultMs).toBe(250)
+        expect(decoded.config?.defaults?.matrixPollPeriodMs).toBe(2)
+        await svc.disconnect()
+    })
+
+    it('discardChanges drops staged config-blob defaults edits', async () => {
+        const fake = makeFakeRemappr()
+        const svc = (await connectFake(fake)) as RemapprKeyboardService
+        await svc.getKeymap()
+
+        svc.setConfigDefaults({ capsWordIdleMs: 999 })
+        expect(svc.hasPendingChanges()).toBe(true)
+        await svc.discardChanges()
+        expect(svc.hasPendingChanges()).toBe(false)
+        // Staged edit is gone → read path falls back to device truth.
+        expect(svc.getConfigDefaults().capsWordIdleMs).not.toBe(999)
         await svc.disconnect()
     })
 
