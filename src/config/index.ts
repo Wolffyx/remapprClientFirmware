@@ -140,6 +140,12 @@ export {
     preflightConfigBlob,
 } from './preflight'
 export {
+    type CapabilityWarning,
+    type FeatureName,
+    capabilityWarnings,
+    configRequiredFeatures,
+} from './featureWarnings'
+export {
     type ZmkConfFlags,
     deriveZmkConf,
     deriveQmkConfigH,
