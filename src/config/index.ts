@@ -135,6 +135,11 @@ export {
 
 export { type ProjectBundle, buildProjectBundle } from './bundle'
 export {
+    type DeviceCaps,
+    type PreflightIssue,
+    preflightConfigBlob,
+} from './preflight'
+export {
     type ZmkConfFlags,
     deriveZmkConf,
     deriveQmkConfigH,
