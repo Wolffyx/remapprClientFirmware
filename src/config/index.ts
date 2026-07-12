@@ -105,6 +105,7 @@ export {
     denormalizeAction,
     preferredSourceJson,
     serializeKeymap,
+    serializeKeymapV2,
     toSurfaceObject,
 } from './serialize'
 
@@ -133,6 +134,11 @@ export {
 } from './compiler'
 
 export { type ProjectBundle, buildProjectBundle } from './bundle'
+export {
+    type DeviceCaps,
+    type PreflightIssue,
+    preflightConfigBlob,
+} from './preflight'
 export {
     type ZmkConfFlags,
     deriveZmkConf,

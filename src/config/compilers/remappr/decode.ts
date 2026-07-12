@@ -567,6 +567,8 @@ function tapHold(
     }
     if (rec.tappingTermMs) th.tappingTermMs = rec.tappingTermMs
     if (rec.quickTapMs) th.quickTapMs = rec.quickTapMs
+    if (rec.requirePriorIdleMs) th.requirePriorIdleMs = rec.requirePriorIdleMs
+    if (rec.flags & BehaviorFlags.RETRO_TAP) th.retroTap = true
     return th
 }
 
@@ -782,6 +784,16 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         ? readLeaders(bytes, leaderT, decoded, diag)
         : []
 
+    // ── POSHOLD (optional, §28) → restore holdTriggerKeyPositions on tap-holds ──
+    const posholdT = table(TableId.Poshold)
+    if (posholdT) readPosholds(bytes, posholdT, decoded, diag)
+
+    // ── RGB (optional, id 7) → per-key colors (decode-only; preps Phase 4c emit) ──
+    const rgbT = table(TableId.Rgb)
+    const perKey = rgbT
+        ? readRgb(bytes, rgbT, numLayers, numPositions, diag)
+        : undefined
+
     // ── synthesize keyboard geometry (real layout comes from GET_KEY_LAYOUT) ──
     const keys: CanonGeometry[] = Array.from({ length: numPositions }, (_, i) => ({
         x: i,
@@ -802,7 +814,12 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
             ...(matrixPressDebounceMs ? { matrixPressDebounceMs } : {}),
             ...(matrixReleaseDebounceMs ? { matrixReleaseDebounceMs } : {}),
         },
-        keyboard: { id: 'decoded', name: 'Decoded', keys },
+        keyboard: {
+            id: 'decoded',
+            name: 'Decoded',
+            keys,
+            ...(perKey ? { lighting: { perKey } } : {}),
+        },
         layers,
         ...(combos.length ? { combos } : {}),
         ...(tapDances.length ? { tapDances } : {}),
@@ -827,6 +844,96 @@ function readRecordTable(bytes: Uint8Array, t: TableFrame): BehaviorRecord[] | n
     const out: BehaviorRecord[] = []
     for (let i = 0; i < count; i++) out.push(parseBehaviorRecord(r))
     return out
+}
+
+// TBL_POSHOLD (§28): u16 count + per entry { u16 behavior_index, u8 num_positions,
+// u8 pad, num_positions × u16 position }. Restores the position list onto the
+// referenced decoded tap-hold (the inverse of blobWriter.posholdTable). Bounds-
+// checked so a malformed/foreign blob can't throw: an overrun stops with a
+// diagnostic; a dangling or non-tap-hold reference is reported and skipped.
+function readPosholds(
+    bytes: Uint8Array,
+    t: TableFrame,
+    decoded: CanonAction[],
+    diag: DiagnosticBag,
+): void {
+    if (t.end - t.start < 2) return
+    const r = new ByteReader(bytes)
+    r.seek(t.start)
+    const count = r.u16()
+    for (let i = 0; i < count; i++) {
+        if (r.pos + 4 > t.end) {
+            diag.error('poshold table truncated')
+            return
+        }
+        const behaviorIndex = r.u16()
+        const num = r.u8()
+        r.u8() // reserved
+        if (r.pos + num * 2 > t.end) {
+            diag.error(`poshold entry ${i} positions truncated`)
+            return
+        }
+        const positions: number[] = []
+        for (let p = 0; p < num; p++) positions.push(r.u16())
+        const act = decoded[behaviorIndex]
+        if (!act) {
+            diag.error(
+                `poshold entry references behavior ${behaviorIndex} ` +
+                    `(only ${decoded.length})`,
+            )
+        } else if (act.type === 'tap_hold' && positions.length) {
+            act.holdTriggerKeyPositions = positions
+        }
+    }
+}
+
+// pattern-check: skip — pure byte-triple → "#rrggbb" formatter
+const rgbHex = (r: number, g: number, b: number): string =>
+    '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
+
+// TBL_RGB (id 7): 8-byte header { u8 mode, u8 flags(bit0=perLayer), u8 num_layers,
+// u8 pad, u16 num_positions, u16 pad } + RGB888 colors row-major [layer][pos].
+// Returns a sparse position→"#rrggbb" map from layer 0 (black/off omitted), or
+// undefined for an effects-only (mode 0) / empty / truncated table. A per-layer
+// table is collapsed to layer 0 with a diagnostic (per-layer authoring is Phase 4c).
+function readRgb(
+    bytes: Uint8Array,
+    t: TableFrame,
+    numLayers: number,
+    numPositions: number,
+    diag: DiagnosticBag,
+): Record<number, string> | undefined {
+    if (t.end - t.start < 8) {
+        diag.error('rgb table header truncated')
+        return undefined
+    }
+    const r = new ByteReader(bytes)
+    r.seek(t.start)
+    const mode = r.u8()
+    const perLayer = (r.u8() & 1) !== 0
+    const hdrLayers = r.u8()
+    r.u8() // pad
+    const hdrPositions = r.u16()
+    r.u16() // pad
+    if (mode === 0) return undefined // effects-only: no per-key colors
+    const layers = hdrLayers || numLayers
+    const positions = hdrPositions || numPositions
+    if (t.start + 8 + layers * positions * 3 > t.end) {
+        diag.error('rgb color data truncated')
+        return undefined
+    }
+    if (perLayer && layers > 1)
+        diag.warn(
+            'per-layer RGB decoded as layer 0 only (per-layer authoring is Phase 4c)',
+        )
+    const out: Record<number, string> = {}
+    for (let pos = 0; pos < positions; pos++) {
+        const rr = r.u8()
+        const gg = r.u8()
+        const bb = r.u8()
+        if (rr || gg || bb) out[pos] = rgbHex(rr, gg, bb)
+    }
+    return Object.keys(out).length ? out : undefined
 }
 
 interface DecodedNames {

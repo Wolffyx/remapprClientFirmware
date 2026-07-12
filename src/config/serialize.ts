@@ -16,6 +16,7 @@ import {
     parseKeymap,
 } from './normalize'
 import { type TargetDefaults, resolveDefaults } from './defaults'
+import { migrateToV2 } from './migrate'
 import type {
     CanonAction,
     CanonEncoderBinding,
@@ -78,6 +79,14 @@ const withTimings = (
         ...(a.quickTapMs !== undefined && a.quickTapMs !== d.quickTapMs
             ? { quickTapMs: a.quickTapMs }
             : {}),
+        ...(a.requirePriorIdleMs
+            ? { requirePriorIdleMs: a.requirePriorIdleMs }
+            : {}),
+        ...(a.retroTap ? { retroTap: a.retroTap } : {}),
+        ...(a.holdTriggerKeyPositions?.length
+            ? { holdTriggerKeyPositions: [...a.holdTriggerKeyPositions] }
+            : {}),
+        ...(a.holdTriggerOnRelease ? { holdTriggerOnRelease: true } : {}),
         ...(a.resolve !== undefined ? { resolve: a.resolve } : {}),
         ...(a.flavor !== undefined ? { flavor: a.flavor } : {}),
     }
@@ -501,6 +510,10 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                   })),
               }
             : {}),
+        // Whole-node sections round-trip verbatim (opaque data, no surface sugar).
+        ...(km.node ? { node: structuredClone(km.node) } : {}),
+        ...(km.firmware ? { firmware: structuredClone(km.firmware) } : {}),
+        ...(km.board ? { board: structuredClone(km.board) } : {}),
     }
 }
 
@@ -511,6 +524,15 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
  *  gone — app-visible notes live in `description` fields instead. */
 export function serializeKeymap(km: ConfigKeymap): string {
     return JSON.stringify(toSurfaceObject(km), null, 2)
+}
+
+// pattern-check: skip — thin composition of toSurfaceObject + migrateToV2, no abstraction
+/** Serialize to the compact, hand-authorable v2 form (the mirror of the v2
+ *  loader). Reuses the v1 default-stripping, then collapses the surface object to
+ *  the `keys` + verb-grammar + def-dictionary shape. A doc saved this way and its
+ *  verbose v1 spelling parse to identical bytes. */
+export function serializeKeymapV2(km: ConfigKeymap): string {
+    return JSON.stringify(migrateToV2(toSurfaceObject(km)), null, 2)
 }
 
 // pattern-check: skip — equivalence check picking literal vs canonical text

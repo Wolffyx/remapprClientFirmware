@@ -382,15 +382,17 @@ function tokenUsage(token: string): number | null {
 // only tap-hold shapes the firmware represents. bindings[0] is the hold behavior,
 // bindings[1] the tap behavior (ZMK order); holdParam/tapParam are their args. The
 // tap side must be &kp <key>; the hold side is &kp/&sk <modifier> (→ MOD_TAP) or
-// &mo/&to/&tog <layer> (→ LAYER_TAP). Anything else is a wire gap. requirePriorIdle
-// + retro-tap are emitted faithfully but are not modeled by the round-trip decoder
-// (CanonTapHold lacks them) — a hold-tap decodes back as a plain tap_hold.
+// &mo/&to/&tog <layer> (→ LAYER_TAP). Anything else is a wire gap. requirePriorIdle,
+// retro-tap, and §28 positions are emitted faithfully and restored by the decoder
+// onto a plain inline tap_hold (a def decodes back as inline); hold-trigger-on-
+// release has no wire bit yet (Phase 2) and is warned + dropped.
 function lowerHoldTap(
     action: Extract<CanonAction, { type: 'hold_tap' }>,
     def: CanonHoldTapDef,
     diag: DiagnosticBag,
     path: (string | number)[],
     layerIndex: Map<string, number>,
+    quickTapDefault?: number,
 ): BehaviorRecord {
     const holdTok = def.bindings[0].replace(/^&/, '')
     const tapTok = def.bindings[1].replace(/^&/, '')
@@ -422,7 +424,7 @@ function lowerHoldTap(
         flavor: holdTapFlavorCode(def.flavor),
         tap,
         tappingTermMs: def.tappingTermMs ?? 0,
-        quickTapMs: def.quickTapMs ?? 0,
+        quickTapMs: def.quickTapMs ?? quickTapDefault ?? 0,
         requirePriorIdleMs: def.requirePriorIdleMs ?? 0,
         flags: def.retroTap ? BehaviorFlags.RETRO_TAP : 0,
         // §28 positional hold: rides the record into TBL_POSHOLD (annotation,
@@ -488,6 +490,10 @@ interface CompCtx {
     /** TBL_NAMES entries (§24) collected as composites are first lowered, keyed
      *  by the assigned sub_index so the firmware/app see the real name. */
     names: NameRecord[]
+    /** `defaults.quickTapMs` lowered into every tap-hold record that has no
+     *  explicit quickTap (quickTap has no global wire slot, so the default must
+     *  ride each record). Undefined = leave records at 0 (firmware default). */
+    quickTapDefault?: number
 }
 
 // Memoize a composite record by ref-key and guard against a definition that
@@ -591,11 +597,26 @@ function lowerAction(
                     [...path, 'tap'],
                 )
             }
+            if (action.holdTriggerOnRelease)
+                diag.warn(
+                    `tap_hold hold-trigger-on-release is not on the wire — ` +
+                        `dropped (needs firmware ≥ Phase 2)`,
+                    path,
+                )
             const common = {
                 flavor: flavorCode(action),
                 tap: tapUsage,
                 tappingTermMs: action.tappingTermMs ?? 0,
-                quickTapMs: action.quickTapMs ?? 0,
+                // Explicit per-action quickTap wins (including an explicit 0 =
+                // "no quick tap"); else the config default; else 0 = fw default.
+                quickTapMs: action.quickTapMs ?? comp.quickTapDefault ?? 0,
+                requirePriorIdleMs: action.requirePriorIdleMs ?? 0,
+                flags: action.retroTap ? BehaviorFlags.RETRO_TAP : 0,
+                // §28 positional hold rides the record into TBL_POSHOLD (an
+                // annotation, not part of the 16-byte record); mirrors lowerHoldTap.
+                ...(action.holdTriggerKeyPositions?.length
+                    ? { posHold: [...action.holdTriggerKeyPositions] }
+                    : {}),
             }
             if (action.hold.type === 'modifier') {
                 return rec({
@@ -715,6 +736,16 @@ function lowerAction(
                 type: BehaviorType.System,
                 tap: SystemAction[action.type],
             })
+        case 'studio_unlock':
+            // Not a keymap behavior on remappr: device unlock is a RUCP control
+            // op (the app holds an authenticated session), not a key binding.
+            // Reject cleanly instead of silently emitting NONE.
+            diag.error(
+                'studio_unlock is not a remappr keymap action — device unlock ' +
+                    'is handled by the RUCP control channel, not a key binding',
+                path,
+            )
+            return rec({ type: BehaviorType.None })
         case 'ext_power':
             // EXT_POWER toggle / on / off → BH_SYSTEM with the matching system
             // action code; the keyboard_node sink drives the board's ext_power
@@ -862,7 +893,7 @@ function lowerAction(
                 diag.error(`unknown hold_tap "${action.ref}"`, path)
                 return rec({ type: BehaviorType.None })
             }
-            return lowerHoldTap(action, def, diag, path, layerIndex)
+            return lowerHoldTap(action, def, diag, path, layerIndex, comp.quickTapDefault)
         }
         case 'tap_dance':
             return withComposite(`td:${action.ref}`, comp, diag, path, () => {
@@ -983,13 +1014,17 @@ function lowerAction(
                     flags: BehaviorFlags.MORPH_ANY_MOD,
                 })
             })
-        default:
+        default: {
+            // Exhaustive over the CanonAction union; this guards against a new
+            // action type being added without a lowering arm.
+            const unhandled = action as { type?: string }
             diag.error(
-                `action "${action.type}" not yet supported by the remappr ` +
-                    `target (§44.3 gap)`,
+                `action "${unhandled.type ?? 'unknown'}" not yet supported by ` +
+                    `the remappr target (§44.3 gap)`,
                 path,
             )
             return rec({ type: BehaviorType.None })
+        }
     }
 }
 
@@ -1034,6 +1069,7 @@ function encodeBlob(
         memo: new Map(),
         inProgress: new Set(),
         names: [],
+        quickTapDefault: config.defaults?.quickTapMs,
     }
 
     // De-duplicated behavior table; bindings index into it.
@@ -1079,7 +1115,8 @@ function encodeBlob(
     // Combos (optional). Output is a bare behavior; positions index physical keys.
     const combos: ComboRecord[] = (config.combos ?? []).map((c, ci) => ({
         positions: c.keys,
-        timeoutMs: c.timeoutMs ?? 40,
+        // Per-combo timeout wins; else the config default; else the 40 ms fallback.
+        timeoutMs: c.timeoutMs ?? config.defaults?.comboTimeoutMs ?? 40,
         layer:
             c.layers && c.layers.length === 1
                 ? config.layers.findIndex((l) => l.name === c.layers![0])

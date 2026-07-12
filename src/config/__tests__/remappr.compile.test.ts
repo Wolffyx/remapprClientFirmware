@@ -917,3 +917,94 @@ describe('LAYER §20 timing tail (runtime debounce)', () => {
         expect(plain.config!.defaults?.pressDebounceMs).toBeUndefined()
     })
 })
+
+// pattern-check: skip — compile fixtures + assertions, no production logic
+describe('defaults lowering (quickTapMs / comboTimeoutMs → records)', () => {
+    const twoKeys = `"keyboard": { "id": "k", "name": "K", "keys": [{"x":0,"y":0},{"x":1,"y":0}] }`
+
+    const decodedBindings = (json: string): any[] => {
+        const decoded = decodeRemapprBlob(bytesOf(parseKeymap(json)))
+        expect(decoded.code).toBe(DecodeCode.OK)
+        return decoded.config!.layers[0].bindings
+    }
+
+    it('lowers defaults.quickTapMs into an inline tap-hold; explicit value wins', () => {
+        const [th0, th1] = decodedBindings(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "QT", "target": "zmk" }, ${twoKeys},
+            "defaults": { "tappingTermMs": 200, "quickTapMs": 120 },
+            "layers": [{ "name": "base", "bindings": [
+                { "type": "tap_hold", "tap": { "type": "key_press", "key": "A" },
+                  "hold": { "type": "modifier", "modifier": "LEFT_GUI" } },
+                { "type": "tap_hold", "tap": { "type": "key_press", "key": "B" },
+                  "hold": { "type": "modifier", "modifier": "LEFT_CTRL" }, "quickTapMs": 40 }
+            ] }]
+        }`)
+        expect(th0.quickTapMs).toBe(120) // no explicit → config default
+        expect(th1.quickTapMs).toBe(40) // explicit per-action wins
+    })
+
+    it('honors an explicit quickTapMs:0 over the default (no quick tap)', () => {
+        const [th] = decodedBindings(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "QT0", "target": "zmk" }, ${twoKeys},
+            "defaults": { "tappingTermMs": 200, "quickTapMs": 120 },
+            "layers": [{ "name": "base", "bindings": [
+                { "type": "tap_hold", "tap": { "type": "key_press", "key": "A" },
+                  "hold": { "type": "modifier", "modifier": "LEFT_GUI" }, "quickTapMs": 0 },
+                "B"
+            ] }]
+        }`)
+        // record quickTap 0 = firmware default → decoder leaves the field unset.
+        expect(th.quickTapMs).toBeUndefined()
+    })
+
+    it('lowers defaults.quickTapMs into a hold-tap definition (ht ref)', () => {
+        const [th] = decodedBindings(`{
+            "version": 2, "kind": "remappr.keymap", "meta": { "name": "HT" }, ${twoKeys},
+            "defaults": { "tappingTermMs": 200, "quickTapMs": 150 },
+            "holdTaps": { "hr": { "flavor": "balanced" } },
+            "layers": [{ "name": "base", "keys": [ "ht:hr(LGui,A)", "B" ] }]
+        }`)
+        expect(th.quickTapMs).toBe(150)
+    })
+
+    it('leaves records at the firmware default when no quickTapMs default is set', () => {
+        const [th] = decodedBindings(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "QN", "target": "zmk" }, ${twoKeys},
+            "defaults": { "tappingTermMs": 200 },
+            "layers": [{ "name": "base", "bindings": [
+                { "type": "tap_hold", "tap": { "type": "key_press", "key": "A" },
+                  "hold": { "type": "modifier", "modifier": "LEFT_GUI" } },
+                "B"
+            ] }]
+        }`)
+        expect(th.quickTapMs).toBeUndefined()
+    })
+
+    const decodedCombo = (json: string): any => {
+        const decoded = decodeRemapprBlob(bytesOf(parseKeymap(json)))
+        expect(decoded.code).toBe(DecodeCode.OK)
+        return decoded.config!.combos![0]
+    }
+
+    it('lowers defaults.comboTimeoutMs into a combo; per-combo value wins', () => {
+        const base = (combo: string, def: string): string => `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "CT", "target": "zmk" }, ${twoKeys},
+            "defaults": { "tappingTermMs": 200${def} },
+            "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+            "combos": [${combo}]
+        }`
+        expect(
+            decodedCombo(base(`{ "name": "e", "keys": [0, 1], "action": "ESCAPE" }`, ', "comboTimeoutMs": 30')).timeoutMs,
+        ).toBe(30) // no per-combo timeout → config default
+        expect(
+            decodedCombo(base(`{ "name": "e", "keys": [0, 1], "action": "ESCAPE", "timeoutMs": 25 }`, ', "comboTimeoutMs": 30')).timeoutMs,
+        ).toBe(25) // per-combo timeout wins
+        expect(
+            decodedCombo(base(`{ "name": "e", "keys": [0, 1], "action": "ESCAPE" }`, '')).timeoutMs,
+        ).toBe(40) // no default → 40 ms fallback
+    })
+})
