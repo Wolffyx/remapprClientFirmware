@@ -153,6 +153,23 @@ export const CommonVerb = {
     UNSUBSCRIBE: 0x08,
     QUERY_STAGE_OFFSET: 0x16,
     GET_CONFIG_METADATA: 0x17,
+    /** §20 error counters, no arg (relayable via target_node). Reply 10 B:
+     *  {u8 version(=1), u8 flags(bit0 radio counters valid), u32 mic_fail,
+     *  u16 tx_chan_fail, u16 link_resync} — free-running since boot. */
+    GET_ERROR_COUNTERS: 0x51,
+} as const
+
+/** LIGHTING-namespace verbs (§5.7 output-feedback family; each is
+ *  manifest-gated on its handler being wired — CAP bits 8/9 — and answers
+ *  ERR_CMD otherwise). Mutating, so product builds seal them (§19); served
+ *  plaintext while the node's control auth is dev-disabled. */
+export const LightingVerb = {
+    /** Fire a haptic effect cluster-wide. Arg 4 B: {u8 effect, u8 intensity,
+     *  u16 duration_ms LE}. */
+    HAPTIC_PULSE: 0x33,
+    /** Push one OLED text slot cluster-wide. Arg: {u8 slot, u8 flags(bit0
+     *  clear-first, bit1 invert), u8 len, text[len]} — text ≤ 30 B. */
+    SET_DISPLAY: 0x34,
 } as const
 
 /** KEYBOARD-namespace verbs (proto-v2, chunked). */
@@ -186,6 +203,13 @@ export const DongleVerb = {
      *  records {u8 channel, u8 rsvd, u16 ok, u16 fail}. map_gen bumps on every
      *  adaptive channel swap; ok/fail reset after each verdict window. */
     GET_LINK_STATS: 0x08,
+    /** Raw radio pipe table, no arg: every pipe 1..7 bonded or not, plus the
+     *  pair-window state — the diagnosis view behind LIST_NODES (incomplete
+     *  bonds, stuck pairing reservations, §6.4 control leases). Reply: 4-byte
+     *  header {u8 version(=1), u8 count, u8 pair_window, u8 pair_pipe} then
+     *  count 8-byte records {u8 pipe, u8 flags, u16 short_id, u8 device_type,
+     *  u8 node_role, u8 ctrl_owner, u8 hops}. */
+    GET_PIPE_TABLE: 0x09,
 } as const
 
 /** Device role (enum remappr_role, firmware include/remappr/role.h) — reported as
@@ -650,6 +674,140 @@ export function parseLinkStats(d: Uint8Array): LinkStats {
         failPercent: d[6],
         channels,
     }
+}
+
+// pattern-check: skip — wire-format types + parsers mirroring firmware verbs,
+// same idiom as the parseLinkStats block above; no GoF abstraction.
+
+/** One raw pipe slot from DONGLE.GET_PIPE_TABLE (§5.9 0x09). Unlike a
+ *  NodeRecord this includes unbonded/incomplete slots. */
+export interface PipeEntry {
+    pipe: number
+    bonded: boolean
+    /** Crypto session resumed (§15). */
+    session: boolean
+    /** Radio-live (failsafe alive). */
+    online: boolean
+    /** Short-id assigned (a bond mid-pair has none yet). */
+    hasId: boolean
+    /** §6.4 control lease held. */
+    leased: boolean
+    shortId: number
+    deviceType: number
+    nodeRole: number
+    /** Control-lease owner: 0 = USB host, 1 = BLE host, null = none. */
+    ctrlOwner: number | null
+    hops: number
+}
+
+/** DONGLE.GET_PIPE_TABLE reply: every pipe plus the pairing-window state. */
+export interface PipeTable {
+    /** §17 pairing window open. */
+    pairWindowOpen: boolean
+    /** Pipe reserved for an in-flight pair, or null. */
+    pairPipe: number | null
+    pipes: PipeEntry[]
+}
+
+const PIPE_TABLE_HDR = 4
+const PIPE_REC = 8
+
+export function parsePipeTable(d: Uint8Array): PipeTable {
+    if (d.length < PIPE_TABLE_HDR) throw new Error('pipe-table reply too short')
+    if (d[0] !== 1) throw new Error(`unknown pipe-table version ${d[0]}`)
+    const count = d[1]
+    if (d.length < PIPE_TABLE_HDR + count * PIPE_REC)
+        throw new Error('pipe-table reply truncated')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const pipes: PipeEntry[] = []
+    for (let i = 0; i < count; i++) {
+        const off = PIPE_TABLE_HDR + i * PIPE_REC
+        const flags = d[off + 1]
+        pipes.push({
+            pipe: d[off],
+            bonded: (flags & 0x01) !== 0,
+            session: (flags & 0x02) !== 0,
+            online: (flags & 0x04) !== 0,
+            hasId: (flags & 0x08) !== 0,
+            leased: (flags & 0x10) !== 0,
+            shortId: dv.getUint16(off + 2, true),
+            deviceType: d[off + 4],
+            nodeRole: d[off + 5],
+            ctrlOwner: d[off + 6] === 0xff ? null : d[off + 6],
+            hops: d[off + 7],
+        })
+    }
+    return {
+        pairWindowOpen: d[2] !== 0,
+        pairPipe: d[3] === 0 ? null : d[3],
+        pipes,
+    }
+}
+
+/** COMMON.GET_ERROR_COUNTERS reply (§20): free-running error counters since
+ *  boot. `radioValid` is false when the radio counters are unreadable on the
+ *  build (no radio, or a split tier where they live on the coprocessor) —
+ *  the counts then read 0. */
+export interface ErrorCounters {
+    radioValid: boolean
+    /** AEAD MIC failures on the radio session. */
+    micFail: number
+    /** On-link unACKed uplinks (§16 CHAN_FAIL). */
+    txChanFail: number
+    /** LINKED sessions torn back to SEARCHING. */
+    linkResync: number
+}
+
+const ERR_COUNTERS_LEN = 10
+
+export function parseErrorCounters(d: Uint8Array): ErrorCounters {
+    if (d.length < ERR_COUNTERS_LEN)
+        throw new Error('error-counters reply too short')
+    if (d[0] !== 1) throw new Error(`unknown error-counters version ${d[0]}`)
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    return {
+        radioValid: (d[1] & 0x01) !== 0,
+        micFail: dv.getUint32(2, true),
+        txChanFail: dv.getUint16(6, true),
+        linkResync: dv.getUint16(8, true),
+    }
+}
+
+/** Build the LIGHTING.HAPTIC_PULSE arg: {u8 effect, u8 intensity,
+ *  u16 duration_ms LE}. */
+export function buildHapticArg(
+    effect: number,
+    intensity: number,
+    durationMs: number,
+): Uint8Array {
+    const out = new Uint8Array(4)
+    out[0] = effect
+    out[1] = intensity
+    new DataView(out.buffer).setUint16(2, durationMs, true)
+    return out
+}
+
+/** Max SET_DISPLAY text payload (firmware REMAPPR_DISPLAY_TEXT_MAX). */
+export const DISPLAY_TEXT_MAX = 30
+
+/** Build the LIGHTING.SET_DISPLAY arg: {u8 slot, u8 flags, u8 len, text[len]}.
+ *  Throws when the encoded text exceeds DISPLAY_TEXT_MAX bytes. */
+export function buildDisplayArg(
+    slot: number,
+    text: string,
+    opts?: { clear?: boolean; invert?: boolean },
+): Uint8Array {
+    const raw = new TextEncoder().encode(text)
+    if (raw.length > DISPLAY_TEXT_MAX)
+        throw new Error(
+            `display text too long (${raw.length} B, max ${DISPLAY_TEXT_MAX})`,
+        )
+    const out = new Uint8Array(3 + raw.length)
+    out[0] = slot
+    out[1] = (opts?.clear ? 1 : 0) | (opts?.invert ? 2 : 0)
+    out[2] = raw.length
+    out.set(raw, 3)
+    return out
 }
 
 /** Build the `u16 short_id` arg for DONGLE.GET_NODE_INFO. */

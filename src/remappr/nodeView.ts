@@ -13,11 +13,13 @@ import {
     clearAllBonds,
     forgetNode,
     getLinkStats,
+    getPipeTable,
     listNodes,
     openPairWindow,
     setDongleNkro,
     unpairRadio,
     type LinkStats,
+    type PipeTable,
 } from './nodes'
 import type { DeviceInfo as RawDeviceInfo, NodeRecord } from './protocol'
 import type { RemapprRpc } from './rpc'
@@ -112,6 +114,10 @@ export function buildNodesApi(rpc: RemapprRpc): NodesApi {
 
         getLinkStats(): Promise<LinkStats> {
             return getLinkStats(rpc)
+        },
+
+        getPipeTable(): Promise<PipeTable> {
+            return getPipeTable(rpc)
         },
     }
 }

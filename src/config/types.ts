@@ -322,6 +322,18 @@ export interface ConfigDefaults {
     tappingTermMs?: number
     quickTapMs?: number
     comboTimeoutMs?: number
+    /** Engine release debounce (LAYER table byte 6); 0/absent = firmware
+     *  default. */
+    releaseDebounceMs?: number
+    /** Engine eager-press debounce (LAYER timing tail); 0/absent = keep the
+     *  devicetree value. */
+    pressDebounceMs?: number
+    /** Matrix-scan press debounce (LAYER timing tail); 0/absent = keep the
+     *  devicetree value. */
+    matrixPressDebounceMs?: number
+    /** Matrix-scan release debounce (LAYER timing tail); 0/absent = keep the
+     *  devicetree value. */
+    matrixReleaseDebounceMs?: number
 }
 
 /** ZMK matrix `diode-direction`. */

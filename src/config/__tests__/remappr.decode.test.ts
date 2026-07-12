@@ -426,6 +426,82 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
         expect(keep.keepMods).toEqual(['LEFT_GUI'])
     })
 
+    it('grave_escape round-trips to the canonical token', () => {
+        const json = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "GE", "target": "zmk" }, ${kb(1)},
+            "layers": [{ "name": "base",
+                "bindings": [{ "type": "grave_escape" }] }]
+        }`
+        roundTrips(json)
+        const { config } = decodeRemapprBlob(
+            buildRemapprBlob(parseKeymap(json), { configVersion: 1 }).blob,
+        )
+        expect(config!.layers[0].bindings[0]).toEqual({ type: 'grave_escape' })
+        // Recognized as the grave-escape shape — no synthetic mod_morph def.
+        expect(config!.modMorphs ?? []).toHaveLength(0)
+    })
+
+    it('sticky non-mod key round-trips through BH_STICKY_KEY', () => {
+        const json = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "SK", "target": "zmk" }, ${kb(1)},
+            "layers": [{ "name": "base",
+                "bindings": [{ "type": "sticky_key", "key": "A" }] }]
+        }`
+        roundTrips(json)
+        const { config } = decodeRemapprBlob(
+            buildRemapprBlob(parseKeymap(json), { configVersion: 1 }).blob,
+        )
+        const a = config!.layers[0].bindings[0]
+        expect(a.type).toBe('sticky_key')
+        if (a.type === 'sticky_key') expect(a.key).toMatch(/keyboard_a$/)
+    })
+
+    it('mod_morph keepMods partial round-trips via the suppress mask', () => {
+        const json = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "KP", "target": "zmk" }, ${kb(1)},
+            "layers": [{ "name": "base",
+                "bindings": [{ "type": "mod_morph", "ref": "mm" }] }],
+            "modMorphs": [{ "id": "mm",
+                "mods": ["LEFT_SHIFT", "LEFT_GUI"],
+                "keepMods": ["LEFT_GUI"],
+                "bindings": ["N", "M"] }]
+        }`
+        roundTrips(json)
+        const { config } = decodeRemapprBlob(
+            buildRemapprBlob(parseKeymap(json), { configVersion: 1 }).blob,
+        )
+        expect(config!.modMorphs![0].keepMods).toEqual(['LEFT_GUI'])
+    })
+
+    it('macro pause_for_release round-trips; tap_time is stable-lossy', () => {
+        const json = `{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "MP", "target": "zmk" }, ${kb(1)},
+            "layers": [{ "name": "base",
+                "bindings": [{ "type": "macro", "ref": "adv" }] }],
+            "macros": [{ "id": "adv", "steps": [
+                { "type": "press", "key": "LSHIFT" },
+                { "type": "pause_for_release" },
+                { "type": "release", "key": "LSHIFT" },
+                { "type": "tap_time", "ms": 30 },
+                { "type": "tap", "key": "A" }
+            ] }]
+        }`
+        roundTrips(json)
+        const { config } = decodeRemapprBlob(
+            buildRemapprBlob(parseKeymap(json), { configVersion: 1 }).blob,
+        )
+        const steps = config!.macros![0].steps.map((s) => s.type)
+        // tap_time decodes as its expansion (press/wait/release) — byte-stable
+        // on re-encode, canonically lossy by design.
+        expect(steps).toEqual([
+            'press', 'pause_for_release', 'release', 'press', 'wait', 'release',
+        ])
+    })
+
     it('a composite reused across cells dedupes to one behavior + one def', () => {
         const json = `{
             "schemaVersion": 1, "kind": "remappr.keymap",

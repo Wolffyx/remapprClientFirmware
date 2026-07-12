@@ -310,6 +310,12 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
             const k = usageToKey(usage)
             return k ? { type: 'sticky_key', key: k } : unmodeled('sticky_mod')
         }
+        case BehaviorType.StickyKey: {
+            // One-shot non-mod key (BH_STICKY_KEY); the modifier form decodes
+            // from StickyMod above — both round-trip to canonical sticky_key.
+            const k = keyOf(rec.tap)
+            return k ? { type: 'sticky_key', key: k } : unmodeled('sticky_key')
+        }
         case BehaviorType.KeyToggle: {
             const k = keyOf(rec.tap)
             return k ? { type: 'key_toggle', key: k } : { type: 'none' }
@@ -481,6 +487,7 @@ function decodeTapDance(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
     return { type: 'tap_dance', ref }
 }
 
+// pattern-check: skip — decoder branch mirroring the encoder's morph shapes
 function decodeModMorph(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
     const ref = ctx.mmName(rec.subIndex) ?? `mm_${rec.subIndex}`
     const sub0 = ctx.subs[rec.subIndex]
@@ -489,6 +496,25 @@ function decodeModMorph(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
         ctx.diag.error(`mod_morph "${ref}" needs two sub-behaviors`, ctx.path)
         return { type: 'none' }
     }
+    // The exact shape the encoder emits for grave_escape (ANY-mod morph over
+    // Shift|GUI, Esc → grave, no suppression) round-trips to the canonical
+    // grave_escape token instead of a synthetic mod_morph def.
+    if (
+        (rec.flags & BehaviorFlags.MORPH_ANY_MOD) !== 0 &&
+        rec.hold === 0xaa &&
+        !(rec.flags & BehaviorFlags.MORPH_SUPPRESS_MODS) &&
+        sub0.type === BehaviorType.Key &&
+        sub0.tap === 0x29 &&
+        sub1.type === BehaviorType.Key &&
+        sub1.tap === 0x35
+    )
+        return { type: 'grave_escape' }
+    if (rec.flags & BehaviorFlags.MORPH_ANY_MOD)
+        ctx.diag.warn(
+            `mod_morph "${ref}" uses ANY-mod matching — the canonical schema ` +
+                `models only ALL-mod morphs; decoding as ALL`,
+            ctx.path,
+        )
     const mods = maskToMods(rec.hold)
     const def: CanonModMorph = {
         id: ref,
@@ -499,7 +525,10 @@ function decodeModMorph(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
         ],
     }
     // No SUPPRESS flag ⇒ the trigger mods passed through (ZMK keep-mods = all).
+    // An explicit suppress mask in `tap` keeps the mods OUTSIDE that mask.
     if (!(rec.flags & BehaviorFlags.MORPH_SUPPRESS_MODS)) def.keepMods = mods
+    else if (rec.tap !== 0 && (rec.hold & ~rec.tap) !== 0)
+        def.keepMods = maskToMods(rec.hold & ~rec.tap)
     ctx.modMorphs.push(def)
     return { type: 'mod_morph', ref }
 }
@@ -631,7 +660,17 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const numLayers = lr.u16()
     const numPositions = lr.u16()
     const defaultTermMs = lr.u16()
-    lr.u16() // release_debounce_ms — not modeled in ConfigDefaults
+    const releaseDebounceMs = lr.u16()
+    // Optional §20 timing tail (dlen >= 14): engine eager-press debounce + the
+    // matrix-scan debounce pair. 0 = keep the devicetree value.
+    let pressDebounceMs = 0
+    let matrixPressDebounceMs = 0
+    let matrixReleaseDebounceMs = 0
+    if (layerT.end - layerT.start >= 14) {
+        pressDebounceMs = lr.u16()
+        matrixPressDebounceMs = lr.u16()
+        matrixReleaseDebounceMs = lr.u16()
+    }
     if (numLayers === 0 || numPositions === 0) return fail(DecodeCode.BOUNDS)
 
     // ── BEHAVIOR (required) ──
@@ -756,7 +795,13 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         schemaVersion: 1,
         kind: 'remappr.keymap',
         meta: { name: 'Decoded keymap', target: 'remappr', version: String(configVersion) },
-        defaults: { tappingTermMs: defaultTermMs },
+        defaults: {
+            tappingTermMs: defaultTermMs,
+            ...(releaseDebounceMs ? { releaseDebounceMs } : {}),
+            ...(pressDebounceMs ? { pressDebounceMs } : {}),
+            ...(matrixPressDebounceMs ? { matrixPressDebounceMs } : {}),
+            ...(matrixReleaseDebounceMs ? { matrixReleaseDebounceMs } : {}),
+        },
         keyboard: { id: 'decoded', name: 'Decoded', keys },
         layers,
         ...(combos.length ? { combos } : {}),
@@ -869,6 +914,7 @@ function macroStep(
     diag: DiagnosticBag,
 ): CanonMacroStep | null {
     if (op === MacroOp.Wait) return { type: 'wait', ms: arg }
+    if (op === MacroOp.PauseForRelease) return { type: 'pause_for_release' }
     const key = usageToKey(arg)
     if (key === null) {
         diag.warn(`macro step usage 0x${arg.toString(16)} not in catalog`)

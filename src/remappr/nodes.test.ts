@@ -3,13 +3,16 @@ import { describe, expect, it } from 'vitest'
 import {
     clearAllBonds,
     forgetNode,
+    getErrorCounters,
     getLinkStats,
     getNodeInfo,
+    getPipeTable,
     listNodes,
     openPairWindow,
     setDongleNkro,
 } from './nodes'
 import {
+    CommonVerb,
     DongleVerb,
     Namespace,
     NODE_RECORD_LEN,
@@ -289,5 +292,157 @@ describe('dongle pairing control (DONGLE namespace)', () => {
             data: new Uint8Array(),
         }))
         await expect(getLinkStats(rpc)).rejects.toThrow(/GET_LINK_STATS/)
+    })
+})
+
+describe('pipe-table diagnostics (DONGLE.GET_PIPE_TABLE)', () => {
+    // One 8-byte pipe record for the fixture reply.
+    function pipeRec(
+        pipe: number,
+        flags: number,
+        shortId: number,
+        dtype = 0,
+        role = 0,
+        owner = 0xff,
+        hops = 0,
+    ): number[] {
+        return [pipe, flags, shortId & 0xff, shortId >> 8, dtype, role, owner, hops]
+    }
+
+    it('parses the header + per-pipe flags/owner', async () => {
+        const data = new Uint8Array([
+            1, 2, 1, 3, // version 1, 2 records, pair window OPEN, pipe 3 reserved
+            // bonded+session+online+id+leased, short 0x0001, dtype 1, role 0x11, USB owner, hop 0
+            ...pipeRec(1, 0x1f, 0x0001, 1, 0x11, 0, 0),
+            // bonded only (incomplete bond, no id), short 0
+            ...pipeRec(2, 0x01, 0x0000),
+        ])
+        const rpc = fakeRpc(async (ns, verb) => {
+            expect(ns).toBe(Namespace.DONGLE)
+            expect(verb).toBe(DongleVerb.GET_PIPE_TABLE)
+            return { status: Status.OK, data }
+        })
+        const table = await getPipeTable(rpc)
+        expect(table.pairWindowOpen).toBe(true)
+        expect(table.pairPipe).toBe(3)
+        expect(table.pipes).toHaveLength(2)
+        expect(table.pipes[0]).toEqual({
+            pipe: 1,
+            bonded: true,
+            session: true,
+            online: true,
+            hasId: true,
+            leased: true,
+            shortId: 1,
+            deviceType: 1,
+            nodeRole: 0x11,
+            ctrlOwner: 0,
+            hops: 0,
+        })
+        expect(table.pipes[1].bonded).toBe(true)
+        expect(table.pipes[1].hasId).toBe(false)
+        expect(table.pipes[1].ctrlOwner).toBeNull() // 0xff -> none
+    })
+
+    it('maps a closed pair window / no reserved pipe to null', async () => {
+        const rpc = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([1, 0, 0, 0]),
+        }))
+        const table = await getPipeTable(rpc)
+        expect(table.pairWindowOpen).toBe(false)
+        expect(table.pairPipe).toBeNull()
+        expect(table.pipes).toEqual([])
+    })
+
+    it('rejects truncated / unknown-version replies and ERR_CMD', async () => {
+        const truncated = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([1, 1, 0, 0, 1, 0]), // claims 1 record, carries 2 B
+        }))
+        await expect(getPipeTable(truncated)).rejects.toThrow(/truncated/)
+        const badVersion = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([9, 0, 0, 0]),
+        }))
+        await expect(getPipeTable(badVersion)).rejects.toThrow(/version/)
+        const notDongle = fakeRpc(async () => ({
+            status: Status.ERR_CMD,
+            data: new Uint8Array(),
+        }))
+        await expect(getPipeTable(notDongle)).rejects.toThrow(/GET_PIPE_TABLE/)
+    })
+})
+
+describe('error counters (COMMON.GET_ERROR_COUNTERS)', () => {
+    // 10-byte reply: version, flags, u32 mic, u16 chan_fail, u16 resync.
+    function counters(
+        flags: number,
+        mic: number,
+        chan: number,
+        resync: number,
+        version = 1,
+    ): Uint8Array {
+        const b = new Uint8Array(10)
+        const dv = new DataView(b.buffer)
+        b[0] = version
+        b[1] = flags
+        dv.setUint32(2, mic, true)
+        dv.setUint16(6, chan, true)
+        dv.setUint16(8, resync, true)
+        return b
+    }
+
+    it('decodes the counters + radio-valid flag', async () => {
+        const rpc = fakeRpc(async (ns, verb) => {
+            expect(ns).toBe(Namespace.COMMON)
+            expect(verb).toBe(CommonVerb.GET_ERROR_COUNTERS)
+            return { status: Status.OK, data: counters(0x01, 70000, 12, 3) }
+        })
+        const ec = await getErrorCounters(rpc)
+        expect(ec).toEqual({
+            radioValid: true,
+            micFail: 70000,
+            txChanFail: 12,
+            linkResync: 3,
+        })
+    })
+
+    it('relays with targetNode + retries and reports radio-invalid', async () => {
+        let seenOpts: unknown
+        const rpc = {
+            callUniversalPlain: async (
+                _ns: number,
+                _verb: number,
+                _arg?: Uint8Array,
+                opts?: unknown,
+            ) => {
+                seenOpts = opts
+                return { status: Status.OK, data: counters(0, 0, 0, 0) }
+            },
+        } as unknown as RemapprRpc
+        const ec = await getErrorCounters(rpc, 7)
+        expect(seenOpts).toMatchObject({ targetNode: 7 })
+        expect(ec.radioValid).toBe(false)
+    })
+
+    it('rejects short / unknown-version replies and ERR_CMD', async () => {
+        const short = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([1, 0, 0]),
+        }))
+        await expect(getErrorCounters(short)).rejects.toThrow(/short/)
+        const badVersion = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([9, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        }))
+        await expect(getErrorCounters(badVersion)).rejects.toThrow(/version/)
+        const noSource = fakeRpc(async () => ({
+            status: Status.ERR_CMD,
+            data: new Uint8Array(),
+        }))
+        await expect(getErrorCounters(noSource)).rejects.toThrow(
+            /GET_ERROR_COUNTERS/,
+        )
     })
 })
