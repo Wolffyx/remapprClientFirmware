@@ -86,6 +86,8 @@ const limitsBytes = (): Uint8Array =>
         ...le16(8192), // max_config_bytes
         16, // max_outstanding
         1, // supports_fragmentation
+        ...le16(0x003f), // feature_bitmask lo (bits 0..5 = all Phase-2 features)
+        ...le16(0x0000), // feature_bitmask hi
     ])
 const personalityBytes = (): Uint8Array =>
     Uint8Array.from([
@@ -161,6 +163,7 @@ describe('createRemapprRpc — universal (0xE2)', () => {
         expect(lim.maxSealedChunk).toBe(16)
         expect(lim.blobAlign).toBe(16)
         expect(lim.supportsFragmentation).toBe(true)
+        expect(lim.featureBitmask).toBe(0x3f)
         await rpc.close({ abortTransport: true })
     })
 

@@ -227,6 +227,10 @@ export const BehaviorFlags = {
     // MOD_MORPH: morph when ANY trigger mod is held instead of requiring all
     // of them (the QMK grave-escape shape).
     MORPH_ANY_MOD: 1 << 3,
+    // Tap-hold: an interrupting key resolves the hold only on the interrupter's
+    // release (roll-through taps), not on its press. Honored by the fw engine
+    // since remappr-firmware #58 (REMAPPR_BHF_HOLD_TRIGGER_ON_RELEASE).
+    HOLD_TRIGGER_ON_RELEASE: 1 << 4,
 } as const
 
 // HID modifier byte bits (REMAPPR_MOD_*).
@@ -442,24 +446,50 @@ export class BlobBuilder {
             pressDebounceMs?: number
             matrixPressDebounceMs?: number
             matrixReleaseDebounceMs?: number
+            // v3 engine timing tail (firmware dlen >= 24, keymap_decode.c).
+            capsWordIdleMs?: number
+            stickyReleaseDefaultMs?: number
+            macroDefaultWaitMs?: number
+            macroDefaultTapMs?: number
+            matrixPollPeriodMs?: number
         },
     ): this {
+        // pattern-check: skip extends the existing fluent tableBegin/tableEnd
+        // Builder with a fixed wire tail; no new abstraction (cross-repo cite
+        // to firmware keymap_decode.c is unresolvable by the preamble hook).
         this.tableBegin(TableId.Layer, 1)
         this.w.u16(numLayers)
         this.w.u16(numPositions)
         this.w.u16(defaultTermMs)
         this.w.u16(releaseDebounceMs)
-        // Optional §20 timing tail (firmware dlen >= 14): engine eager-press
-        // debounce + the matrix-scan debounce pair. 0 = keep the devicetree
-        // value, so the tail is emitted only when some field is set — an
-        // all-default config keeps the 8-byte layout (goldens unchanged).
+        // Optional §20 timing tail. 0 = keep the devicetree/engine default, so
+        // a tail is emitted only when some field is set — an all-default config
+        // keeps the 8-byte layout (goldens unchanged). Two nested extents:
+        //   v2 (dlen >= 14): press debounce + matrix-scan debounce pair [8..13]
+        //   v3 (dlen >= 24): caps-word idle, sticky release-after, macro default
+        //                    wait/tap, matrix poll period            [14..23]
+        // v3 sits *after* v2, so emitting any v3 field forces the v2 slot too
+        // (defaulting to 0) to keep offsets aligned with the firmware decoder.
         const press = timing?.pressDebounceMs ?? 0
         const mPress = timing?.matrixPressDebounceMs ?? 0
         const mRelease = timing?.matrixReleaseDebounceMs ?? 0
-        if (press || mPress || mRelease) {
+        const capsIdle = timing?.capsWordIdleMs ?? 0
+        const stickyRel = timing?.stickyReleaseDefaultMs ?? 0
+        const macroWait = timing?.macroDefaultWaitMs ?? 0
+        const macroTap = timing?.macroDefaultTapMs ?? 0
+        const matrixPoll = timing?.matrixPollPeriodMs ?? 0
+        const hasV3 = capsIdle || stickyRel || macroWait || macroTap || matrixPoll
+        if (press || mPress || mRelease || hasV3) {
             this.w.u16(press)
             this.w.u16(mPress)
             this.w.u16(mRelease)
+            if (hasV3) {
+                this.w.u16(capsIdle)
+                this.w.u16(stickyRel)
+                this.w.u16(macroWait)
+                this.w.u16(macroTap)
+                this.w.u16(matrixPoll)
+            }
         }
         this.tableEnd()
         return this

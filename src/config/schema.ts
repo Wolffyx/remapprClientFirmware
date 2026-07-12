@@ -833,6 +833,13 @@ const BaseKeymapSchema = z.object({
             pressDebounceMs: z.number().int().nonnegative().optional(),
             matrixPressDebounceMs: z.number().int().nonnegative().optional(),
             matrixReleaseDebounceMs: z.number().int().nonnegative().optional(),
+            // v3 engine timing tail (LAYER dlen >= 24); 0/absent = firmware
+            // default. Honored by remappr-firmware since #58.
+            capsWordIdleMs: z.number().int().nonnegative().optional(),
+            stickyReleaseDefaultMs: z.number().int().nonnegative().optional(),
+            macroDefaultWaitMs: z.number().int().nonnegative().optional(),
+            macroDefaultTapMs: z.number().int().nonnegative().optional(),
+            matrixPollPeriodMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
     keyboard: z.object({

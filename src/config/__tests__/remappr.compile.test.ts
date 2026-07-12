@@ -916,6 +916,62 @@ describe('LAYER §20 timing tail (runtime debounce)', () => {
         expect(plain.code).toBe(DecodeCode.OK)
         expect(plain.config!.defaults?.pressDebounceMs).toBeUndefined()
     })
+
+    // pattern-check: skip — compile/round-trip test assertions, no production logic
+    it('emits the 24-byte v3 tail when a v3 timing default is set', () => {
+        const b = bytesOf(
+            parseKeymap(
+                withDefaults({
+                    capsWordIdleMs: 1500,
+                    stickyReleaseDefaultMs: 800,
+                    macroDefaultWaitMs: 12,
+                    macroDefaultTapMs: 6,
+                    matrixPollPeriodMs: 2,
+                }),
+            ),
+        )
+        const [start, end] = findTable(b, 1)!
+        expect(end - start).toBe(24)
+        // v2 slot is zero-filled (none set) but present so the v3 offsets align.
+        expect(u16(b, start + 8)).toBe(0)
+        expect(u16(b, start + 10)).toBe(0)
+        expect(u16(b, start + 12)).toBe(0)
+        expect(u16(b, start + 14)).toBe(1500) // caps_word_idle_ms
+        expect(u16(b, start + 16)).toBe(800) // sticky_release_default_ms
+        expect(u16(b, start + 18)).toBe(12) // macro_default_wait_ms
+        expect(u16(b, start + 20)).toBe(6) // macro_default_tap_ms
+        expect(u16(b, start + 22)).toBe(2) // matrix_poll_period_ms
+    })
+
+    it('forces the v2 slot present when only a v3 value is set', () => {
+        const b = bytesOf(parseKeymap(withDefaults({ matrixPollPeriodMs: 5 })))
+        const [start, end] = findTable(b, 1)!
+        expect(end - start).toBe(24)
+        expect(u16(b, start + 22)).toBe(5) // matrix_poll_period_ms at [22]
+    })
+
+    it('round-trips the v3 timing defaults through the decoder', () => {
+        const b = bytesOf(
+            parseKeymap(
+                withDefaults({
+                    capsWordIdleMs: 1500,
+                    stickyReleaseDefaultMs: 800,
+                    macroDefaultWaitMs: 12,
+                    macroDefaultTapMs: 6,
+                    matrixPollPeriodMs: 2,
+                }),
+            ),
+        )
+        const decoded = decodeRemapprBlob(b)
+        expect(decoded.code).toBe(DecodeCode.OK)
+        expect(decoded.config!.defaults).toMatchObject({
+            capsWordIdleMs: 1500,
+            stickyReleaseDefaultMs: 800,
+            macroDefaultWaitMs: 12,
+            macroDefaultTapMs: 6,
+            matrixPollPeriodMs: 2,
+        })
+    })
 })
 
 // pattern-check: skip — compile fixtures + assertions, no production logic
