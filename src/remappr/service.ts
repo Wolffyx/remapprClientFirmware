@@ -49,6 +49,7 @@ import {
     REMAPPR_KIND_TRANSPARENT,
 } from './actions'
 import { remapprCodec } from './codec'
+import type { RemapprConfigEditing } from './configEditing'
 import { lowerConfigToNeutral, raiseNeutralToConfig } from './configBridge'
 import {
     actionsToMacro,
@@ -113,7 +114,9 @@ function padTo(b: Uint8Array, align: number): Uint8Array {
     return out
 }
 
-export class RemapprKeyboardService implements KeyboardService {
+export class RemapprKeyboardService
+    implements KeyboardService, RemapprConfigEditing
+{
     public readonly deviceInfo: DeviceInfo
     public readonly capabilities: Capabilities
     /** `'dongle'` for the dongle's own service; `'keyboard'` (default) otherwise. */
@@ -132,6 +135,11 @@ export class RemapprKeyboardService implements KeyboardService {
     /** Read-only dynamic entries (§24): tap-dance + combo surfaced to their tabs.
      *  Mod-morph has no tab (it shows on the bound key); set* reject for now. */
     public readonly dynamic?: DynamicEntriesApi
+    /** Device limits (§7.4.1) incl. the feature bitmask that gates the config-blob
+     *  editors. Sourced from GET_LIMITS at discovery; undefined on pre-limits fw.
+     *  (Was accepted in deps but never assigned — the editors' feature gate stayed
+     *  dark on real devices until this was wired.) */
+    public readonly limits?: Limits
 
     private readonly rpc: RemapprRpc
     private readonly session?: RemapprSession
@@ -185,6 +193,7 @@ export class RemapprKeyboardService implements KeyboardService {
         this.sharesTransport = deps.sharesTransport ?? false
         this.kind = deps.kind ?? 'keyboard'
         this.nodes = deps.nodes
+        this.limits = deps.limits
         this.deviceInfo = deps.deviceInfo
         this.config = deps.config
         this.configVersion = deps.configVersion

@@ -18,6 +18,7 @@ import {
 
 import { remapprAdapter } from './adapter'
 import { RemapprKeyboardService } from './service'
+import { supportsConfigEditing } from './configEditing'
 import { ccmOpen, ccmSeal } from './auth'
 import { REMAPPR_KIND_KEYPRESS, REMAPPR_KIND_TRANSPARENT } from './actions'
 import {
@@ -433,6 +434,18 @@ describe('RemapprKeyboardService — live config round-trip', () => {
         expect(km.layers[0].keys[0].kind).toBe(REMAPPR_KIND_KEYPRESS)
         expect(km.layers[0].keys[2].kind).toBe(REMAPPR_KIND_TRANSPARENT)
         expect(km.layers[0].keys[3].kind).toBe(REMAPPR_KIND_KEYPRESS)
+        await svc.disconnect()
+    })
+
+    it('exposes device limits + the config-editing surface (feature gate + demo parity)', async () => {
+        // GET_LIMITS is a proto-v2 (universal path) fetch.
+        const svc = await connectFake(makeFakeRemappr({ protoMax: 2 }))
+        // Regression: deps.limits used to be dropped, leaving service.limits
+        // undefined — so the config-blob editors' `feature="limits"` gate stayed
+        // dark on real devices. Assert it now flows through from GET_LIMITS.
+        expect(svc.limits?.featureBitmask).toBe(0x3f)
+        // The same guard the editors use accepts a real device (as it does the mock).
+        expect(supportsConfigEditing(svc)).toBe(true)
         await svc.disconnect()
     })
 

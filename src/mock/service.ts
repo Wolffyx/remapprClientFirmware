@@ -47,8 +47,14 @@ import { configToPhysicalLayout, lowerConfigToMock } from './configBridge'
 import {
     parseKeymap,
     serializeKeymap,
+    type CanonConditionalLayer,
+    type CanonHoldTapDef,
+    type CanonModMorph,
+    type ConfigDefaults,
     type ConfigKeymap,
 } from '@firmware/config'
+import type { RemapprConfigEditing } from '@firmware/remappr/configEditing'
+import type { Limits } from '@firmware/remappr/protocol'
 // Raw JSON source of the demo remappr.keymap — the config editor + download
 // modal's source of truth. `?raw` hands back the file verbatim as a string, so
 // it round-trips through parseKeymap unchanged. Parsed once: it both seeds the
@@ -142,7 +148,9 @@ interface MockServiceOptions {
     seedConfig?: ConfigKeymap
 }
 
-export class MockKeyboardService implements KeyboardService {
+export class MockKeyboardService
+    implements KeyboardService, RemapprConfigEditing
+{
     public readonly capabilities: Capabilities = MOCK_CAPABILITIES
     public readonly deviceInfo: DeviceInfo
     public readonly codec = mockCodec
@@ -150,6 +158,18 @@ export class MockKeyboardService implements KeyboardService {
     public readonly dynamic: DynamicEntriesApi
     public readonly macros: MacroApi
     public readonly rgb: RgbApi
+    // Demo advertises the full feature bitmask so the config-blob editors show
+    // (and gray nothing) — the mock honors every §7.4 setting in-memory.
+    public readonly limits: Limits = {
+        maxUnsealedChunk: 512,
+        maxSealedChunk: 512,
+        transportFrameCap: 512,
+        blobAlign: 16,
+        maxConfigBytes: 65536,
+        maxOutstandingRequests: 4,
+        supportsFragmentation: true,
+        featureBitmask: 0xffffffff,
+    }
 
     private tapDances: TapDanceEntry[] = Array.from(
         { length: MOCK_DYNAMIC_COUNTS.tapDance },
@@ -179,6 +199,13 @@ export class MockKeyboardService implements KeyboardService {
     private layouts: PhysicalLayout[]
     /** Source config the runtime is seeded from (static demo or a builder board). */
     private readonly seedCfg: ConfigKeymap
+    /** Live config the config-blob editors read/write (§7.4 defaults + custom def
+     *  pools + tri-layers). Copy-on-write off `seedCfg` (never mutated in place, so
+     *  the shared demo seed is safe); discardChanges resets it. */
+    private cfg: ConfigKeymap
+    /** Set once a config-blob editor has changed `cfg`, so getConfigSource serves
+     *  the edited config instead of the pristine seed source. */
+    private configEdited = false
     /** Per-layer key count — derived from the seed geometry, not a fixed Corne. */
     private readonly keyCount: number
     private activeLayoutId = 0
@@ -226,6 +253,7 @@ export class MockKeyboardService implements KeyboardService {
 
     constructor(opts: MockServiceOptions = {}) {
         this.seedCfg = opts.seedConfig ?? SEED_CONFIG
+        this.cfg = this.seedCfg
         this.keyCount = this.seedCfg.keyboard.keys.length
         this.perKeyColors = Array.from({ length: this.keyCount }, (_, i) => ({
             h: Math.round(((i * 255) / this.keyCount) % 256),
@@ -654,6 +682,87 @@ export class MockKeyboardService implements KeyboardService {
         return this.getKeymap()
     }
 
+    /* ── config-blob editing (demo) ──────────────────────────────────────────
+     * The same surface the concrete RemapprKeyboardService exposes, so demo mode
+     * presents the identical timing / behaviors / conditional-layer editors. The
+     * mock has no blob compile + no commit round-trip, so setters mutate `cfg`
+     * directly (copy-on-write); commit() is a no-op and discardChanges() resets. */
+
+    getConfigDefaults(): ConfigDefaults {
+        return { ...this.cfg.defaults }
+    }
+
+    setConfigDefaults(patch: Partial<ConfigDefaults>): void {
+        this.requireUnlocked()
+        const defaults = { ...this.cfg.defaults }
+        for (const key of Object.keys(patch) as (keyof ConfigDefaults)[]) {
+            const value = patch[key]
+            if (value !== undefined) {
+                defaults[key] = value
+            } else {
+                // undefined reverts the key to the seed (committed) value — matching
+                // the concrete service, where dropping a staged edit falls back to
+                // device truth rather than deleting the field.
+                const seedVal = this.seedCfg.defaults?.[key]
+                if (seedVal !== undefined) defaults[key] = seedVal
+                else delete defaults[key]
+            }
+        }
+        this.cfg = { ...this.cfg, defaults }
+        this.configEdited = true
+        this.markPending(true)
+    }
+
+    getHoldTaps(): CanonHoldTapDef[] {
+        return (this.cfg.holdTaps ?? []).map((h) => ({ ...h }))
+    }
+
+    setHoldTap(idx: number, patch: Partial<CanonHoldTapDef>): void {
+        this.requireUnlocked()
+        const list = [...(this.cfg.holdTaps ?? [])]
+        if (!list[idx])
+            throw new ProtocolError(`no hold-tap definition at index ${idx}`)
+        list[idx] = { ...list[idx], ...patch }
+        this.cfg = { ...this.cfg, holdTaps: list }
+        this.configEdited = true
+        this.markPending(true)
+    }
+
+    getModMorphs(): CanonModMorph[] {
+        return (this.cfg.modMorphs ?? []).map((m) => ({ ...m }))
+    }
+
+    setModMorph(idx: number, patch: Partial<CanonModMorph>): void {
+        this.requireUnlocked()
+        const list = [...(this.cfg.modMorphs ?? [])]
+        if (!list[idx])
+            throw new ProtocolError(`no mod-morph definition at index ${idx}`)
+        list[idx] = { ...list[idx], ...patch }
+        this.cfg = { ...this.cfg, modMorphs: list }
+        this.configEdited = true
+        this.markPending(true)
+    }
+
+    getConditionalLayers(): CanonConditionalLayer[] {
+        return (this.cfg.conditionalLayers ?? []).map((c) => ({
+            ifLayers: [...c.ifLayers],
+            thenLayer: c.thenLayer,
+        }))
+    }
+
+    setConditionalLayers(list: CanonConditionalLayer[]): void {
+        this.requireUnlocked()
+        this.cfg = {
+            ...this.cfg,
+            conditionalLayers: list.map((c) => ({
+                ifLayers: [...c.ifLayers],
+                thenLayer: c.thenLayer,
+            })),
+        }
+        this.configEdited = true
+        this.markPending(true)
+    }
+
     async commit(): Promise<void> {
         this.requireUnlocked()
         this.markPending(false)
@@ -662,12 +771,16 @@ export class MockKeyboardService implements KeyboardService {
     async discardChanges(): Promise<void> {
         this.requireUnlocked()
         this.seedDefaultLayers()
+        this.cfg = this.seedCfg
+        this.configEdited = false
         this.markPending(false)
     }
 
     async resetSettings(): Promise<void> {
         this.requireUnlocked()
         this.seedDefaultLayers()
+        this.cfg = this.seedCfg
+        this.configEdited = false
         this.activeLayoutId = 0
         this.markPending(false)
     }
@@ -724,9 +837,11 @@ export class MockKeyboardService implements KeyboardService {
     }
 
     async getConfigSource(): Promise<string | null> {
-        // The static demo returns its verbatim source (comments + formatting
-        // preserved); a builder-seeded board serializes its own config so the
-        // editor's source-of-truth is the board the user just designed.
+        // Once a config-blob editor has run, serve the edited config so the source
+        // view reflects it. Otherwise the static demo returns its verbatim source
+        // (comments + formatting preserved); a builder-seeded board serializes its
+        // own config so the editor's source-of-truth is the board just designed.
+        if (this.configEdited) return serializeKeymap(this.cfg)
         return this.seedCfg === SEED_CONFIG
             ? seedConfigSource
             : serializeKeymap(this.seedCfg)
