@@ -1306,6 +1306,59 @@ function encodeBlob(
             })),
         })
     }
+    // TBL_RGB (§4c): per-key static colors from keyboard.lighting.perKey, emitted
+    // as a flat (non-per-layer) RGB888 map over every physical position; unset
+    // positions stay black (0,0,0). The firmware LED sink renders it locally.
+    const perKey = config.keyboard.lighting?.perKey
+    if (perKey && Object.keys(perKey).length > 0) {
+        const colors = new Uint8Array(numPositions * 3)
+        for (const [posStr, hex] of Object.entries(perKey)) {
+            const pos = Number(posStr)
+            if (!Number.isInteger(pos) || pos < 0 || pos >= numPositions) {
+                diag.warn(`per-key RGB position ${posStr} is out of range`, [
+                    'keyboard',
+                    'lighting',
+                    'perKey',
+                ])
+                continue
+            }
+            const m = /^#?([0-9a-fA-F]{6})$/.exec(hex)
+            if (!m) {
+                diag.warn(`per-key RGB color '${hex}' is not #rrggbb`, [
+                    'keyboard',
+                    'lighting',
+                    'perKey',
+                ])
+                continue
+            }
+            const n = parseInt(m[1], 16)
+            colors[pos * 3] = (n >> 16) & 0xff
+            colors[pos * 3 + 1] = (n >> 8) & 0xff
+            colors[pos * 3 + 2] = n & 0xff
+        }
+        builder.rgbTable({
+            mode: 1, // REMAPPR_RGB_MODE_PER_KEY
+            perLayer: false,
+            numLayers: 1,
+            numPositions,
+            colors,
+        })
+    }
+    // TBL_PERSONALITY (§4c): the declared node identity. Only keyboard/mouse have
+    // a firmware personality today; joystick/dongle are reserved (dongle settings
+    // ride control verbs), so they warn instead of emitting a lossy identity.
+    const personality = config.node?.personality
+    if (personality) {
+        const code = ({ keyboard: 1, mouse: 2 } as Record<string, number>)[
+            personality
+        ]
+        if (code !== undefined) builder.personalityTable(code)
+        else
+            diag.warn(
+                `node personality '${personality}' has no firmware personality yet — not emitted`,
+                ['node', 'personality'],
+            )
+    }
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
     if (leaders.length > 0) builder.leaderTable(leaders)

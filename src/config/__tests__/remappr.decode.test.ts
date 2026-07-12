@@ -299,12 +299,65 @@ describe('decodeRemapprBlob TBL_MOUSE (id 8 pointer settings §4b)', () => {
         })
     })
 
-    it('omits the table when node.mouse carries no pointer intent', () => {
+    it('omits the mouse table when node.mouse carries no pointer intent', () => {
         const cfg = parseKeymap(mouseJson('{}'))
         const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
         const { code, config } = decodeRemapprBlob(blob)
         expect(code).toBe(DecodeCode.OK)
-        expect(config?.node).toBeUndefined()
+        expect(config?.node?.mouse).toBeUndefined()
+        // personality still round-trips via TBL_PERSONALITY (§4c).
+        expect(config?.node?.personality).toBe('mouse')
+    })
+})
+
+describe('decodeRemapprBlob TBL_RGB emit + TBL_PERSONALITY (§4c)', () => {
+    // pattern-check: skip — decode/round-trip fixtures, no production logic
+    const rgbAuthored = `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "Rgb", "target": "zmk" },
+        "keyboard": { "id": "k", "name": "K",
+            "keys": [{"x":0,"y":0},{"x":1,"y":0}],
+            "lighting": { "perKey": { "0": "#ff6600" } } },
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }]
+    }`
+
+    it('lowers keyboard.lighting.perKey to TBL_RGB and decodes it back', () => {
+        const cfg = parseKeymap(rgbAuthored)
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.keyboard.lighting?.perKey).toEqual({ 0: '#ff6600' })
+    })
+
+    it('per-key RGB round-trips byte-stably', () => {
+        roundTrips(rgbAuthored)
+    })
+
+    it('lowers node.personality to TBL_PERSONALITY and decodes it back', () => {
+        const cfg = parseKeymap(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "P", "target": "zmk" }, ${kb(2)},
+            "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+            "node": { "personality": "keyboard" }
+        }`)
+        const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node?.personality).toBe('keyboard')
+    })
+
+    it('warns and skips a reserved personality (joystick)', () => {
+        const cfg = parseKeymap(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "P", "target": "zmk" }, ${kb(2)},
+            "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+            "node": { "personality": "joystick" }
+        }`)
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.some((d) => /personality/.test(d.message))).toBe(true)
+        const { config } = decodeRemapprBlob(blob)
+        expect(config?.node?.personality).toBeUndefined()
     })
 })
 
