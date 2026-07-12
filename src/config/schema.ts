@@ -152,6 +152,14 @@ const tapHoldTimings = {
     quickTapMs: z.number().int().nonnegative().optional(),
     requirePriorIdleMs: z.number().int().nonnegative().optional(),
     retroTap: z.boolean().optional(),
+    holdTriggerKeyPositions: z
+        .array(z.number().int().nonnegative())
+        .optional()
+        .describe('Physical positions whose interruption can trigger the hold (§28).'),
+    holdTriggerOnRelease: z
+        .boolean()
+        .optional()
+        .describe('Trigger the hold on the interrupting key release (firmware ≥ Phase 2).'),
     resolve: ResolveSchema.optional(),
     flavor: FlavorSchema.optional(),
 }

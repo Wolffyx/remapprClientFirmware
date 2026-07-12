@@ -83,6 +83,10 @@ const withTimings = (
             ? { requirePriorIdleMs: a.requirePriorIdleMs }
             : {}),
         ...(a.retroTap ? { retroTap: a.retroTap } : {}),
+        ...(a.holdTriggerKeyPositions?.length
+            ? { holdTriggerKeyPositions: [...a.holdTriggerKeyPositions] }
+            : {}),
+        ...(a.holdTriggerOnRelease ? { holdTriggerOnRelease: true } : {}),
         ...(a.resolve !== undefined ? { resolve: a.resolve } : {}),
         ...(a.flavor !== undefined ? { flavor: a.flavor } : {}),
     }

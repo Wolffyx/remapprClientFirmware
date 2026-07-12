@@ -180,6 +180,8 @@ const timings = (a: {
     quickTapMs?: number
     requirePriorIdleMs?: number
     retroTap?: boolean
+    holdTriggerKeyPositions?: number[]
+    holdTriggerOnRelease?: boolean
     resolve?: 'timeout' | 'prefer-hold' | 'prefer-tap'
     flavor?: Extract<CanonAction, { type: 'tap_hold' }>['flavor']
 }): Pick<
@@ -188,6 +190,8 @@ const timings = (a: {
     | 'quickTapMs'
     | 'requirePriorIdleMs'
     | 'retroTap'
+    | 'holdTriggerKeyPositions'
+    | 'holdTriggerOnRelease'
     | 'resolve'
     | 'flavor'
 > => ({
@@ -199,6 +203,12 @@ const timings = (a: {
         ? { requirePriorIdleMs: a.requirePriorIdleMs }
         : {}),
     ...(a.retroTap !== undefined ? { retroTap: a.retroTap } : {}),
+    ...(a.holdTriggerKeyPositions !== undefined
+        ? { holdTriggerKeyPositions: [...a.holdTriggerKeyPositions] }
+        : {}),
+    ...(a.holdTriggerOnRelease !== undefined
+        ? { holdTriggerOnRelease: a.holdTriggerOnRelease }
+        : {}),
     ...(a.resolve !== undefined ? { resolve: a.resolve } : {}),
     ...(a.flavor !== undefined ? { flavor: a.flavor } : {}),
 })

@@ -236,6 +236,40 @@ const roundTrips = (json: string): void => {
 const kb = (n: number): string =>
     `"keyboard": { "id": "k", "name": "K", "keys": [${Array.from({ length: n }, (_, i) => `{"x":${i},"y":0}`).join(',')} ] }`
 
+describe('decodeRemapprBlob TBL_RGB (id 7 per-key colors)', () => {
+    // pattern-check: skip — decode fixture, no production logic
+    const rgbBlob = (mode: number, colors: number[]): Uint8Array =>
+        new BlobBuilder()
+            .layerTable(1, 2, 200, 5)
+            .behaviorTable([rec({ type: BehaviorType.Key, tap: 0x04 })])
+            .bindingTable([0, 0])
+            .rgbTable({
+                mode,
+                perLayer: false,
+                numLayers: 1,
+                numPositions: 2,
+                colors: Uint8Array.from(colors),
+            })
+            .finalize(1, 1, 1)
+
+    it('decodes per-key colors into lighting.perKey (black/off omitted)', () => {
+        // pos0 = #ff6600, pos1 = 0,0,0 (off) → dropped from the sparse map.
+        const { code, config } = decodeRemapprBlob(
+            rgbBlob(1, [0xff, 0x66, 0x00, 0x00, 0x00, 0x00]),
+        )
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.keyboard.lighting?.perKey).toEqual({ 0: '#ff6600' })
+    })
+
+    it('ignores an effects-only (mode 0) table — no lighting', () => {
+        const { code, config } = decodeRemapprBlob(
+            rgbBlob(0, [0xff, 0x66, 0x00, 0x11, 0x22, 0x33]),
+        )
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.keyboard.lighting).toBeUndefined()
+    })
+})
+
 describe('remappr round-trip (encode → decode → re-encode is byte-stable)', () => {
     it('bare keys + transparent + none', () => {
         roundTrips(`{
@@ -275,6 +309,58 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
                 { "name": "fn", "bindings": ["X", "Y"] }
             ]
         }`)
+    })
+
+    // pattern-check: skip — round-trip test data, no production logic
+    it('positional hold (§28) + requirePriorIdle + retroTap round-trip', () => {
+        roundTrips(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "PH", "target": "zmk" }, ${kb(4)},
+            "layers": [{ "name": "base", "bindings": [
+                { "type": "tap_hold", "tap": { "type": "key_press", "key": "A" },
+                  "hold": { "type": "modifier", "modifier": "LEFT_GUI" },
+                  "flavor": "balanced", "requirePriorIdleMs": 125, "retroTap": true,
+                  "holdTriggerKeyPositions": [1, 2, 3] },
+                "B", "C", "D"
+            ] }]
+        }`)
+    })
+
+    // pattern-check: skip — asserts the decoder restores the position list
+    it('decodes holdTriggerKeyPositions back onto the inline tap-hold', () => {
+        const cfg = parseKeymap(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "PH", "target": "zmk" }, ${kb(4)},
+            "layers": [{ "name": "base", "bindings": [
+                { "type": "tap_hold", "tap": { "type": "key_press", "key": "A" },
+                  "hold": { "type": "modifier", "modifier": "LEFT_GUI" },
+                  "holdTriggerKeyPositions": [1, 2, 3] },
+                "B", "C", "D"
+            ] }]
+        }`)
+        const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const { config } = decodeRemapprBlob(blob)
+        const th = config!.layers[0].bindings[0]
+        expect(th.type).toBe('tap_hold')
+        expect(th.type === 'tap_hold' && th.holdTriggerKeyPositions).toEqual([1, 2, 3])
+    })
+
+    // pattern-check: skip — compile-diagnostic assertion, no production logic
+    it('warns and drops holdTriggerOnRelease (no wire bit until Phase 2)', () => {
+        const cfg = parseKeymap(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "HR", "target": "zmk" }, ${kb(2)},
+            "layers": [{ "name": "base", "bindings": [
+                { "type": "tap_hold", "tap": { "type": "key_press", "key": "A" },
+                  "hold": { "type": "modifier", "modifier": "LEFT_GUI" },
+                  "holdTriggerOnRelease": true },
+                "B"
+            ] }]
+        }`)
+        const { diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(
+            diagnostics.some((d) => /hold-trigger-on-release/.test(d.message)),
+        ).toBe(true)
     })
 
     it('layer / sticky / key_toggle / system / mouse / output / lighting', () => {

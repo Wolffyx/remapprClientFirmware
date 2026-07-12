@@ -88,7 +88,10 @@ real key token rather than silently dropping it.
 
 `hold` accepts a friendly modifier name (`LGui` → `LEFT_GUI`) or `layer:<name>`.
 Optional `term`/`tappingTermMs`, `quickTap`/`quickTapMs`, `requirePriorIdleMs`,
-`retroTap`, `flavor`, `resolve` — all round-trip through compile + decode.
+`retroTap`, `holdTriggerKeyPositions`, `flavor`, `resolve` — all round-trip
+through compile + decode (`holdTriggerKeyPositions` rides the §28 poshold table).
+`holdTriggerOnRelease` is accepted but has no wire bit yet; the compiler warns and
+drops it until the firmware carries the flag (Phase 2).
 
 ## Behavior definitions (dictionaries)
 
@@ -184,4 +187,5 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
 
 ## Reserved / planned sections
 
-- `lighting.perKey` — per-key colors emitted to the RGB table. _(planned)_
+- `lighting.perKey` — per-key colors (position → `"#rrggbb"`). Decoded from the
+  RGB table today; the compile-side emit is planned (Phase 4c).

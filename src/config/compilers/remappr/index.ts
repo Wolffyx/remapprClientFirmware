@@ -382,9 +382,10 @@ function tokenUsage(token: string): number | null {
 // only tap-hold shapes the firmware represents. bindings[0] is the hold behavior,
 // bindings[1] the tap behavior (ZMK order); holdParam/tapParam are their args. The
 // tap side must be &kp <key>; the hold side is &kp/&sk <modifier> (→ MOD_TAP) or
-// &mo/&to/&tog <layer> (→ LAYER_TAP). Anything else is a wire gap. requirePriorIdle
-// + retro-tap are emitted faithfully but are not modeled by the round-trip decoder
-// (CanonTapHold lacks them) — a hold-tap decodes back as a plain tap_hold.
+// &mo/&to/&tog <layer> (→ LAYER_TAP). Anything else is a wire gap. requirePriorIdle,
+// retro-tap, and §28 positions are emitted faithfully and restored by the decoder
+// onto a plain inline tap_hold (a def decodes back as inline); hold-trigger-on-
+// release has no wire bit yet (Phase 2) and is warned + dropped.
 function lowerHoldTap(
     action: Extract<CanonAction, { type: 'hold_tap' }>,
     def: CanonHoldTapDef,
@@ -591,6 +592,12 @@ function lowerAction(
                     [...path, 'tap'],
                 )
             }
+            if (action.holdTriggerOnRelease)
+                diag.warn(
+                    `tap_hold hold-trigger-on-release is not on the wire — ` +
+                        `dropped (needs firmware ≥ Phase 2)`,
+                    path,
+                )
             const common = {
                 flavor: flavorCode(action),
                 tap: tapUsage,
@@ -598,6 +605,11 @@ function lowerAction(
                 quickTapMs: action.quickTapMs ?? 0,
                 requirePriorIdleMs: action.requirePriorIdleMs ?? 0,
                 flags: action.retroTap ? BehaviorFlags.RETRO_TAP : 0,
+                // §28 positional hold rides the record into TBL_POSHOLD (an
+                // annotation, not part of the 16-byte record); mirrors lowerHoldTap.
+                ...(action.holdTriggerKeyPositions?.length
+                    ? { posHold: [...action.holdTriggerKeyPositions] }
+                    : {}),
             }
             if (action.hold.type === 'modifier') {
                 return rec({

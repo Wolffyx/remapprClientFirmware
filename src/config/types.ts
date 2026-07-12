@@ -92,7 +92,7 @@ export type CanonHoldTarget =
     | { type: 'modifier'; modifier: Modifier }
     | { type: 'layer'; layer: string }
 
-// pattern-check: skip — two additive optional fields on an existing interface, no abstraction
+// pattern-check: skip — additive optional fields on an existing interface, no abstraction
 export interface CanonTapHold {
     type: 'tap_hold'
     tap: CanonKeyPress
@@ -105,6 +105,14 @@ export interface CanonTapHold {
     /** Retro-tap: emit the tap if the hold resolved but nothing was pressed
      *  during it. Rides the RETRO_TAP behavior flag. */
     retroTap?: boolean
+    /** §28 positional hold-trigger: only interrupting keys at these physical
+     *  positions count toward the hold decision. Rides TBL_POSHOLD — the
+     *  decoder restores the list onto the inline tap-hold by behavior index. */
+    holdTriggerKeyPositions?: number[]
+    /** Trigger the hold on the interrupting key's *release* instead of its
+     *  press. Needs firmware ≥ Phase 2 (REMAPPR_BHF_HOLD_TRIGGER_ON_RELEASE);
+     *  until then the compiler warns and drops it (no wire bit yet). */
+    holdTriggerOnRelease?: boolean
     resolve?: Resolve
     /** Interrupt flavor. When this or a timing is set, ZMK gets a dedicated
      *  generated hold-tap node instead of the global &mt/&lt. */
@@ -505,6 +513,10 @@ export interface CanonBacklight {
 export interface CanonLighting {
     underglow?: CanonUnderglow
     backlight?: CanonBacklight
+    /** Per-key RGB colors decoded from TBL_RGB (id 7): physical position →
+     *  "#rrggbb" (black/off omitted). Decode-only until Phase 4c wires the emit
+     *  path; a per-layer table collapses to layer 0 with a diagnostic. */
+    perKey?: Record<number, string>
 }
 
 /** A named physical-layout variant (keys tag into it via `CanonGeometry.variant`). */
