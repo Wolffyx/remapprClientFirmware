@@ -123,6 +123,8 @@ const limitsBytes = (): Uint8Array =>
         ...le16(8192),
         16,
         1,
+        ...le16(0x003f), // feature_bitmask lo (§7.4.1 Phase-2 features)
+        ...le16(0x0000), // feature_bitmask hi
     ])
 const personalityBytes = (): Uint8Array =>
     Uint8Array.from([

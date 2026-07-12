@@ -418,6 +418,21 @@ export function buildUniversal(
 
 /* ── proto-v2 reply payloads ────────────────────────────────────────────── */
 
+/**
+ * §7.4.1 GET_LIMITS feature_bitmask bits (fw include/remappr/control.h
+ * REMAPPR_FEAT_*). A set bit means the device honors that optional behavior/
+ * timing field in a pushed config blob; the whole word is absent on pre-Phase-2
+ * firmware, which parseLimits reports as 0 (no optional features).
+ */
+export const LimitsFeature = {
+    holdTriggerOnRelease: 1 << 0,
+    capsWordIdle: 1 << 1,
+    stickyReleaseAfter: 1 << 2,
+    macroDefaults: 1 << 3,
+    matrixPollPeriod: 1 << 4,
+    layerTailV3: 1 << 5,
+} as const
+
 export interface Limits {
     maxUnsealedChunk: number
     maxSealedChunk: number // universal-sealed; legacy 0xE1 path uses 32
@@ -426,6 +441,7 @@ export interface Limits {
     maxConfigBytes: number
     maxOutstandingRequests: number
     supportsFragmentation: boolean
+    featureBitmask: number // §7.4.1; 0 when absent (pre-Phase-2 firmware)
 }
 
 export function parseLimits(d: Uint8Array): Limits {
@@ -438,6 +454,8 @@ export function parseLimits(d: Uint8Array): Limits {
         maxConfigBytes: dv.getUint16(8, true),
         maxOutstandingRequests: d[10],
         supportsFragmentation: d[11] !== 0,
+        // Append-only u32 tail; older firmware omits it (12-byte payload) → 0.
+        featureBitmask: d.byteLength >= 16 ? dv.getUint32(12, true) : 0,
     }
 }
 

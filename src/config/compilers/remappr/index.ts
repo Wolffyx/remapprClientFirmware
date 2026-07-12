@@ -414,19 +414,19 @@ function lowerHoldTap(
         )
         return rec({ type: BehaviorType.None })
     }
-    if (def.holdTriggerOnRelease)
-        diag.warn(
-            `hold_tap "${action.ref}" hold-trigger-on-release is not on the ` +
-                `wire — dropped`,
-            path,
-        )
     const common = {
         flavor: holdTapFlavorCode(def.flavor),
         tap,
         tappingTermMs: def.tappingTermMs ?? 0,
         quickTapMs: def.quickTapMs ?? quickTapDefault ?? 0,
         requirePriorIdleMs: def.requirePriorIdleMs ?? 0,
-        flags: def.retroTap ? BehaviorFlags.RETRO_TAP : 0,
+        // BHF bit4 hold-trigger-on-release resolves an interrupted hold on the
+        // interrupter's release (roll-through taps); honored by fw since #58.
+        flags:
+            (def.retroTap ? BehaviorFlags.RETRO_TAP : 0) |
+            (def.holdTriggerOnRelease
+                ? BehaviorFlags.HOLD_TRIGGER_ON_RELEASE
+                : 0),
         // §28 positional hold: rides the record into TBL_POSHOLD (annotation,
         // not part of the 16-byte record).
         ...(def.holdTriggerKeyPositions?.length
@@ -597,12 +597,6 @@ function lowerAction(
                     [...path, 'tap'],
                 )
             }
-            if (action.holdTriggerOnRelease)
-                diag.warn(
-                    `tap_hold hold-trigger-on-release is not on the wire — ` +
-                        `dropped (needs firmware ≥ Phase 2)`,
-                    path,
-                )
             const common = {
                 flavor: flavorCode(action),
                 tap: tapUsage,
@@ -611,7 +605,13 @@ function lowerAction(
                 // "no quick tap"); else the config default; else 0 = fw default.
                 quickTapMs: action.quickTapMs ?? comp.quickTapDefault ?? 0,
                 requirePriorIdleMs: action.requirePriorIdleMs ?? 0,
-                flags: action.retroTap ? BehaviorFlags.RETRO_TAP : 0,
+                // BHF bit4 hold-trigger-on-release (fw honors since #58); mirrors
+                // lowerHoldTap.
+                flags:
+                    (action.retroTap ? BehaviorFlags.RETRO_TAP : 0) |
+                    (action.holdTriggerOnRelease
+                        ? BehaviorFlags.HOLD_TRIGGER_ON_RELEASE
+                        : 0),
                 // §28 positional hold rides the record into TBL_POSHOLD (an
                 // annotation, not part of the 16-byte record); mirrors lowerHoldTap.
                 ...(action.holdTriggerKeyPositions?.length
@@ -1212,6 +1212,11 @@ function encodeBlob(
             pressDebounceMs: config.defaults?.pressDebounceMs,
             matrixPressDebounceMs: config.defaults?.matrixPressDebounceMs,
             matrixReleaseDebounceMs: config.defaults?.matrixReleaseDebounceMs,
+            capsWordIdleMs: config.defaults?.capsWordIdleMs,
+            stickyReleaseDefaultMs: config.defaults?.stickyReleaseDefaultMs,
+            macroDefaultWaitMs: config.defaults?.macroDefaultWaitMs,
+            macroDefaultTapMs: config.defaults?.macroDefaultTapMs,
+            matrixPollPeriodMs: config.defaults?.matrixPollPeriodMs,
         })
         .behaviorTable(behaviors)
         .bindingTable(cells)
