@@ -90,6 +90,31 @@ export {
 } from './vial'
 export { type TargetDefaults, resolveDefaults } from './defaults'
 export {
+    type TimingFieldKey,
+    type TimingFieldDef,
+    TIMING_FIELDS,
+    fieldSupported,
+    groupedTimingFields,
+    type Flavor,
+    FLAVOR_OPTIONS,
+    type HoldTapNumField,
+    HOLD_TAP_NUM_FIELDS,
+    type HoldTapFlagField,
+    HOLD_TAP_FLAG_FIELDS,
+    ALL_MODIFIERS,
+    modifierLabel,
+    featureSupported,
+    toggleModifier,
+    holdTapPatch,
+    modMorphPatch,
+    emptyConditional,
+    toggleIfLayer,
+    sameConditional,
+    sameConditionalList,
+    conditionalLayersPatch,
+    conditionalError,
+} from './editorFields'
+export {
     type DerivedMatrix,
     deriveMatrix,
     materializeMatrix,
