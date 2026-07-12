@@ -189,7 +189,15 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
 - `firmware.<target>` namespaces settings so every registered firmware target's
   knobs are reachable. _(consumed per-target in a later phase)_
 - `board` feeds the DT/Kconfig generator; `controller` accepts a known Zephyr
-  board id or a custom board on any Zephyr-supported SoC. _(generator: later phase)_
+  board id or a custom board on any Zephyr-supported SoC. The `remappr-board`
+  compiler emits a Zephyr shield from it — `boards/shields/<id>/<id>.overlay`
+  (`remappr,kbd-matrix` + `input-keymap` + `remappr,keymap`) plus
+  `Kconfig.shield`/`Kconfig.defconfig` (defaults `CONFIG_INPUT` + the settings
+  backend from `storage`). `matrix.rows`/`cols` take raw `&gpioN pin FLAGS`
+  specs (or friendly labels on a known controller); the matrix cells prefer an
+  explicit `keyboard.hardware.transform` and warn when derived from geometry.
+  Get it via `getCompiler('remappr-board')` or `buildProjectBundle(config,
+  'remappr-board')`.
 
 ## Reserved / planned sections
 
