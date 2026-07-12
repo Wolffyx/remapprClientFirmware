@@ -19,6 +19,8 @@ export type {
     CanonMacroStep,
     CanonTapDance,
     CanonTapDanceStep,
+    CanonHoldTapDef,
+    CanonModMorph,
     CanonKscan,
     CanonMatrixKscan,
     CanonDirectKscan,

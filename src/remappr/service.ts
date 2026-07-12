@@ -28,7 +28,9 @@ import type {
 } from '../types'
 import { ProtocolError } from '../errors'
 import {
+    type CanonHoldTapDef,
     type CanonMacro,
+    type CanonModMorph,
     type CanonTapDance,
     type ConfigDefaults,
     type ConfigKeymap,
@@ -158,6 +160,11 @@ export class RemapprKeyboardService implements KeyboardService {
     // tap-dance edit maps. Config-blob backed → staged via the concrete-service
     // setConfigDefaults(), never the generic KeyboardService interface.
     private editedDefaults: Partial<ConfigDefaults> = {}
+    // Pending custom hold-tap / mod-morph def edits, overlaid on their pool at
+    // commit — same per-index contract as editedMacros. Config-blob backed →
+    // staged via concrete-service setHoldTap/setModMorph, not the interface.
+    private readonly editedHoldTaps = new Map<number, CanonHoldTapDef>()
+    private readonly editedModMorphs = new Map<number, CanonModMorph>()
 
     private readonly notificationListeners = new Set<NotificationHandler>()
     private readonly pendingChangesListeners = new Set<PendingChangesHandler>()
@@ -322,13 +329,15 @@ export class RemapprKeyboardService implements KeyboardService {
         return undefined
     }
 
-    /** `base` with pending macro / tap-dance / defaults edits overlaid (for
-     *  commit/export). */
+    /** `base` with pending macro / tap-dance / defaults / hold-tap / mod-morph
+     *  edits overlaid (for commit/export). */
     private withEdits(base: ConfigKeymap): ConfigKeymap {
         const hasDefaultEdits = Object.keys(this.editedDefaults).length > 0
         if (
             this.editedMacros.size === 0 &&
             this.editedTapDances.size === 0 &&
+            this.editedHoldTaps.size === 0 &&
+            this.editedModMorphs.size === 0 &&
             !hasDefaultEdits
         ) {
             return base
@@ -345,6 +354,20 @@ export class RemapprKeyboardService implements KeyboardService {
                       ),
                   }
                 : {}),
+            ...(base.holdTaps
+                ? {
+                      holdTaps: base.holdTaps.map(
+                          (h, i) => this.editedHoldTaps.get(i) ?? h,
+                      ),
+                  }
+                : {}),
+            ...(base.modMorphs
+                ? {
+                      modMorphs: base.modMorphs.map(
+                          (m, i) => this.editedModMorphs.get(i) ?? m,
+                      ),
+                  }
+                : {}),
             ...(hasDefaultEdits
                 ? { defaults: { ...base.defaults, ...this.editedDefaults } }
                 : {}),
@@ -355,6 +378,8 @@ export class RemapprKeyboardService implements KeyboardService {
         this.editedMacros.clear()
         this.editedTapDances.clear()
         this.editedDefaults = {}
+        this.editedHoldTaps.clear()
+        this.editedModMorphs.clear()
     }
 
     private seedLayersFromConfig(): void {
@@ -577,6 +602,47 @@ export class RemapprKeyboardService implements KeyboardService {
             if (value === undefined) delete this.editedDefaults[key]
             else this.editedDefaults[key] = value
         }
+        this.markPending(true)
+    }
+
+    /* ── custom hold-tap / mod-morph defs (config-blob pools) ────────────────
+     * Same concrete-only rationale as config defaults: these behavior-definition
+     * pools live in the blob, so the setters are on RemapprKeyboardService, not
+     * the generic KeyboardService interface. A patch merges onto the def at `idx`
+     * and lands on the next commit(). */
+
+    /** The custom hold-tap defs, device-truth merged with any staged edit. */
+    getHoldTaps(): CanonHoldTapDef[] {
+        return (this.config.holdTaps ?? []).map(
+            (h, i) => this.editedHoldTaps.get(i) ?? h,
+        )
+    }
+
+    /** Stage a patch onto the hold-tap def at `idx` (flavor / timing / flags),
+     *  applied at the next commit(). Throws if `idx` is out of range. */
+    setHoldTap(idx: number, patch: Partial<CanonHoldTapDef>): void {
+        this.assertWritable()
+        const cur = this.editedHoldTaps.get(idx) ?? this.config.holdTaps?.[idx]
+        if (!cur) throw new ProtocolError(`no hold-tap definition at index ${idx}`)
+        this.editedHoldTaps.set(idx, { ...cur, ...patch })
+        this.markPending(true)
+    }
+
+    /** The mod-morph defs, device-truth merged with any staged edit. */
+    getModMorphs(): CanonModMorph[] {
+        return (this.config.modMorphs ?? []).map(
+            (m, i) => this.editedModMorphs.get(i) ?? m,
+        )
+    }
+
+    /** Stage a patch onto the mod-morph def at `idx` (mods / keepMods), applied
+     *  at the next commit(). Throws if `idx` is out of range. */
+    setModMorph(idx: number, patch: Partial<CanonModMorph>): void {
+        this.assertWritable()
+        const cur = this.editedModMorphs.get(idx) ?? this.config.modMorphs?.[idx]
+        if (!cur)
+            throw new ProtocolError(`no mod-morph definition at index ${idx}`)
+        this.editedModMorphs.set(idx, { ...cur, ...patch })
         this.markPending(true)
     }
 
