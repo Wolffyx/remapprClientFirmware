@@ -179,3 +179,4 @@ export {
 import './compilers/zmk'
 import './compilers/qmk'
 import './compilers/remappr'
+import './compilers/remappr-board'
