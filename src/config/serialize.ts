@@ -501,6 +501,10 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                   })),
               }
             : {}),
+        // Whole-node sections round-trip verbatim (opaque data, no surface sugar).
+        ...(km.node ? { node: structuredClone(km.node) } : {}),
+        ...(km.firmware ? { firmware: structuredClone(km.firmware) } : {}),
+        ...(km.board ? { board: structuredClone(km.board) } : {}),
     }
 }
 

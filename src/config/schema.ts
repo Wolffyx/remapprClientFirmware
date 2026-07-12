@@ -739,6 +739,61 @@ export const LayoutOptionSchema = z
         'A VIA/Vial layout option (boolean toggle, or multi-choice when `choices` is set).',
     )
 
+// pattern-check: skip — declarative zod schemas for new open config sections, no abstraction
+export const BoardControllerSchema = z
+    .union([
+        z.string(),
+        z.looseObject({
+            custom: z.literal(true),
+            soc: z.string(),
+            name: z.string(),
+        }),
+    ])
+    .describe(
+        'A known Zephyr board id, or a custom board on any Zephyr-supported SoC.',
+    )
+
+/* ── whole-node config sections (v2) ───────────────────────────────────────
+ * These describe the ENTIRE node, beyond the keymap: which personality the node
+ * runs, per-target firmware knobs, and the build-time board definition. They are
+ * validated + preserved verbatim (open objects), but consumed by later phases —
+ * `node`/`firmware` do not yet reach the blob and `board` feeds the future
+ * DT/Kconfig generator, so the keymap compiler ignores them for now. */
+export const BoardSchema = z
+    .looseObject({
+        controller: BoardControllerSchema.optional(),
+        matrix: z
+            .looseObject({
+                diode: z.enum(['row2col', 'col2row']).optional(),
+                rows: z.array(z.string()).optional(),
+                cols: z.array(z.string()).optional(),
+                pollMs: z.number().int().positive().optional(),
+            })
+            .optional(),
+        split: z.boolean().optional(),
+        storage: z.enum(['zms', 'nvs']).optional(),
+    })
+    .describe(
+        'Build-time board definition for the DT/Kconfig generator (never in the blob).',
+    )
+
+export const NodeSchema = z
+    .looseObject({
+        personality: z
+            .enum(['keyboard', 'mouse', 'joystick', 'dongle'])
+            .optional(),
+    })
+    .describe(
+        'Per-personality node configuration; a dongle has a limited surface, a ' +
+            'mouse node carries pointer settings, etc. Extra fields preserved.',
+    )
+
+export const FirmwareSettingsSchema = z
+    .record(z.string(), z.looseObject({}))
+    .describe(
+        'Per-target firmware settings keyed by compiler-target id (remappr/zmk/…).',
+    )
+
 const BaseKeymapSchema = z.object({
     schemaVersion: z.literal(1),
     kind: z.literal('remappr.keymap'),
@@ -822,6 +877,10 @@ const BaseKeymapSchema = z.object({
     conditionalLayers: z.array(ConditionalLayerSchema).optional(),
     keyOverrides: z.array(KeyOverrideSchema).optional(),
     leaderSequences: z.array(LeaderSequenceSchema).optional(),
+    // Whole-node config sections (v2) — validated + preserved, consumed later.
+    node: NodeSchema.optional(),
+    firmware: FirmwareSettingsSchema.optional(),
+    board: BoardSchema.optional(),
 })
 
 /* ── cross-reference + structural checks ───────────────────────────────── */

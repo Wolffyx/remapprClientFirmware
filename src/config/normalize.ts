@@ -22,6 +22,13 @@ import type {
     ConfigKeymap,
 } from './types'
 
+// pattern-check: skip — trivial JSON deep-clone helper for opaque passthrough data
+/** Deep-clone plain JSON data (v2 node/firmware/board sections are opaque data
+ *  with no functions/cycles), so canonical never aliases the surface object. */
+function cloneJson<T>(v: T): T {
+    return structuredClone(v)
+}
+
 // Pattern check: no GoF pattern (-) — rejected — passthrough deep-clone of the
 // already-canonical lighting sub-object; pure data copy, no abstraction.
 /** Deep-copy the builder's board lighting metadata (no surface sugar). */
@@ -614,6 +621,11 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
                   })),
               }
             : {}),
+        // Whole-node sections carry through opaquely (no surface sugar); deep-clone
+        // so canonical never aliases the surface object.
+        ...(km.node ? { node: cloneJson(km.node) } : {}),
+        ...(km.firmware ? { firmware: cloneJson(km.firmware) } : {}),
+        ...(km.board ? { board: cloneJson(km.board) } : {}),
     }
 }
 

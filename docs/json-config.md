@@ -147,9 +147,36 @@ firmware ignores it. The two inner behaviors default to key-presses.
 Combo `keys` are position indices; `do` is the action. _(Key-name resolution in
 combos is planned.)_
 
+## Whole-node config sections
+
+Beyond the keymap, a document can describe the entire node. These sections are
+validated and round-trip verbatim (open shape — extra fields are preserved).
+They do not affect the keymap blob yet; each is consumed by a later phase.
+
+```jsonc
+"node": {                       // per-personality node config
+  "personality": "mouse",       // keyboard | mouse | joystick | dongle
+  "mouse": { "cpi": 1600 }      // personality-specific settings, preserved
+},
+"firmware": {                   // per-target firmware settings, by target id
+  "remappr": { "storage": "zms" },
+  "zmk": { "combosMax": 16 }
+},
+"board": {                      // build-time board def (DT/Kconfig generator)
+  "controller": "nucleo_u5a5zj_q",              // a known Zephyr board id, OR:
+  // "controller": { "custom": true, "soc": "stm32u5a5zj", "name": "my_split" },
+  "matrix": { "diode": "row2col", "rows": ["PA0"], "cols": ["PB0","PB1"] },
+  "split": false, "storage": "zms"
+}
+```
+
+- `node.personality` picks the node role; a dongle exposes a limited surface, a
+  mouse node carries pointer settings. _(emitted to the blob in a later phase)_
+- `firmware.<target>` namespaces settings so every registered firmware target's
+  knobs are reachable. _(consumed per-target in a later phase)_
+- `board` feeds the DT/Kconfig generator; `controller` accepts a known Zephyr
+  board id or a custom board on any Zephyr-supported SoC. _(generator: later phase)_
+
 ## Reserved / planned sections
 
-- `node` — per-personality node config (keyboard/mouse/joystick/dongle). _(planned)_
-- `firmware` — per-target settings namespaces. _(planned)_
-- `board` — build-time board/matrix/storage for the DT/Kconfig generator. _(planned)_
 - `lighting.perKey` — per-key colors emitted to the RGB table. _(planned)_

@@ -631,6 +631,35 @@ export interface CanonLeaderSequence {
     action: CanonAction
 }
 
+// pattern-check: skip — plain data interfaces for new open config sections, no abstraction
+/** A known Zephyr board id, or a custom board on any Zephyr-supported SoC. */
+export type ConfigBoardController =
+    | string
+    | { custom: true; soc: string; name: string; [k: string]: unknown }
+
+/** Build-time board definition (v2) — consumed by the DT/Kconfig generator, never
+ *  in the blob. Open shape: extra builder fields are preserved verbatim. */
+export interface ConfigBoard {
+    controller?: ConfigBoardController
+    matrix?: {
+        diode?: DiodeDirection
+        rows?: string[]
+        cols?: string[]
+        pollMs?: number
+        [k: string]: unknown
+    }
+    split?: boolean
+    storage?: 'zms' | 'nvs'
+    [k: string]: unknown
+}
+
+/** Per-personality node configuration (v2). Open shape; only `personality` is
+ *  well-known today, the rest is preserved for later phases. */
+export interface ConfigNode {
+    personality?: 'keyboard' | 'mouse' | 'joystick' | 'dongle'
+    [k: string]: unknown
+}
+
 export interface ConfigKeymap {
     schemaVersion: 1
     kind: 'remappr.keymap'
@@ -646,4 +675,8 @@ export interface ConfigKeymap {
     conditionalLayers?: CanonConditionalLayer[]
     keyOverrides?: CanonKeyOverride[]
     leaderSequences?: CanonLeaderSequence[]
+    // Whole-node config sections (v2) — preserved verbatim, consumed later.
+    node?: ConfigNode
+    firmware?: Record<string, Record<string, unknown>>
+    board?: ConfigBoard
 }

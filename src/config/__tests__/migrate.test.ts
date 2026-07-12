@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { getCompiler, parseKeymap } from '../index'
 import { buildRemapprBlob } from '../compilers/remappr/index'
+import { serializeKeymap } from '../serialize'
 import {
     isV2,
     migrateAction,
@@ -197,6 +198,39 @@ describe('migrate: v2 ≡ v1 byte-identical', () => {
         // Compiles without a keyboard block (geometry synthesized from layer 0).
         const b = bytesOf(noBoard)
         expect(b.slice(0, 4)).toEqual(Uint8Array.from([0x52, 0x4d, 0x42, 0x43]))
+    })
+})
+
+describe('migrate: node/firmware/board sections', () => {
+    const SRC = `{
+        "version": 2, "kind": "remappr.keymap", "meta": { "name": "N" },
+        "layers": [ { "name": "base", "keys": ["A","B"] } ],
+        "node": { "personality": "mouse", "mouse": { "cpi": 1600 } },
+        "firmware": { "remappr": { "storage": "zms" } },
+        "board": { "controller": { "custom": true, "soc": "stm32u5a5zj",
+                   "name": "my_split" }, "split": true }
+    }`
+
+    it('preserves sections through parse + serialize', () => {
+        const cfg = parseKeymap(SRC)
+        expect(cfg.node).toEqual({ personality: 'mouse', mouse: { cpi: 1600 } })
+        expect(cfg.firmware).toEqual({ remappr: { storage: 'zms' } })
+        expect(cfg.board?.controller).toEqual({
+            custom: true,
+            soc: 'stm32u5a5zj',
+            name: 'my_split',
+        })
+        const round = JSON.parse(serializeKeymap(cfg))
+        expect(round.node).toEqual(cfg.node)
+        expect(round.firmware).toEqual(cfg.firmware)
+        expect(round.board).toEqual(cfg.board)
+    })
+
+    it('does not affect the compiled blob', () => {
+        const bare = `{ "version": 2, "kind": "remappr.keymap",
+            "meta": { "name": "N" },
+            "layers": [ { "name": "base", "keys": ["A","B"] } ] }`
+        expect(bytesOf(SRC)).toEqual(bytesOf(bare))
     })
 })
 
