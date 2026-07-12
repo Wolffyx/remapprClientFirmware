@@ -66,6 +66,27 @@ const GEO = parseKeymap(`{
     "layers": [ { "name": "base", "bindings": ["A","B"] } ]
 }`)
 
+// nRF board (nice_nano_v2) with a WS2812 per-key strip + one rotary encoder — the
+// optional peripheral overlay nodes.
+const RGB = parseKeymap(`{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Glow Pad", "target": "zmk" },
+    "keyboard": { "id": "glow_pad", "name": "Glow Pad",
+        "controller": { "board": "nice_nano_v2" },
+        "keys": [ {"x":0,"y":0},{"x":1,"y":0} ],
+        "hardware": {
+            "transform": { "rows": 1, "columns": 2, "map": [[0,0],[0,1]] },
+            "ws2812": { "spi": "spi3", "dataPin": "P0.6", "chainLength": 2 } } },
+    "layers": [ { "name": "base", "bindings": ["A","B"] } ],
+    "board": { "matrix": { "diode": "col2row",
+        "rows": ["&gpio0 4 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)"],
+        "cols": ["&gpio0 5 GPIO_ACTIVE_HIGH", "&gpio0 6 GPIO_ACTIVE_HIGH"] },
+        "encoders": [ { "a": "&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)",
+                        "b": "&gpio0 20 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)",
+                        "steps": 4 } ],
+        "storage": "nvs" }
+}`)
+
 const overlayOf = (config: typeof NRF, slug: string): string =>
     String(
         getCompiler('remappr-board')
@@ -179,5 +200,77 @@ describe('remappr-board shield compiler', () => {
             ]),
         )
         expect(bundle.rootName).toBe('nrf52840_test-remappr-shield')
+    })
+
+    it('emits a ws2812 led-strip + chosen remappr,led-strip when hardware.ws2812 is set', () => {
+        const ov = overlayOf(RGB, 'glow_pad')
+        expect(ov).toContain('#include <zephyr/dt-bindings/led/led.h>')
+        expect(ov).toContain('led_strip: ws2812@0 {')
+        expect(ov).toContain('compatible = "worldsemi,ws2812-spi"')
+        expect(ov).toContain('chain-length = <2>;')
+        expect(ov).toContain('remappr,led-strip = <&led_strip>;')
+        // nice_nano_v2 controller → real nRF pinctrl psel, not a FIXME scaffold.
+        expect(ov).toContain('NRF_PSEL(SPIM_MOSI, 0, 6)')
+        const defcfg = String(
+            getCompiler('remappr-board')
+                .compile(RGB)
+                .files.find((f) => f.filename.endsWith('Kconfig.defconfig'))!
+                .content,
+        )
+        expect(defcfg).toContain('config REMAPPR_RGB_LED')
+        expect(defcfg).toContain('config WS2812_STRIP_SPI')
+    })
+
+    it('emits gpio-qdec from board.encoders and warns rotation is engine-deferred', () => {
+        const ov = overlayOf(RGB, 'glow_pad')
+        expect(ov).toContain('qdec_0: qdec_0 {')
+        expect(ov).toContain('compatible = "gpio-qdec"')
+        expect(ov).toContain('<&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>')
+        expect(ov).toContain('steps-per-period = <4>;')
+        expect(ov).toContain('zephyr,axis = <INPUT_REL_WHEEL>;')
+        const res = getCompiler('remappr-board').compile(RGB)
+        const defcfg = String(
+            res.files.find((f) => f.filename.endsWith('Kconfig.defconfig'))!
+                .content,
+        )
+        expect(defcfg).toContain('config INPUT_GPIO_QDEC')
+        expect(
+            res.diagnostics.some((d) =>
+                /behavior-engine binding is not yet wired/.test(d.message),
+            ),
+        ).toBe(true)
+    })
+
+    it('omits RGB / encoder nodes when the board declares no such hardware', () => {
+        const ov = overlayOf(NRF, 'nrf52840_test')
+        expect(ov).not.toContain('worldsemi,ws2812-spi')
+        expect(ov).not.toContain('gpio-qdec')
+        const defcfg = String(
+            getCompiler('remappr-board')
+                .compile(NRF)
+                .files.find((f) => f.filename.endsWith('Kconfig.defconfig'))!
+                .content,
+        )
+        expect(defcfg).not.toContain('WS2812_STRIP_SPI')
+        expect(defcfg).not.toContain('INPUT_GPIO_QDEC')
+    })
+
+    it('buildProjectBundle emits a standalone west workspace (west.yml + module.yml)', () => {
+        const bundle = buildProjectBundle(RGB, 'remappr-board')
+        const paths = bundle.files.map((f) => f.filename)
+        expect(paths).toEqual(
+            expect.arrayContaining(['west.yml', 'zephyr/module.yml', 'README.md']),
+        )
+        const west = String(
+            bundle.files.find((f) => f.filename === 'west.yml')!.content,
+        )
+        expect(west).toContain('name: sdk-nrf')
+        expect(west).toContain('revision: v3.3.0')
+        expect(west).toContain('name: remappr-firmware')
+        expect(west).toContain('path: glow_pad-remappr-shield')
+        const mod = String(
+            bundle.files.find((f) => f.filename === 'zephyr/module.yml')!.content,
+        )
+        expect(mod).toContain('board_root: .')
     })
 })
