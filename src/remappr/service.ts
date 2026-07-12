@@ -30,6 +30,7 @@ import { ProtocolError } from '../errors'
 import {
     type CanonMacro,
     type CanonTapDance,
+    type ConfigDefaults,
     type ConfigKeymap,
     serializeKeymap,
 } from '../config'
@@ -152,6 +153,11 @@ export class RemapprKeyboardService implements KeyboardService {
     // same contract as the neutral `layers` buffer. Keyed by pool index.
     private readonly editedMacros = new Map<number, CanonMacro>()
     private readonly editedTapDances = new Map<number, CanonTapDance>()
+    // Pending config-blob defaults patch (§7.4.1 timing tail), overlaid on
+    // `config.defaults` at commit — same discard/commit contract as the macro /
+    // tap-dance edit maps. Config-blob backed → staged via the concrete-service
+    // setConfigDefaults(), never the generic KeyboardService interface.
+    private editedDefaults: Partial<ConfigDefaults> = {}
 
     private readonly notificationListeners = new Set<NotificationHandler>()
     private readonly pendingChangesListeners = new Set<PendingChangesHandler>()
@@ -316,9 +322,15 @@ export class RemapprKeyboardService implements KeyboardService {
         return undefined
     }
 
-    /** `base` with pending macro / tap-dance edits overlaid (for commit/export). */
+    /** `base` with pending macro / tap-dance / defaults edits overlaid (for
+     *  commit/export). */
     private withEdits(base: ConfigKeymap): ConfigKeymap {
-        if (this.editedMacros.size === 0 && this.editedTapDances.size === 0) {
+        const hasDefaultEdits = Object.keys(this.editedDefaults).length > 0
+        if (
+            this.editedMacros.size === 0 &&
+            this.editedTapDances.size === 0 &&
+            !hasDefaultEdits
+        ) {
             return base
         }
         return {
@@ -333,12 +345,16 @@ export class RemapprKeyboardService implements KeyboardService {
                       ),
                   }
                 : {}),
+            ...(hasDefaultEdits
+                ? { defaults: { ...base.defaults, ...this.editedDefaults } }
+                : {}),
         }
     }
 
     private clearEdits(): void {
         this.editedMacros.clear()
         this.editedTapDances.clear()
+        this.editedDefaults = {}
     }
 
     private seedLayersFromConfig(): void {
@@ -538,10 +554,36 @@ export class RemapprKeyboardService implements KeyboardService {
 
     /* ── commit / discard (sealed config push) ──────────────────────────── */
 
+    /* ── config-blob defaults (§7.4.1 timing tail) ──────────────────────────
+     * Remappr-specific: these settings live in the config blob, so the API is on
+     * the concrete service, NOT the generic KeyboardService interface (ZMK / QMK
+     * / Keychron have no config-blob defaults to leak onto). Edits stage into
+     * `editedDefaults` and land on the next commit(), same as macro edits. */
+
+    /** The active defaults with any pending edit applied — read path for a UI
+     *  editor (device-truth defaults merged with unsaved staged changes). */
+    getConfigDefaults(): ConfigDefaults {
+        return { ...this.config.defaults, ...this.editedDefaults }
+    }
+
+    /** Stage a defaults patch, overlaid on the committed defaults at the next
+     *  commit(). A key set to `undefined` drops its pending edit (reverts to the
+     *  committed value); set 0 to force the firmware default. Marks pending so
+     *  Save lights up; discard/reset clear it like any other edit. */
+    setConfigDefaults(patch: Partial<ConfigDefaults>): void {
+        this.assertWritable()
+        for (const key of Object.keys(patch) as (keyof ConfigDefaults)[]) {
+            const value = patch[key]
+            if (value === undefined) delete this.editedDefaults[key]
+            else this.editedDefaults[key] = value
+        }
+        this.markPending(true)
+    }
+
     async commit(): Promise<void> {
         this.assertWritable()
-        // Fold pending macro / tap-dance edits (§24) into the config the layers
-        // raise onto, so a committed blob carries them (and their names).
+        // Fold pending macro / tap-dance / defaults edits into the config the
+        // layers raise onto, so a committed blob carries them (and their names).
         const next = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
         const version = this.configVersion + 1
         const { blob } = buildRemapprBlob(next, { configVersion: version })
