@@ -28,6 +28,7 @@ import type {
 } from '../types'
 import { ProtocolError } from '../errors'
 import {
+    type CanonConditionalLayer,
     type CanonHoldTapDef,
     type CanonMacro,
     type CanonModMorph,
@@ -165,6 +166,13 @@ export class RemapprKeyboardService implements KeyboardService {
     // staged via concrete-service setHoldTap/setModMorph, not the interface.
     private readonly editedHoldTaps = new Map<number, CanonHoldTapDef>()
     private readonly editedModMorphs = new Map<number, CanonModMorph>()
+    // Pending conditional-(tri-)layer list edit, overlaid on
+    // `config.conditionalLayers` at commit. Unlike the per-index def pools above,
+    // tri-layers are a variable-length, name-referenced list the user authors from
+    // scratch (add / remove / edit), so the overlay is a whole-list replacement
+    // (null = no edit) — closer to editedDefaults than the per-index maps. Staged
+    // via concrete-service setConditionalLayers(), not the generic interface.
+    private editedConditionalLayers: CanonConditionalLayer[] | null = null
 
     private readonly notificationListeners = new Set<NotificationHandler>()
     private readonly pendingChangesListeners = new Set<PendingChangesHandler>()
@@ -338,6 +346,7 @@ export class RemapprKeyboardService implements KeyboardService {
             this.editedTapDances.size === 0 &&
             this.editedHoldTaps.size === 0 &&
             this.editedModMorphs.size === 0 &&
+            this.editedConditionalLayers === null &&
             !hasDefaultEdits
         ) {
             return base
@@ -368,6 +377,9 @@ export class RemapprKeyboardService implements KeyboardService {
                       ),
                   }
                 : {}),
+            ...(this.editedConditionalLayers
+                ? { conditionalLayers: this.editedConditionalLayers }
+                : {}),
             ...(hasDefaultEdits
                 ? { defaults: { ...base.defaults, ...this.editedDefaults } }
                 : {}),
@@ -380,6 +392,7 @@ export class RemapprKeyboardService implements KeyboardService {
         this.editedDefaults = {}
         this.editedHoldTaps.clear()
         this.editedModMorphs.clear()
+        this.editedConditionalLayers = null
     }
 
     private seedLayersFromConfig(): void {
@@ -643,6 +656,37 @@ export class RemapprKeyboardService implements KeyboardService {
         if (!cur)
             throw new ProtocolError(`no mod-morph definition at index ${idx}`)
         this.editedModMorphs.set(idx, { ...cur, ...patch })
+        this.markPending(true)
+    }
+
+    /* ── conditional (tri-)layers (§44.3) ───────────────────────────────────
+     * Same concrete-only rationale as the def pools, but a tri-layer set is a
+     * variable-length, name-referenced list the user authors from scratch, so the
+     * overlay is a whole-list replacement (add / remove / edit all route through
+     * one setter) rather than a per-index patch. Lands on the next commit(). */
+
+    /** The conditional (tri-)layers — device truth, or the staged list once edited.
+     *  Returns a deep copy so a UI editor can mutate its working array freely. */
+    getConditionalLayers(): CanonConditionalLayer[] {
+        const src =
+            this.editedConditionalLayers ?? this.config.conditionalLayers ?? []
+        return src.map((c) => ({
+            ifLayers: [...c.ifLayers],
+            thenLayer: c.thenLayer,
+        }))
+    }
+
+    /** Stage the full conditional-layer list, overlaid on the committed list at the
+     *  next commit(). Pass the complete desired set — the editor owns add / remove /
+     *  reorder; an empty list clears every tri-layer. Layer names resolve to indices
+     *  at compile time, so an unknown ifLayers / thenLayer name throws on commit(),
+     *  not here. Marks pending; discard reverts to device truth. */
+    setConditionalLayers(list: CanonConditionalLayer[]): void {
+        this.assertWritable()
+        this.editedConditionalLayers = list.map((c) => ({
+            ifLayers: [...c.ifLayers],
+            thenLayer: c.thenLayer,
+        }))
         this.markPending(true)
     }
 

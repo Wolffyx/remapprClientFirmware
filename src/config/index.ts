@@ -21,6 +21,7 @@ export type {
     CanonTapDanceStep,
     CanonHoldTapDef,
     CanonModMorph,
+    CanonConditionalLayer,
     CanonKscan,
     CanonMatrixKscan,
     CanonDirectKscan,
