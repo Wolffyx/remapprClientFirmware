@@ -731,6 +731,18 @@ export const LightingSchema = z
                 breathing: z.boolean().optional(),
             })
             .optional(),
+        perKey: z
+            .record(
+                z.string(),
+                z
+                    .string()
+                    .regex(/^#[0-9a-fA-F]{6}$/, 'per-key color must be #rrggbb'),
+            )
+            .optional()
+            .describe(
+                'Static per-key RGB colors keyed by physical position → "#rrggbb"; ' +
+                    'compiled to TBL_RGB (§4c).',
+            ),
     })
     .describe(
         'Board-level lighting config from the builder (export-only metadata).',
