@@ -349,6 +349,21 @@ export interface ConfigDefaults {
     /** Matrix-scan release debounce (LAYER timing tail); 0/absent = keep the
      *  devicetree value. */
     matrixReleaseDebounceMs?: number
+    /** Caps-word auto-exit idle timeout (LAYER v3 tail); 0/absent = no idle
+     *  auto-exit (firmware default). */
+    capsWordIdleMs?: number
+    /** Default sticky one-shot release-after lifetime (LAYER v3 tail); 0/absent
+     *  = firmware default (persist until the next key). */
+    stickyReleaseDefaultMs?: number
+    /** Default macro inter-step wait (LAYER v3 tail); 0/absent = firmware
+     *  default. */
+    macroDefaultWaitMs?: number
+    /** Default macro tap hold-time (LAYER v3 tail); 0/absent = firmware
+     *  default. */
+    macroDefaultTapMs?: number
+    /** Matrix scan poll period (LAYER v3 tail); 0/absent = keep the devicetree
+     *  value. */
+    matrixPollPeriodMs?: number
 }
 
 /** ZMK matrix `diode-direction`. */

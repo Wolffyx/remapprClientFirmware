@@ -569,6 +569,8 @@ function tapHold(
     if (rec.quickTapMs) th.quickTapMs = rec.quickTapMs
     if (rec.requirePriorIdleMs) th.requirePriorIdleMs = rec.requirePriorIdleMs
     if (rec.flags & BehaviorFlags.RETRO_TAP) th.retroTap = true
+    if (rec.flags & BehaviorFlags.HOLD_TRIGGER_ON_RELEASE)
+        th.holdTriggerOnRelease = true
     return th
 }
 
@@ -672,6 +674,21 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         pressDebounceMs = lr.u16()
         matrixPressDebounceMs = lr.u16()
         matrixReleaseDebounceMs = lr.u16()
+    }
+    // v3 engine timing tail (dlen >= 24): caps-word idle, sticky release-after
+    // default, macro default wait/tap, matrix poll period. Read sequentially
+    // after the v2 tail (cursor sits at byte 14). 0 = firmware default.
+    let capsWordIdleMs = 0
+    let stickyReleaseDefaultMs = 0
+    let macroDefaultWaitMs = 0
+    let macroDefaultTapMs = 0
+    let matrixPollPeriodMs = 0
+    if (layerT.end - layerT.start >= 24) {
+        capsWordIdleMs = lr.u16()
+        stickyReleaseDefaultMs = lr.u16()
+        macroDefaultWaitMs = lr.u16()
+        macroDefaultTapMs = lr.u16()
+        matrixPollPeriodMs = lr.u16()
     }
     if (numLayers === 0 || numPositions === 0) return fail(DecodeCode.BOUNDS)
 
@@ -813,6 +830,11 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
             ...(pressDebounceMs ? { pressDebounceMs } : {}),
             ...(matrixPressDebounceMs ? { matrixPressDebounceMs } : {}),
             ...(matrixReleaseDebounceMs ? { matrixReleaseDebounceMs } : {}),
+            ...(capsWordIdleMs ? { capsWordIdleMs } : {}),
+            ...(stickyReleaseDefaultMs ? { stickyReleaseDefaultMs } : {}),
+            ...(macroDefaultWaitMs ? { macroDefaultWaitMs } : {}),
+            ...(macroDefaultTapMs ? { macroDefaultTapMs } : {}),
+            ...(matrixPollPeriodMs ? { matrixPollPeriodMs } : {}),
         },
         keyboard: {
             id: 'decoded',

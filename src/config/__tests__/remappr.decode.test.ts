@@ -345,8 +345,8 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
         expect(th.type === 'tap_hold' && th.holdTriggerKeyPositions).toEqual([1, 2, 3])
     })
 
-    // pattern-check: skip — compile-diagnostic assertion, no production logic
-    it('warns and drops holdTriggerOnRelease (no wire bit until Phase 2)', () => {
+    // pattern-check: skip — compile/round-trip assertion, no production logic
+    it('emits holdTriggerOnRelease as BHF bit4 and round-trips (fw #58)', () => {
         const cfg = parseKeymap(`{
             "schemaVersion": 1, "kind": "remappr.keymap",
             "meta": { "name": "HR", "target": "zmk" }, ${kb(2)},
@@ -357,10 +357,15 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
                 "B"
             ] }]
         }`)
-        const { diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        // No longer dropped: the firmware honors BHF bit4 since #58.
         expect(
             diagnostics.some((d) => /hold-trigger-on-release/.test(d.message)),
-        ).toBe(true)
+        ).toBe(false)
+        const { config } = decodeRemapprBlob(blob)
+        const th = config!.layers[0].bindings[0]
+        expect(th.type).toBe('tap_hold')
+        expect(th.type === 'tap_hold' && th.holdTriggerOnRelease).toBe(true)
     })
 
     it('layer / sticky / key_toggle / system / mouse / output / lighting', () => {
