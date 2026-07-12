@@ -1,6 +1,7 @@
 import type { KeyCatalog } from './catalog/types'
 import type { KeycodeCodec } from './codec'
 import type { LightingCatalog } from './lighting'
+import type { Limits } from './remappr/protocol'
 import type {
     ActionType,
     AdapterNotification,
@@ -428,6 +429,11 @@ export interface RadioPipeTable {
 export interface KeyboardService {
     readonly deviceInfo: DeviceInfo
     readonly capabilities: Capabilities
+    /** Device capacity + feature limits from GET_LIMITS (§7.4.1). Present only on
+     *  remappr devices that answered GET_LIMITS; `featureBitmask` drives the app's
+     *  firmware-capability warnings (see config/capabilityWarnings). Undefined on
+     *  other firmwares and pre-limits devices. */
+    readonly limits?: Limits
     /** Device class for the renderer's landing decision. `'dongle'` lands on the
      *  node roster (no keymap of its own); omitted/`'keyboard'` opens the editor.
      *  A behind-dongle node view is a keyboard, not a dongle. */
