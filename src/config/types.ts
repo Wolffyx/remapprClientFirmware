@@ -673,6 +673,22 @@ export type ConfigBoardController =
 
 /** Build-time board definition (v2) — consumed by the DT/Kconfig generator, never
  *  in the blob. Open shape: extra builder fields are preserved verbatim. */
+/** A rotary encoder's HARDWARE wiring for the board generator: the two quadrature
+ *  phase GPIOs (a friendly board label or a verbatim `&gpioN pin FLAGS` spec), the
+ *  detent resolution, and the Zephyr relative axis the `gpio-qdec` driver emits.
+ *  Emitted as a stock `gpio-qdec` node; binding rotation into the behavior engine
+ *  is firmware-side and HIL-deferred. */
+export interface BoardEncoder {
+    /** Phase-A GPIO (friendly label or verbatim `&`-spec). */
+    a: string
+    /** Phase-B GPIO (friendly label or verbatim `&`-spec). */
+    b: string
+    /** Quadrature steps per detent period. Default 4. */
+    steps?: number
+    /** Zephyr relative axis code the qdec emits, e.g. "INPUT_REL_WHEEL" (default). */
+    axis?: string
+}
+
 export interface ConfigBoard {
     controller?: ConfigBoardController
     matrix?: {
@@ -684,6 +700,8 @@ export interface ConfigBoard {
     }
     split?: boolean
     storage?: 'zms' | 'nvs'
+    /** Rotary encoder hardware for the board generator (opt-in; emits gpio-qdec). */
+    encoders?: BoardEncoder[]
     [k: string]: unknown
 }
 
