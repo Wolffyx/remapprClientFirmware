@@ -344,6 +344,17 @@ export interface RgbTable {
     colors: Uint8Array
 }
 
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_MOUSE layout
+/** Pointer/mouse-node settings (§4b, id 8): sensor `cpi`, `autoLayerTimeoutMs`,
+ *  a reserved `flags` byte, and an acceleration curve of { speedIn, multX100 }
+ *  points (multiplier ×100, so 100 = 1.0×). */
+export interface MouseTable {
+    cpi: number
+    autoLayerTimeoutMs: number
+    flags: number
+    accel: Array<{ speedIn: number; multX100: number }>
+}
+
 /** One action-binding record (10 bytes): an additive per-position action that
  *  sits alongside the keymap binding. `kind`/`code`/`arg0`/`arg1` are passed
  *  through verbatim (the firmware resolver interprets them). */
@@ -571,6 +582,24 @@ export class BlobBuilder {
             this.w.u16(e.cwIndex)
             this.w.u16(e.ccwIndex)
             this.w.u16(e.pressIndex)
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_MOUSE (id 8, §4b): u16 cpi, u16 auto_layer_timeout_ms,
+     *  u8 accel_point_count, u8 flags, then N × { u16 speed_in, u16 mult_x100 }
+     *  — matching firmware decode_mouse.c. */
+    mouseTable(m: MouseTable): this {
+        this.tableBegin(TableId.Mouse, 1)
+        this.w.u16(m.cpi)
+        this.w.u16(m.autoLayerTimeoutMs)
+        this.w.u8(m.accel.length)
+        this.w.u8(m.flags)
+        for (const p of m.accel) {
+            this.w.u16(p.speedIn)
+            this.w.u16(p.multX100)
         }
         this.tableEnd()
         return this

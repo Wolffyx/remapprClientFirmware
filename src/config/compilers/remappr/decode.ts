@@ -33,6 +33,7 @@ import type {
     CanonTapDance,
     CanonTapDanceStep,
     ConfigKeymap,
+    ConfigMouse,
     Direction,
     HoldTapFlavor,
     LightingAction,
@@ -816,6 +817,10 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         ? readRgb(bytes, rgbT, numLayers, numPositions, diag)
         : undefined
 
+    // ── MOUSE (optional, id 8, §4b) → v2 node.mouse pointer settings ──
+    const mouseT = table(TableId.Mouse)
+    const mouse = mouseT ? readMouse(bytes, mouseT, diag) : undefined
+
     // ── synthesize keyboard geometry (real layout comes from GET_KEY_LAYOUT) ──
     const keys: CanonGeometry[] = Array.from({ length: numPositions }, (_, i) => ({
         x: i,
@@ -855,6 +860,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         ...(conditionalLayers.length ? { conditionalLayers } : {}),
         ...(keyOverrides.length ? { keyOverrides } : {}),
         ...(leaderSequences.length ? { leaderSequences } : {}),
+        ...(mouse ? { node: { mouse } } : {}),
     }
 
     return { code: DecodeCode.OK, config, configVersion, diagnostics: diag.all }
@@ -960,6 +966,42 @@ function readRgb(
         const bb = r.u8()
         if (rr || gg || bb) out[pos] = rgbHex(rr, gg, bb)
     }
+    return Object.keys(out).length ? out : undefined
+}
+
+// TBL_MOUSE (id 8, §4b): u16 cpi, u16 auto_layer_timeout_ms, u8 accel_point_count,
+// u8 flags, then N × { u16 speed_in, u16 mult_x100 }. Bounds-checked so a foreign
+// or truncated blob can't throw; returns undefined when the table carries no
+// pointer settings. The inverse of blobWriter.mouseTable / index.ts node.mouse.
+function readMouse(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigMouse | undefined {
+    if (t.end - t.start < 6) {
+        diag.error('mouse table header truncated')
+        return undefined
+    }
+    const r = new ByteReader(bytes)
+    r.seek(t.start)
+    const cpi = r.u16()
+    const autoLayerTimeoutMs = r.u16()
+    const count = r.u8()
+    r.u8() // flags (reserved)
+    if (t.start + 6 + count * 4 > t.end) {
+        diag.error('mouse accel curve truncated')
+        return undefined
+    }
+    const accel: Array<[number, number]> = []
+    for (let i = 0; i < count; i++) {
+        const speedIn = r.u16()
+        const multX100 = r.u16()
+        accel.push([speedIn, multX100])
+    }
+    const out: ConfigMouse = {}
+    if (cpi) out.cpi = cpi
+    if (autoLayerTimeoutMs) out.autoLayerTimeoutMs = autoLayerTimeoutMs
+    if (accel.length) out.accel = accel
     return Object.keys(out).length ? out : undefined
 }
 

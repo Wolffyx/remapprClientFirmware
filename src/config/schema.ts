@@ -787,11 +787,31 @@ export const BoardSchema = z
         'Build-time board definition for the DT/Kconfig generator (never in the blob).',
     )
 
+export const MouseSchema = z
+    .looseObject({
+        cpi: z.number().int().min(0).max(0xffff).optional(),
+        autoLayerTimeoutMs: z.number().int().min(0).max(0xffff).optional(),
+        accel: z
+            .array(
+                z.tuple([
+                    z.number().int().min(0).max(0xffff),
+                    z.number().int().min(0).max(0xffff),
+                ]),
+            )
+            .max(255)
+            .optional(),
+    })
+    .describe(
+        'Pointer/mouse-node settings (TBL_MOUSE, §4b): sensor cpi, auto-layer ' +
+            'timeout, and an acceleration curve of [speedIn, multX100] points.',
+    )
+
 export const NodeSchema = z
     .looseObject({
         personality: z
             .enum(['keyboard', 'mouse', 'joystick', 'dongle'])
             .optional(),
+        mouse: MouseSchema.optional(),
     })
     .describe(
         'Per-personality node configuration; a dongle has a limited surface, a ' +
