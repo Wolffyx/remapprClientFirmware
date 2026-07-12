@@ -456,6 +456,25 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
         }`)
     })
 
+    it('encoders (TBL_ENCODER) round-trip on the slot-array form', () => {
+        // base binds cw/ccw/press; fn omits press (exercises the 0xFFFF unbound
+        // sentinel) — both on encoder slot 0, one record per (layer, slot).
+        roundTrips(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "Enc", "target": "zmk" },
+            "keyboard": { "id": "k", "name": "K",
+                "keys": [{"x":0,"y":0},{"x":1,"y":0}],
+                "encoders": [{"x":0,"y":1}] },
+            "layers": [
+                { "name": "base", "bindings": ["A", "B"],
+                  "encoders": [{ "cw": "C", "ccw": "D", "press": "E" }] },
+                { "name": "fn",
+                  "bindings": [{"type":"transparent"},{"type":"transparent"}],
+                  "encoders": [{ "cw": "1", "ccw": "2" }] }
+            ]
+        }`)
+    })
+
     // pattern-check: skip — composite-table (mod-morph / tap-dance) test fixtures
     it('tap_dance (SUBS table) round-trips + reconstructs the definition', () => {
         const json = `{

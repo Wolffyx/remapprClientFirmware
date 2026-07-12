@@ -21,6 +21,7 @@ import type {
     CanonAction,
     CanonCombo,
     CanonConditionalLayer,
+    CanonEncoderBinding,
     CanonGeometry,
     CanonKeyPress,
     CanonKeyOverride,
@@ -805,6 +806,10 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const posholdT = table(TableId.Poshold)
     if (posholdT) readPosholds(bytes, posholdT, decoded, diag)
 
+    // ── ENCODER (optional, §4a) → slot-array layer.encoders[] in place ──
+    const encoderT = table(TableId.Encoder)
+    if (encoderT) readEncoders(bytes, encoderT, decoded, layers, diag)
+
     // ── RGB (optional, id 7) → per-key colors (decode-only; preps Phase 4c emit) ──
     const rgbT = table(TableId.Rgb)
     const perKey = rgbT
@@ -1085,6 +1090,56 @@ function readCombos(
         out.push(combo)
     }
     return out
+}
+
+// TBL_ENCODER (§4a): u16 count + per { u8 encoder_index, u8 layer, u16 cw, u16
+// ccw, u16 press } — behavior indices into the decoded table, 0xFFFF = unbound.
+// Reattaches to the slot-array layer.encoders[] form in place (mirrors how the
+// lowering reads it), so the round-trip is byte-stable.
+function readEncoders(
+    bytes: Uint8Array,
+    t: TableFrame,
+    decoded: CanonAction[],
+    layers: CanonLayer[],
+    diag: DiagnosticBag,
+): void {
+    const r = new ByteReader(bytes)
+    r.seek(t.start)
+    const count = r.u16()
+    const resolve = (
+        idx: number,
+        layer: number,
+        dir: string,
+    ): CanonAction | undefined => {
+        if (idx === 0xffff) return undefined
+        if (idx >= decoded.length) {
+            diag.error(`encoder layer ${layer} ${dir} references behavior ${idx}`)
+            return { type: 'none' } as CanonAction
+        }
+        return decoded[idx]
+    }
+    for (let i = 0; i < count; i++) {
+        const encoderIndex = r.u8()
+        const layer = r.u8()
+        const cwIdx = r.u16()
+        const ccwIdx = r.u16()
+        const pressIdx = r.u16()
+        const cw =
+            resolve(cwIdx, layer, 'cw') ?? ({ type: 'none' } as CanonAction)
+        const ccw =
+            resolve(ccwIdx, layer, 'ccw') ?? ({ type: 'none' } as CanonAction)
+        const press = resolve(pressIdx, layer, 'press')
+        const binding: CanonEncoderBinding = press
+            ? { cw, ccw, press }
+            : { cw, ccw }
+        if (layer >= layers.length) {
+            diag.error(`encoder references layer ${layer} out of range`)
+            continue
+        }
+        const lay = layers[layer]
+        if (!lay.encoders) lay.encoders = []
+        lay.encoders[encoderIndex] = binding
+    }
 }
 
 // TBL_CONDITIONAL: u16 count + per { u8 num_if, u8 then_layer, num_if × u8 }.

@@ -975,6 +975,50 @@ describe('LAYER §20 timing tail (runtime debounce)', () => {
 })
 
 // pattern-check: skip — compile fixtures + assertions, no production logic
+describe('TBL_ENCODER (§4a encoder bindings)', () => {
+    const encCfg = (press: boolean): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "E", "target": "zmk" },
+        "keyboard": { "id":"k","name":"K","keys":[{"x":0,"y":0},{"x":1,"y":0}],
+            "encoders":[{"x":0,"y":1}] },
+        "layers": [{ "name":"base","bindings":["A","B"],
+            "encoders":[{ "cw":"C","ccw":"D"${press ? ',"press":"E"' : ''} }] }]
+    }`
+
+    it('emits an 8-byte-per-record TBL_ENCODER table (id 20)', () => {
+        const b = bytesOf(parseKeymap(encCfg(true)))
+        const t = findTable(b, 20)
+        expect(t).not.toBeNull()
+        const [start, end] = t!
+        expect(u16(b, start)).toBe(1) // record count
+        expect(end - start).toBe(2 + 8) // count + one 8-byte record
+        expect(b[start + 2]).toBe(0) // encoder_index (slot 0)
+        expect(b[start + 3]).toBe(0) // layer 0
+        expect(u16(b, start + 8)).not.toBe(0xffff) // press is bound here
+    })
+
+    it('emits the 0xFFFF unbound sentinel for an absent press', () => {
+        const b = bytesOf(parseKeymap(encCfg(false)))
+        const [start] = findTable(b, 20)!
+        expect(u16(b, start + 4)).not.toBe(0xffff) // cw bound
+        expect(u16(b, start + 6)).not.toBe(0xffff) // ccw bound
+        expect(u16(b, start + 8)).toBe(0xffff) // press unbound
+    })
+
+    it('omits the table entirely when no layer defines encoders', () => {
+        const b = bytesOf(
+            parseKeymap(`{
+                "schemaVersion":1,"kind":"remappr.keymap",
+                "meta":{"name":"E","target":"zmk"},
+                "keyboard":{"id":"k","name":"K","keys":[{"x":0,"y":0}]},
+                "layers":[{"name":"base","bindings":["A"]}]
+            }`),
+        )
+        expect(findTable(b, 20)).toBeNull()
+    })
+})
+
+// pattern-check: skip — compile fixtures + assertions, no production logic
 describe('defaults lowering (quickTapMs / comboTimeoutMs → records)', () => {
     const twoKeys = `"keyboard": { "id": "k", "name": "K", "keys": [{"x":0,"y":0},{"x":1,"y":0}] }`
 
