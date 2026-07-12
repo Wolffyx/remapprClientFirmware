@@ -89,6 +89,7 @@ export const BehaviorType = {
     Peripheral: 36, // tap = peripheral_kind, hold = code
     Consumer: 37, // tap = Consumer-page usage (media keys); press + release edges
     SysCtrl: 38, // tap = GD System Control usage (power/sleep/wake)
+    StickyKey: 39, // tap = one-shot key usage, held until the next key releases
 } as const
 
 // enum remappr_system_action (behavior_table.h) — carried in BH_SYSTEM `tap`.
@@ -203,6 +204,9 @@ export const MacroOp = {
     Press: 1,
     Release: 2,
     Wait: 3,
+    // Pause playback until the invoking key is released (no arg); a no-op when
+    // it already lifted (ZMK &macro_pause_for_release).
+    PauseForRelease: 4,
 } as const
 
 // enum remappr_th_flavor.
@@ -220,6 +224,9 @@ export const BehaviorFlags = {
     RETRO_TAP: 1 << 0,
     HOLD_WHILE_UNDECIDED: 1 << 1,
     MORPH_SUPPRESS_MODS: 1 << 2,
+    // MOD_MORPH: morph when ANY trigger mod is held instead of requiring all
+    // of them (the QMK grave-escape shape).
+    MORPH_ANY_MOD: 1 << 3,
 } as const
 
 // HID modifier byte bits (REMAPPR_MOD_*).
@@ -234,7 +241,11 @@ export const MOD = {
     RIGHT_GUI: 1 << 7,
 } as const
 
-/** One decoded behavior record (16 bytes on the wire). */
+// pattern-check: skip — optional annotation field on the existing wire DTO
+/** One decoded behavior record (16 bytes on the wire). `posHold` is a
+ *  compiler-side annotation (§28 positional hold-trigger positions) — it rides
+ *  the record through de-duplication and is emitted as a TBL_POSHOLD entry,
+ *  never into the 16-byte record itself. */
 export interface BehaviorRecord {
     type: number
     flavor: number
@@ -246,6 +257,7 @@ export interface BehaviorRecord {
     quickTapMs: number
     requirePriorIdleMs: number
     subIndex: number
+    posHold?: number[]
 }
 
 export interface ComboRecord {
@@ -253,6 +265,14 @@ export interface ComboRecord {
     timeoutMs: number
     layer: number // 0xFF = any
     outputIndex: number // index into the behavior table
+}
+
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_POSHOLD layout
+/** One positional hold-trigger list (§28): only an interrupting key whose
+ *  position is listed counts toward the referenced tap-hold's hold decision. */
+export interface PosholdRecord {
+    behaviorIndex: number // index into the (deduped) BEHAVIOR table
+    positions: number[] // physical key positions, each < num_positions
 }
 
 // pattern-check: skip plain wire-DTO interfaces mirroring BehaviorRecord/ComboRecord
@@ -418,12 +438,29 @@ export class BlobBuilder {
         numPositions: number,
         defaultTermMs: number,
         releaseDebounceMs: number,
+        timing?: {
+            pressDebounceMs?: number
+            matrixPressDebounceMs?: number
+            matrixReleaseDebounceMs?: number
+        },
     ): this {
         this.tableBegin(TableId.Layer, 1)
         this.w.u16(numLayers)
         this.w.u16(numPositions)
         this.w.u16(defaultTermMs)
         this.w.u16(releaseDebounceMs)
+        // Optional §20 timing tail (firmware dlen >= 14): engine eager-press
+        // debounce + the matrix-scan debounce pair. 0 = keep the devicetree
+        // value, so the tail is emitted only when some field is set — an
+        // all-default config keeps the 8-byte layout (goldens unchanged).
+        const press = timing?.pressDebounceMs ?? 0
+        const mPress = timing?.matrixPressDebounceMs ?? 0
+        const mRelease = timing?.matrixReleaseDebounceMs ?? 0
+        if (press || mPress || mRelease) {
+            this.w.u16(press)
+            this.w.u16(mPress)
+            this.w.u16(mRelease)
+        }
         this.tableEnd()
         return this
     }
@@ -511,6 +548,23 @@ export class BlobBuilder {
             this.w.u16(r.ref)
             this.w.u8(bytes.length)
             for (const b of bytes) this.w.u8(b)
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_POSHOLD (§28): u16 count, then per entry u16 behavior_index,
+     *  u8 num_positions, u8 pad, num_positions × u16 position — matching
+     *  firmware decode_poshold.c. */
+    posholdTable(entries: PosholdRecord[]): this {
+        this.tableBegin(TableId.Poshold, 1)
+        this.w.u16(entries.length)
+        for (const e of entries) {
+            this.w.u16(e.behaviorIndex)
+            this.w.u8(e.positions.length)
+            this.w.u8(0) // reserved
+            for (const p of e.positions) this.w.u16(p)
         }
         this.tableEnd()
         return this

@@ -10,25 +10,30 @@
 import {
     buildNodeInfoArg,
     Cmd,
+    CommonVerb,
     DongleVerb,
     Namespace,
     NODE_RECORD_LEN,
+    parseErrorCounters,
     parseLinkStats,
     parseNodeList,
     parseNodeRecord,
+    parsePipeTable,
     Status,
     statusName,
+    type ErrorCounters,
     type LinkStats,
     type NodeRecord,
+    type PipeTable,
 } from './protocol'
 import {
     loadOrCreateIdentity,
     RemapprSession,
     type RemapprIdentity,
 } from './auth'
-import type { RemapprRpc } from './rpc'
+import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
 
-export type { LinkStats, NodeRecord }
+export type { ErrorCounters, LinkStats, NodeRecord, PipeTable }
 
 /** Enumerate the nodes bonded to a dongle (DONGLE.LIST_NODES). Returns [] for a
  *  directly-attached (non-dongle) device or an empty roster. */
@@ -145,6 +150,42 @@ export async function setDongleNkro(
     if (reply.status !== Status.OK)
         throw new Error(`SET_NKRO → ${statusName(reply.status)}`)
     return reply.data.length >= 1 ? reply.data[0] !== 0 : false
+}
+
+// pattern-check: skip — thin async wrappers over DONGLE.GET_PIPE_TABLE /
+// COMMON.GET_ERROR_COUNTERS, same shape as the wrappers above.
+/** Read the dongle's raw radio pipe table (DONGLE.GET_PIPE_TABLE): every pipe
+ *  1..7 bonded or not, plus the pairing-window state — the diagnosis view
+ *  behind listNodes (incomplete bonds, stuck pairing reservations, §6.4
+ *  control leases). Idempotent read. Throws on a non-dongle device (ERR_CMD). */
+export async function getPipeTable(rpc: RemapprRpc): Promise<PipeTable> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.GET_PIPE_TABLE,
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`GET_PIPE_TABLE → ${statusName(reply.status)}`)
+    return parsePipeTable(reply.data)
+}
+
+/** Read a device's §20 error counters (COMMON.GET_ERROR_COUNTERS): radio MIC
+ *  failures, unACKed-uplink channel fails, and link resyncs — free-running
+ *  since boot. Pass `targetNode` to relay the read to a node behind a dongle
+ *  (retried on the transient §10 relay ERR_STATE). Throws where the firmware
+ *  has no counter source wired (ERR_CMD). */
+export async function getErrorCounters(
+    rpc: RemapprRpc,
+    targetNode = 0,
+): Promise<ErrorCounters> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.COMMON,
+        CommonVerb.GET_ERROR_COUNTERS,
+        undefined,
+        targetNode ? { targetNode, retries: RELAY_READ_RETRIES } : undefined,
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`GET_ERROR_COUNTERS → ${statusName(reply.status)}`)
+    return parseErrorCounters(reply.data)
 }
 
 // pattern-check: skip — orchestrates establishNodeSession + one callSealedRelay;

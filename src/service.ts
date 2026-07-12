@@ -364,6 +364,11 @@ export interface NodesApi {
      *  packet-error counters and a generation counter that bumps on every
      *  adaptive channel swap. Idempotent read for a diagnostics view. */
     getLinkStats(): Promise<RadioLinkStats>
+
+    /** Read the dongle's raw radio pipe table: every pipe bonded or not, plus
+     *  the pairing-window state — the diagnosis view behind `list()` (incomplete
+     *  bonds, stuck pairing reservations, control leases). Idempotent read. */
+    getPipeTable(): Promise<RadioPipeTable>
 }
 
 // pattern-check: skip — two plain DTO interfaces mirroring the wire reply;
@@ -387,6 +392,37 @@ export interface RadioLinkStats {
     /** Failure percentage that triggers an adaptive swap. */
     failPercent: number
     channels: RadioChannelStat[]
+}
+
+// pattern-check: skip — plain DTO interfaces mirroring the pipe-table wire
+// reply, same idiom as RadioLinkStats above; no GoF abstraction.
+/** One raw radio pipe slot (NodesApi.getPipeTable). Unlike a NodeView this
+ *  includes unbonded/incomplete slots. */
+export interface RadioPipeEntry {
+    pipe: number
+    bonded: boolean
+    /** Crypto session resumed. */
+    session: boolean
+    /** Radio-live right now. */
+    online: boolean
+    /** Short-id assigned (a bond mid-pair has none yet). */
+    hasId: boolean
+    /** Control lease held. */
+    leased: boolean
+    shortId: number
+    deviceType: number
+    nodeRole: number
+    /** Control-lease owner: 0 = USB host, 1 = BLE host, null = none. */
+    ctrlOwner: number | null
+    hops: number
+}
+
+/** Raw pipe-table diagnostics for a multi-node receiver. */
+export interface RadioPipeTable {
+    pairWindowOpen: boolean
+    /** Pipe reserved for an in-flight pair, or null. */
+    pairPipe: number | null
+    pipes: RadioPipeEntry[]
 }
 
 export interface KeyboardService {

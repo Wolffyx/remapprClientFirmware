@@ -761,6 +761,12 @@ const BaseKeymapSchema = z.object({
             tappingTermMs: z.number().int().positive().optional(),
             quickTapMs: z.number().int().nonnegative().optional(),
             comboTimeoutMs: z.number().int().positive().optional(),
+            // §20 runtime debounce (LAYER timing tail); 0/absent = keep the
+            // firmware/devicetree value.
+            releaseDebounceMs: z.number().int().nonnegative().optional(),
+            pressDebounceMs: z.number().int().nonnegative().optional(),
+            matrixPressDebounceMs: z.number().int().nonnegative().optional(),
+            matrixReleaseDebounceMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
     keyboard: z.object({
