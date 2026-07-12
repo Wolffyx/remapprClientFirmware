@@ -36,6 +36,7 @@ export function cloneLighting(l: CanonLighting): CanonLighting {
     return {
         ...(l.underglow ? { underglow: { ...l.underglow } } : {}),
         ...(l.backlight ? { backlight: { ...l.backlight } } : {}),
+        ...(l.perKey ? { perKey: { ...l.perKey } } : {}),
     }
 }
 

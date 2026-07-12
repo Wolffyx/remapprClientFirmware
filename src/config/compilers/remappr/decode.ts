@@ -34,6 +34,7 @@ import type {
     CanonTapDanceStep,
     ConfigKeymap,
     ConfigMouse,
+    ConfigNode,
     Direction,
     HoldTapFlavor,
     LightingAction,
@@ -821,6 +822,23 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const mouseT = table(TableId.Mouse)
     const mouse = mouseT ? readMouse(bytes, mouseT, diag) : undefined
 
+    // ── PERSONALITY (optional, id 16, §4c) → v2 node.personality identity ──
+    const personalityT = table(TableId.Personality)
+    const personality = personalityT
+        ? readPersonality(bytes, personalityT)
+        : undefined
+
+    // Reassemble the v2 node section from its decoded parts (§4b mouse, §4c
+    // personality). Only keyboard/mouse personalities have a firmware identity,
+    // so an unknown code leaves personality undefined.
+    const node: ConfigNode | undefined =
+        mouse || personality
+            ? {
+                  ...(personality ? { personality } : {}),
+                  ...(mouse ? { mouse } : {}),
+              }
+            : undefined
+
     // ── synthesize keyboard geometry (real layout comes from GET_KEY_LAYOUT) ──
     const keys: CanonGeometry[] = Array.from({ length: numPositions }, (_, i) => ({
         x: i,
@@ -860,7 +878,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         ...(conditionalLayers.length ? { conditionalLayers } : {}),
         ...(keyOverrides.length ? { keyOverrides } : {}),
         ...(leaderSequences.length ? { leaderSequences } : {}),
-        ...(mouse ? { node: { mouse } } : {}),
+        ...(node ? { node } : {}),
     }
 
     return { code: DecodeCode.OK, config, configVersion, diagnostics: diag.all }
@@ -1003,6 +1021,23 @@ function readMouse(
     if (autoLayerTimeoutMs) out.autoLayerTimeoutMs = autoLayerTimeoutMs
     if (accel.length) out.accel = accel
     return Object.keys(out).length ? out : undefined
+}
+
+// TBL_PERSONALITY (id 16, §4c): u8 personality + 3 reserved bytes. Only the
+// keyboard/mouse identities have a firmware personality; any other code (unknown
+// / recovery / reserved) decodes to undefined so it isn't reconstructed.
+function readPersonality(
+    bytes: Uint8Array,
+    t: TableFrame,
+): ConfigNode['personality'] | undefined {
+    if (t.end - t.start < 1) return undefined
+    const r = new ByteReader(bytes)
+    r.seek(t.start)
+    const code = r.u8()
+    return ({ 1: 'keyboard', 2: 'mouse' } as Record<
+        number,
+        ConfigNode['personality']
+    >)[code]
 }
 
 interface DecodedNames {
