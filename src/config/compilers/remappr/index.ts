@@ -37,12 +37,14 @@ import {
     LockAction,
     NameKind,
     OUTPUT_NO_PROFILE,
+    ENCODER_BH_NONE,
     OutputActionCode,
     PeripheralKind,
     SystemAction,
     type BehaviorRecord,
     type ComboRecord,
     type ConditionalRecord,
+    type EncoderRecord,
     type KeyOverrideRecord,
     type LeaderRecord,
     type MacroRecord,
@@ -1133,6 +1135,48 @@ function encodeBlob(
         ),
     }))
 
+    // Encoders (optional, §4a). Slot-array form: layer.encoders[slot] is
+    // index-aligned to keyboard.encoders[], so the slot ordinal is the firmware
+    // encoder_index. cw/ccw/press each lower to a behavior index (cw/ccw are
+    // required; an absent press is ENCODER_BH_NONE). The keyed encoderBindings
+    // builder form is not yet on the wire — warn rather than silently drop.
+    const encoders: EncoderRecord[] = []
+    config.layers.forEach((layer, li) => {
+        layer.encoders?.forEach((binding, slot) => {
+            if (!binding) return
+            const lower = (
+                action: CanonAction | undefined,
+                dir: string,
+            ): number =>
+                action
+                    ? getOrAdd(
+                          lowerAction(
+                              action,
+                              diag,
+                              ['layers', li, 'encoders', slot, dir],
+                              macroCtx,
+                              layerIndex,
+                              comp,
+                          ),
+                      )
+                    : ENCODER_BH_NONE
+            encoders.push({
+                encoderIndex: slot,
+                layer: li,
+                cwIndex: lower(binding.cw, 'cw'),
+                ccwIndex: lower(binding.ccw, 'ccw'),
+                pressIndex: lower(binding.press, 'press'),
+            })
+        })
+        if (layer.encoderBindings) {
+            diag.warn(
+                `keyed encoderBindings are not yet lowered to the wire — use ` +
+                    `the slot-array layer.encoders[] form`,
+                ['layers', li, 'encoderBindings'],
+            )
+        }
+    })
+
     // Conditional (tri-)layers (optional). Layer names resolve to indices.
     const resolveLayer = (name: string, ci: number): number => {
         const i = layerIndex.get(name)
@@ -1243,6 +1287,7 @@ function encodeBlob(
     // templates appended while bindings lowered above (§44.3).
     if (macroCtx.records.length > 0) builder.macroTable(macroCtx.records)
     if (combos.length > 0) builder.comboTable(combos)
+    if (encoders.length > 0) builder.encoderTable(encoders)
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
     if (leaders.length > 0) builder.leaderTable(leaders)

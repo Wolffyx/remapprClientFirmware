@@ -35,7 +35,12 @@ export const TableId = {
     ActionBinding: 17,
     Poshold: 18,
     Names: 19,
+    Encoder: 20,
 } as const
+
+/** Wire sentinel for an unbound encoder direction/press (config_blob.h
+ *  REMAPPR_ENCODER_BH_NONE): the firmware decodes it to a NONE no-op. */
+export const ENCODER_BH_NONE = 0xffff
 
 /** TBL_NAMES entry kind (config_blob.h REMAPPR_NAME_KIND_*). */
 export const NameKind = {
@@ -269,6 +274,17 @@ export interface ComboRecord {
     timeoutMs: number
     layer: number // 0xFF = any
     outputIndex: number // index into the behavior table
+}
+
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_ENCODER layout
+/** One rotary-encoder binding (§4a; TBL_ENCODER). `layer` gates it (0xFF = any);
+ *  cw/ccw/press are behavior-table indices, ENCODER_BH_NONE (0xFFFF) = unbound. */
+export interface EncoderRecord {
+    encoderIndex: number
+    layer: number
+    cwIndex: number
+    ccwIndex: number
+    pressIndex: number
 }
 
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_POSHOLD layout
@@ -540,6 +556,21 @@ export class BlobBuilder {
             this.w.u8(0) // pad
             this.w.u16(c.outputIndex)
             for (const p of c.positions) this.w.u16(p)
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    encoderTable(encoders: EncoderRecord[]): this {
+        this.tableBegin(TableId.Encoder, 1)
+        this.w.u16(encoders.length)
+        for (const e of encoders) {
+            this.w.u8(e.encoderIndex)
+            this.w.u8(e.layer)
+            this.w.u16(e.cwIndex)
+            this.w.u16(e.ccwIndex)
+            this.w.u16(e.pressIndex)
         }
         this.tableEnd()
         return this
