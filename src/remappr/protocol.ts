@@ -172,6 +172,23 @@ export const LightingVerb = {
     SET_DISPLAY: 0x34,
 } as const
 
+/** MOUSE-namespace verbs (§5.4) — namespace-scoped opcodes (they reuse low
+ *  numbers and are served ONLY via the 0xE2/UCH router; dispatch is on the
+ *  (ns, opcode) pair). Each verb is manifest-gated on its wired firmware op
+ *  and answers ERR_CMD otherwise; wiring any raises CAP_MOUSE (1<<11). */
+export const MouseVerb = {
+    /** No arg → 12 B: u8 version(=1) | u8 rsvd | u16 dpi_min | u16 dpi_max |
+     *  u16 dpi_step | u16 dpi | u8 accel_profile | u8 scroll_mode (LE).
+     *  Plaintext-open read. */
+    GET_MOTION_CONFIG: 0x01,
+    /** Arg: u16 dpi LE (sealed, mutating); ERR_ARG outside min..max. */
+    SET_DPI: 0x02,
+    /** Arg: u8 acceleration profile id (sealed, mutating). */
+    SET_ACCEL_PROFILE: 0x03,
+    /** Arg: u8 scroll mode id (sealed, mutating). */
+    SET_SCROLL_MODE: 0x04,
+} as const
+
 /** KEYBOARD-namespace verbs (proto-v2, chunked). */
 export const KeyboardVerb = {
     GET_KEYMAP_BOUNDS: 0x42,
@@ -771,6 +788,42 @@ export function parseErrorCounters(d: Uint8Array): ErrorCounters {
         txChanFail: dv.getUint16(6, true),
         linkResync: dv.getUint16(8, true),
     }
+}
+
+/** The pointer device's motion configuration (MOUSE.GET_MOTION_CONFIG §5.4).
+ *  dpiMin/dpiMax/dpiStep describe the sensor's valid range (slider bounds);
+ *  dpi is the current setting. */
+export interface MotionConfig {
+    dpiMin: number
+    dpiMax: number
+    dpiStep: number
+    dpi: number
+    accelProfile: number
+    scrollMode: number
+}
+
+const MOTION_CONFIG_LEN = 12
+
+export function parseMotionConfig(d: Uint8Array): MotionConfig {
+    if (d.length < MOTION_CONFIG_LEN)
+        throw new Error('motion-config reply too short')
+    if (d[0] !== 1) throw new Error(`unknown motion-config version ${d[0]}`)
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    return {
+        dpiMin: dv.getUint16(2, true),
+        dpiMax: dv.getUint16(4, true),
+        dpiStep: dv.getUint16(6, true),
+        dpi: dv.getUint16(8, true),
+        accelProfile: d[10],
+        scrollMode: d[11],
+    }
+}
+
+/** Build the MOUSE.SET_DPI arg (u16 LE). */
+export function buildDpiArg(dpi: number): Uint8Array {
+    const out = new Uint8Array(2)
+    new DataView(out.buffer).setUint16(0, dpi, true)
+    return out
 }
 
 /** Build the LIGHTING.HAPTIC_PULSE arg: {u8 effect, u8 intensity,
