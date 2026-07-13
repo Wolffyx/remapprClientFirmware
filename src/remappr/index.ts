@@ -38,4 +38,9 @@ export {
     clearAllBonds,
     type NodeRecord,
 } from './nodes'
+export {
+    getRateLimits,
+    setReportRate,
+    type RateLimits,
+} from './reportRate'
 export * as remapprProtocol from './protocol'
