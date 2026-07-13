@@ -12,6 +12,7 @@
 import { z } from 'zod'
 import { MODIFIERS, isKnownKeycode, isKnownKeyToken } from './keycodes'
 import { migrateToV1 } from './migrate'
+import { BUILTIN_TARGETS } from './types'
 
 /* ── leaf vocabularies ─────────────────────────────────────────────────── */
 
@@ -844,7 +845,7 @@ const BaseKeymapSchema = z.object({
         author: z.string().optional(),
         version: z.string().optional(),
         description: z.string().optional(),
-        target: z.enum(['zmk', 'qmk', 'keychron']).nullable().default(null),
+        target: z.enum(BUILTIN_TARGETS).nullable().default(null),
         vendorId: z
             .string()
             .optional()
@@ -906,7 +907,7 @@ const BaseKeymapSchema = z.object({
             .array(z.string())
             .optional()
             .describe(
-                'Raw builder firmware targets (qmk/via/vial/zmk); via/vial compile via QMK.',
+                'Raw builder firmware targets (qmk/via/vial/zmk/remappr); via/vial compile via QMK, remappr via the remappr-board shield.',
             ),
         lighting: LightingSchema.optional(),
         firmwareConfig: FirmwareConfigSchema.optional(),
