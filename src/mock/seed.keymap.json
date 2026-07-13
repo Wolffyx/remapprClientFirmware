@@ -262,5 +262,45 @@
                 { "type": "release", "key": "LEFT_GUI" }
             ]
         }
+    ],
+    "holdTaps": [
+        {
+            "id": "ht_home_row",
+            "description": "Balanced home-row mod-tap: hold = modifier, tap = key.",
+            "flavor": "balanced",
+            "tappingTermMs": 200,
+            "quickTapMs": 150,
+            "bindings": ["&kp", "&kp"]
+        },
+        {
+            "id": "ht_layer_tap",
+            "description": "Hold-preferred layer-tap with retro-tap and prior-idle guard.",
+            "flavor": "hold-preferred",
+            "tappingTermMs": 180,
+            "requirePriorIdleMs": 100,
+            "retroTap": true,
+            "bindings": ["&mo", "&kp"]
+        }
+    ],
+    "modMorphs": [
+        {
+            "id": "mm_comma_semi",
+            "description": "Comma; Shift morphs it to a semicolon.",
+            "mods": ["LEFT_SHIFT", "RIGHT_SHIFT"],
+            "bindings": ["COMMA", "SEMICOLON"]
+        },
+        {
+            "id": "mm_bspc_del",
+            "description": "Backspace; Shift morphs it to Delete (GUI passes through).",
+            "mods": ["LEFT_SHIFT", "RIGHT_SHIFT"],
+            "keepMods": ["LEFT_GUI"],
+            "bindings": ["BACKSPACE", "DELETE"]
+        }
+    ],
+    "conditionalLayers": [
+        {
+            "ifLayers": ["lower"],
+            "thenLayer": "raise"
+        }
     ]
 }

@@ -39,7 +39,10 @@ describe('MockKeyboardService config-blob editing (demo)', () => {
 
     it('round-trips a conditional-layer edit and reflects it in getConfigSource', async () => {
         const svc = new MockKeyboardService()
-        expect(svc.getConditionalLayers()).toEqual([])
+        // The demo seed ships one sample tri-layer so the editor opens with data.
+        expect(svc.getConditionalLayers()).toEqual([
+            { ifLayers: ['lower'], thenLayer: 'raise' },
+        ])
         svc.setConditionalLayers([
             { ifLayers: ['lower', 'raise'], thenLayer: 'base' },
         ])
@@ -49,10 +52,12 @@ describe('MockKeyboardService config-blob editing (demo)', () => {
         expect(String(await svc.getConfigSource())).toContain('conditionalLayers')
     })
 
-    it('rejects an out-of-range hold-tap index (empty pool)', () => {
-        expect(() =>
-            new MockKeyboardService().setHoldTap(0, { tappingTermMs: 1 }),
-        ).toThrow()
+    it('edits an in-range seeded hold-tap and rejects an out-of-range index', () => {
+        const svc = new MockKeyboardService()
+        expect(svc.getHoldTaps().length).toBeGreaterThan(0)
+        svc.setHoldTap(0, { tappingTermMs: 321 })
+        expect(svc.getHoldTaps()[0].tappingTermMs).toBe(321)
+        expect(() => svc.setHoldTap(99, { tappingTermMs: 1 })).toThrow()
     })
 
     it('discardChanges reverts staged config-blob edits to the seed', async () => {
@@ -61,6 +66,8 @@ describe('MockKeyboardService config-blob editing (demo)', () => {
         svc.setConditionalLayers([{ ifLayers: ['lower'], thenLayer: 'base' }])
         await svc.discardChanges()
         expect(svc.getConfigDefaults().tappingTermMs).toBe(200)
-        expect(svc.getConditionalLayers()).toEqual([])
+        expect(svc.getConditionalLayers()).toEqual([
+            { ifLayers: ['lower'], thenLayer: 'raise' },
+        ])
     })
 })
