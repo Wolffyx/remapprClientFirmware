@@ -9,21 +9,26 @@ import { LimitsFeature } from '../../remappr/protocol'
 import {
     ALL_MODIFIERS,
     FLAVOR_OPTIONS,
+    HOLD_TAP_BEHAVIOR_TOKENS,
     TIMING_FIELDS,
     conditionalError,
     conditionalLayersPatch,
     emptyConditional,
+    emptyHoldTap,
+    emptyModMorph,
     featureSupported,
     fieldSupported,
     groupedTimingFields,
     holdTapPatch,
     modMorphPatch,
     modifierLabel,
+    nextDefId,
     sameConditional,
     sameConditionalList,
     toggleIfLayer,
     toggleModifier,
 } from '../editorFields'
+import { HoldTapDefSchema, ModMorphSchema } from '../schema'
 
 const HT: CanonHoldTapDef = {
     id: 'home-row',
@@ -158,5 +163,42 @@ describe('conditional (tri-)layer helpers', () => {
                 LAYERS,
             ),
         ).toMatch(/unknown layer "ghost"/)
+    })
+})
+
+describe('behavior def factories', () => {
+    it('emptyHoldTap is a schema-valid balanced mod-tap', () => {
+        const ht = emptyHoldTap([])
+        expect(() => HoldTapDefSchema.parse(ht)).not.toThrow()
+        expect(ht.flavor).toBe('balanced')
+        expect(ht.bindings).toEqual(['&kp', '&kp'])
+    })
+
+    it('emptyModMorph is a schema-valid Shift morph with two bindings', () => {
+        const mm = emptyModMorph([])
+        expect(() => ModMorphSchema.parse(mm)).not.toThrow()
+        expect(mm.mods).toContain('LEFT_SHIFT')
+        expect(mm.bindings).toHaveLength(2)
+    })
+
+    it('factory ids avoid collisions with the existing pool', () => {
+        const a = emptyHoldTap([])
+        const b = emptyHoldTap([a])
+        expect(b.id).not.toBe(a.id)
+        const m = emptyModMorph([])
+        expect(emptyModMorph([m]).id).not.toBe(m.id)
+    })
+
+    it('nextDefId skips ids already taken', () => {
+        expect(nextDefId('ht_', [])).toBe('ht_1')
+        expect(nextDefId('ht_', [{ id: 'ht_1' }])).toBe('ht_2')
+        // count-derived guess (ht_3) is taken, so it advances past it
+        expect(nextDefId('ht_', [{ id: 'x' }, { id: 'ht_3' }])).toBe('ht_4')
+    })
+
+    it('behavior tokens include the common ZMK inners', () => {
+        const vals = HOLD_TAP_BEHAVIOR_TOKENS.map((t) => t.value)
+        expect(vals).toContain('&kp')
+        expect(vals).toContain('&mo')
     })
 })
