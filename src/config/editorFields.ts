@@ -9,6 +9,7 @@
 // sit next to the ConfigKeymap types + zod schema they mirror. UI-agnostic and
 // service-agnostic: the front-ends supply their own inputs and write path.
 import type {
+    CanonAction,
     CanonConditionalLayer,
     CanonHoldTapDef,
     CanonModMorph,
@@ -279,6 +280,55 @@ export function modMorphPatch(
     if (!sameSet(mods, orig.mods)) patch.mods = mods
     if (!sameSet(keepMods, orig.keepMods ?? [])) patch.keepMods = keepMods
     return Object.keys(patch).length ? patch : null
+}
+
+/** Common ZMK inner behaviors offered for a hold-tap def's two bindings (hold,
+ *  tap). The field accepts any token; an editor may show a def's current value
+ *  even if it is not in this list. */
+export const HOLD_TAP_BEHAVIOR_TOKENS: readonly {
+    value: string
+    label: string
+}[] = [
+    { value: '&kp', label: '&kp — key press' },
+    { value: '&mo', label: '&mo — momentary layer' },
+    { value: '&lt', label: '&lt — layer-tap' },
+    { value: '&mt', label: '&mt — mod-tap' },
+    { value: '&sk', label: '&sk — sticky key' },
+    { value: '&sl', label: '&sl — sticky layer' },
+    { value: '&kt', label: '&kt — key toggle' },
+    { value: '&trans', label: '&trans — transparent' },
+    { value: '&none', label: '&none — disabled' },
+]
+
+/** A unique id `${prefix}${n}` that collides with no `existing[i].id`. */
+export function nextDefId(prefix: string, existing: { id: string }[]): string {
+    const taken = new Set(existing.map((e) => e.id))
+    let n = existing.length + 1
+    while (taken.has(`${prefix}${n}`)) n++
+    return `${prefix}${n}`
+}
+
+/** A fresh hold-tap def for an editor's "add" action — a balanced mod-tap
+ *  (hold + tap both `&kp`) the user then tunes; `existing` seeds a unique id. */
+export function emptyHoldTap(existing: CanonHoldTapDef[]): CanonHoldTapDef {
+    return {
+        id: nextDefId('ht_', existing),
+        flavor: 'balanced',
+        tappingTermMs: 200,
+        quickTapMs: 150,
+        bindings: ['&kp', '&kp'],
+    }
+}
+
+/** A fresh mod-morph def for an editor's "add" action — Shift morphs the key
+ *  onto itself until the user repoints the second binding via the picker. */
+export function emptyModMorph(existing: CanonModMorph[]): CanonModMorph {
+    const key: CanonAction = { type: 'key_press', key: 'A' }
+    return {
+        id: nextDefId('mm_', existing),
+        mods: ['LEFT_SHIFT', 'RIGHT_SHIFT'],
+        bindings: [key, { ...key }],
+    }
 }
 
 /* ── conditional (tri-)layers (§44.3) ────────────────────────────────────── */
