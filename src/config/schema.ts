@@ -906,7 +906,7 @@ const BaseKeymapSchema = z.object({
             .array(z.string())
             .optional()
             .describe(
-                'Raw builder firmware targets (qmk/via/vial/zmk); via/vial compile via QMK.',
+                'Raw builder firmware targets (qmk/via/vial/zmk/remappr); via/vial compile via QMK, remappr via the remappr-board shield.',
             ),
         lighting: LightingSchema.optional(),
         firmwareConfig: FirmwareConfigSchema.optional(),
