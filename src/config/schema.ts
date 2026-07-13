@@ -844,7 +844,10 @@ const BaseKeymapSchema = z.object({
         author: z.string().optional(),
         version: z.string().optional(),
         description: z.string().optional(),
-        target: z.enum(['zmk', 'qmk', 'keychron']).nullable().default(null),
+        target: z
+            .enum(['zmk', 'qmk', 'keychron', 'remappr'])
+            .nullable()
+            .default(null),
         vendorId: z
             .string()
             .optional()
