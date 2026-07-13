@@ -12,7 +12,12 @@ import type { Modifier } from './keycodes'
 // Built-in targets are the string literals; `(string & {})` keeps their
 // autocompletion while admitting external/third-party firmware targets that
 // register their own compiler/adapter at runtime. See registerBuiltinFirmwares.
-export type BuiltinTarget = 'zmk' | 'qmk' | 'keychron'
+/** Built-in compile-target families — the single source of truth for the valid
+ *  `meta.target` values, the firmware capability-matrix keys, and the allowed-
+ *  target resolution. Add a family here and the zod enum + matrix coverage guard
+ *  update with it. A board may still target a custom string (see `Target`). */
+export const BUILTIN_TARGETS = ['zmk', 'qmk', 'keychron', 'remappr'] as const
+export type BuiltinTarget = (typeof BUILTIN_TARGETS)[number]
 export type Target = BuiltinTarget | (string & {})
 
 export type Resolve = 'timeout' | 'prefer-hold' | 'prefer-tap'

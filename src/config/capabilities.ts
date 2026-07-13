@@ -5,7 +5,12 @@
 // unsupported binding to a no-op, instead of scattering `if (target === 'zmk')`
 // across each emitter. Keychron runs the VIA/QMK stack plus a BLE radio.
 
-import type { LightingTarget, OutputAction, Target } from './types'
+import type {
+    BuiltinTarget,
+    LightingTarget,
+    OutputAction,
+    Target,
+} from './types'
 
 export interface FirmwareCapabilities {
     /** Lighting axes the firmware can drive. */
@@ -84,7 +89,40 @@ export const CAPABILITY_MATRIX: Record<Target, FirmwareCapabilities> = {
             combo: true,
         },
     },
+    // pattern-check: skip — per-firmware capability data entry + coverage guard
+    remappr: {
+        // The native Zephyr firmware — superset: wireless output + per-key RGB
+        // (TBL_RGB) + every generalized behavior in the config blob.
+        lighting: ['underglow', 'backlight', 'per_key'],
+        output: {
+            actions: [
+                'usb',
+                'bluetooth',
+                'bluetooth_clear',
+                'bluetooth_next',
+                'bluetooth_prev',
+                'bluetooth_disconnect',
+                'toggle',
+                'none',
+            ],
+            profiles: true,
+        },
+        behaviors: {
+            capsWord: true,
+            stickyKey: true,
+            stickyLayer: true,
+            tapDance: true,
+            macro: true,
+            combo: true,
+        },
+    },
 }
+
+// Compile-time: every BUILTIN_TARGETS family must have a capability entry above;
+// adding a family fails this line until its caps are declared.
+const _matrixCoversBuiltins: Record<BuiltinTarget, FirmwareCapabilities> =
+    CAPABILITY_MATRIX
+void _matrixCoversBuiltins
 
 export const supportsLighting = (
     target: Target,
@@ -101,6 +139,9 @@ export const supportsOutput = (target: Target, action: OutputAction): boolean =>
 export function resolveAllowedTargets(
     connectedFirmware?: string | null,
 ): Target[] {
+    // NB: the download-bundle families, NOT BUILTIN_TARGETS — `remappr` is
+    // authored as a builder firmware but downloads through the `remappr-board`
+    // shield bundle, so it is offered there (BuilderExportModal), not here.
     const all: Target[] = ['zmk', 'qmk', 'keychron']
     if (!connectedFirmware) return all
     const fam = connectedFirmware.toLowerCase()
