@@ -908,3 +908,78 @@ describe('remappr system-control round-trip (BH_SYS_CTRL)', () => {
         })
     })
 })
+
+// pattern-check: skip — TBL_ACTION_BINDING round-trip fixtures, test data only
+describe('remappr action bindings round-trip (TBL_ACTION_BINDING, §F)', () => {
+    const json = `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "AB", "target": "zmk" },
+        "keyboard": { "id": "k", "name": "K", "keys": [
+            {"x":0,"y":0},{"x":1,"y":0},{"x":2,"y":0},{"x":3,"y":0},
+            {"x":4,"y":0},{"x":5,"y":0},{"x":6,"y":0}
+        ] },
+        "layers": [{ "name": "base",
+            "bindings": ["A","B","C","D","E","F","G"] }],
+        "actionBindings": [
+            { "position": 0, "action": { "kind": "keyboard", "usage": 4, "mods": 2 } },
+            { "position": 1, "action": { "kind": "consumer", "usage": 233 } },
+            { "position": 2, "action": { "kind": "pointer", "op": 1, "code": 1, "magnitude": 3 } },
+            { "position": 3, "action": { "kind": "system", "action": 1 } },
+            { "position": 4, "action": { "kind": "output", "action": 2, "profile": 1 } },
+            { "position": 5, "action": { "kind": "lighting", "action": 1, "target": 2, "hue": 120, "sat": 200, "val": 255 } },
+            { "position": 6, "action": { "kind": "none" } }
+        ]
+    }`
+
+    it('decodes every semantic-action kind back to the authored bindings', () => {
+        const { blob } = buildRemapprBlob(parseKeymap(json), {
+            configVersion: 1,
+        })
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.actionBindings).toEqual([
+            { position: 0, action: { kind: 'keyboard', usage: 4, mods: 2 } },
+            { position: 1, action: { kind: 'consumer', usage: 233 } },
+            {
+                position: 2,
+                action: { kind: 'pointer', op: 1, code: 1, magnitude: 3 },
+            },
+            { position: 3, action: { kind: 'system', action: 1 } },
+            { position: 4, action: { kind: 'output', action: 2, profile: 1 } },
+            {
+                position: 5,
+                action: {
+                    kind: 'lighting',
+                    action: 1,
+                    target: 2,
+                    hue: 120,
+                    sat: 200,
+                    val: 255,
+                },
+            },
+            { position: 6, action: { kind: 'none' } },
+        ])
+    })
+
+    it('re-encodes the decoded config byte-identically (id 17 on the wire)', () => {
+        const { blob } = buildRemapprBlob(parseKeymap(json), {
+            configVersion: 1,
+        })
+        const { config } = decodeRemapprBlob(blob)
+        // encode(decode(encode(x))) === encode(x): the table is byte-stable.
+        const reblob = buildRemapprBlob(config!, { configVersion: 1 }).blob
+        expect(reblob).toEqual(blob)
+    })
+
+    it('drops an out-of-range position with a diagnostic', () => {
+        const bad = json.replace('"position": 6', '"position": 99')
+        const { diagnostics, blob } = buildRemapprBlob(parseKeymap(bad), {
+            configVersion: 1,
+        })
+        expect(
+            diagnostics.some((d) => /position 99/.test(d.message)),
+        ).toBe(true)
+        // the 6 in-range bindings still decode.
+        expect(decodeRemapprBlob(blob).config?.actionBindings).toHaveLength(6)
+    })
+})

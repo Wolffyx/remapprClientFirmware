@@ -22,6 +22,8 @@ export type {
     CanonHoldTapDef,
     CanonModMorph,
     CanonConditionalLayer,
+    CanonActionBinding,
+    CanonSemanticAction,
     CanonKscan,
     CanonMatrixKscan,
     CanonDirectKscan,

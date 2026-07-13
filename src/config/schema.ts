@@ -565,6 +565,46 @@ export const LeaderSequenceSchema = z
             'after the leader key opens capture.',
     )
 
+// pattern-check: skip — declarative zod schema for the §F semantic-action DTO
+// (a raw mirror of the firmware action.h record); validation data, no abstraction.
+const u16 = z.number().int().min(0).max(0xffff)
+const u8 = z.number().int().min(0).max(0xff)
+export const SemanticActionSchema = z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('none') }),
+    z.object({ kind: z.literal('keyboard'), usage: u16, mods: u8.optional() }),
+    z.object({ kind: z.literal('consumer'), usage: u16 }),
+    z.object({
+        kind: z.literal('pointer'),
+        op: u16,
+        code: u16.optional(),
+        magnitude: u16.optional(),
+    }),
+    z.object({ kind: z.literal('system'), action: u16 }),
+    z.object({
+        kind: z.literal('output'),
+        action: u16,
+        profile: u8.optional(),
+    }),
+    z.object({
+        kind: z.literal('lighting'),
+        action: u8,
+        target: u8,
+        hue: u8.optional(),
+        sat: u8.optional(),
+        val: u8.optional(),
+    }),
+])
+
+export const ActionBindingSchema = z
+    .object({
+        position: u16,
+        action: SemanticActionSchema,
+    })
+    .describe(
+        'Position -> semantic action (§F, TBL_ACTION_BINDING): the ' +
+            'personality-output layer, additive to the layer bindings.',
+    )
+
 /* ── board hardware (kscan wiring + electrical transform) ──────────────── */
 
 /** A raw devicetree GPIO phandle+specifier, kept verbatim. */
@@ -927,6 +967,7 @@ const BaseKeymapSchema = z.object({
     conditionalLayers: z.array(ConditionalLayerSchema).optional(),
     keyOverrides: z.array(KeyOverrideSchema).optional(),
     leaderSequences: z.array(LeaderSequenceSchema).optional(),
+    actionBindings: z.array(ActionBindingSchema).optional(),
     // Whole-node config sections (v2) — validated + preserved, consumed later.
     node: NodeSchema.optional(),
     firmware: FirmwareSettingsSchema.optional(),

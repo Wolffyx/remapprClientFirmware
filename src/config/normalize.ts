@@ -643,6 +643,11 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
                   })),
               }
             : {}),
+        // Semantic action bindings (§F) are authored in canonical form already
+        // (a raw wire-mirror); deep-clone so canonical never aliases the surface.
+        ...(km.actionBindings
+            ? { actionBindings: cloneJson(km.actionBindings) }
+            : {}),
         // Whole-node sections carry through opaquely (no surface sugar); deep-clone
         // so canonical never aliases the surface object.
         ...(km.node ? { node: cloneJson(km.node) } : {}),

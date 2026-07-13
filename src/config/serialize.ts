@@ -510,6 +510,10 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                   })),
               }
             : {}),
+        // Semantic action bindings (§F) round-trip verbatim (canonical wire-mirror).
+        ...(km.actionBindings
+            ? { actionBindings: structuredClone(km.actionBindings) }
+            : {}),
         // Whole-node sections round-trip verbatim (opaque data, no surface sugar).
         ...(km.node ? { node: structuredClone(km.node) } : {}),
         ...(km.firmware ? { firmware: structuredClone(km.firmware) } : {}),

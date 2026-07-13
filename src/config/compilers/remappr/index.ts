@@ -25,7 +25,11 @@ import {
     registerCompiler,
     type KeymapCompiler,
 } from '../../compiler'
-import type { CanonAction, ConfigKeymap } from '../../types'
+import type {
+    CanonAction,
+    CanonSemanticAction,
+    ConfigKeymap,
+} from '../../types'
 import {
     BehaviorType,
     BehaviorFlags,
@@ -45,6 +49,7 @@ import {
     OutputActionCode,
     PeripheralKind,
     SystemAction,
+    type ActionBindingRecord,
     type BehaviorRecord,
     type ComboRecord,
     type ConditionalRecord,
@@ -338,6 +343,49 @@ function modsToMask(mods: Modifier[]): number {
     let mask = 0
     for (const m of mods) mask |= 1 << MODIFIERS.indexOf(m)
     return mask & 0xff
+}
+
+// §F: pack a CanonSemanticAction into the 8-byte {kind, code, arg0, arg1} wire
+// record — mirrors the inline constructors in the firmware's action.h so the two
+// sides pack identically. The numeric fields are already raw wire values.
+// pattern-check: skip tiny pure semantic-action→wire-record packer, mirrors action.h
+function lowerSemanticAction(a: CanonSemanticAction): {
+    kind: number
+    code: number
+    arg0: number
+    arg1: number
+} {
+    switch (a.kind) {
+        case 'none':
+            return { kind: 0, code: 0, arg0: 0, arg1: 0 }
+        case 'keyboard':
+            return { kind: 1, code: a.usage, arg0: a.mods ?? 0, arg1: 0 }
+        case 'consumer':
+            return { kind: 2, code: a.usage, arg0: 0, arg1: 0 }
+        case 'pointer':
+            return {
+                kind: 3,
+                code: a.op,
+                arg0: a.code ?? 0,
+                arg1: a.magnitude ?? 0,
+            }
+        case 'system':
+            return { kind: 4, code: a.action, arg0: 0, arg1: 0 }
+        case 'output':
+            return {
+                kind: 5,
+                code: a.action,
+                arg0: a.profile ?? OUTPUT_NO_PROFILE,
+                arg1: 0,
+            }
+        case 'lighting':
+            return {
+                kind: 6,
+                code: a.action | (a.target << 8),
+                arg0: a.hue ?? 0,
+                arg1: (a.sat ?? 0) | ((a.val ?? 0) << 8),
+            }
+    }
 }
 
 // ZMK hold-tap flavor string → remappr_th_flavor. When no flavor is set, fall
@@ -1366,6 +1414,21 @@ function encodeBlob(
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
     if (leaders.length > 0) builder.leaderTable(leaders)
+    // §F semantic action bindings (TBL_ACTION_BINDING id 17): a flat position →
+    // action map, additive to the layer bindings. Drop out-of-range positions —
+    // the firmware rejects them with ERR_REFERENCE.
+    const actionBindings: ActionBindingRecord[] = (config.actionBindings ?? [])
+        .filter((b) => {
+            if (b.position < numPositions) return true
+            diag.warn(
+                `action binding position ${b.position} >= ${numPositions} positions — dropped`,
+                ['actionBindings'],
+            )
+            return false
+        })
+        .map((b) => ({ position: b.position, ...lowerSemanticAction(b.action) }))
+    if (actionBindings.length > 0)
+        builder.actionBindingTable(numPositions, actionBindings)
     // NAMES (§24): real labels for the macros + composites this blob emits, so a
     // device round-trip (decode → edit → re-commit) keeps the names the app shows.
     // Macros are keyed by their table index; composites by sub_index (collected in

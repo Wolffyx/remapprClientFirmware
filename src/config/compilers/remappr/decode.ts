@@ -19,6 +19,8 @@ import { DiagnosticBag, type Diagnostic } from '../../diagnostics'
 import { MODIFIERS, type Modifier } from '../../keycodes'
 import type {
     CanonAction,
+    CanonActionBinding,
+    CanonSemanticAction,
     CanonCombo,
     CanonConditionalLayer,
     CanonEncoderBinding,
@@ -828,6 +830,10 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         ? readPersonality(bytes, personalityT)
         : undefined
 
+    // ── ACTION_BINDING (optional, id 17, §F) → top-level actionBindings[] ──
+    const actionT = table(TableId.ActionBinding)
+    const actionBindings = actionT ? readActionBindings(bytes, actionT) : []
+
     // Reassemble the v2 node section from its decoded parts (§4b mouse, §4c
     // personality). Only keyboard/mouse personalities have a firmware identity,
     // so an unknown code leaves personality undefined.
@@ -878,6 +884,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         ...(conditionalLayers.length ? { conditionalLayers } : {}),
         ...(keyOverrides.length ? { keyOverrides } : {}),
         ...(leaderSequences.length ? { leaderSequences } : {}),
+        ...(actionBindings.length ? { actionBindings } : {}),
         ...(node ? { node } : {}),
     }
 
@@ -1237,6 +1244,86 @@ function readConditionals(
         out.push({ ifLayers, thenLayer: layerName(thenLayer) })
     }
     return out
+}
+
+// TBL_ACTION_BINDING (id 17, §F): u16 count + u16 num_positions, then count ×
+// 10-byte records { u16 position, u8 kind, u8 reserved, u16 code, u16 arg0,
+// u16 arg1 }. num_positions is implied by the keymap and not surfaced.
+// pattern-check: skip pure per-record blob reader mirroring readConditionals, no abstraction
+function readActionBindings(
+    bytes: Uint8Array,
+    t: TableFrame,
+): CanonActionBinding[] {
+    const r = new ByteReader(bytes)
+    r.seek(t.start)
+    const count = r.u16()
+    r.u16() // num_positions — implied by the keymap geometry
+    const out: CanonActionBinding[] = []
+    for (let i = 0; i < count; i++) {
+        const position = r.u16()
+        const kind = r.u8()
+        r.u8() // reserved
+        const code = r.u16()
+        const arg0 = r.u16()
+        const arg1 = r.u16()
+        out.push({
+            position,
+            action: raiseSemanticAction(kind, code, arg0, arg1),
+        })
+    }
+    return out
+}
+
+// Inverse of lowerSemanticAction (index.ts): the {kind, code, arg0, arg1} wire
+// record → the discriminated CanonSemanticAction. Optional fields decode only
+// when non-zero so a re-encode (which emits 0 for an absent field) stays
+// byte-stable; an unknown kind decodes to `none` (an old reader skips a future
+// kind rather than corrupting).
+// pattern-check: skip pure wire-record→semantic-action unpacker, mirrors action.h
+function raiseSemanticAction(
+    kind: number,
+    code: number,
+    arg0: number,
+    arg1: number,
+): CanonSemanticAction {
+    switch (kind) {
+        case 1:
+            return arg0 !== 0
+                ? { kind: 'keyboard', usage: code, mods: arg0 }
+                : { kind: 'keyboard', usage: code }
+        case 2:
+            return { kind: 'consumer', usage: code }
+        case 3: {
+            const a: Extract<CanonSemanticAction, { kind: 'pointer' }> = {
+                kind: 'pointer',
+                op: code,
+            }
+            if (arg0 !== 0) a.code = arg0
+            if (arg1 !== 0) a.magnitude = arg1
+            return a
+        }
+        case 4:
+            return { kind: 'system', action: code }
+        case 5:
+            return arg0 !== 0xff /* REMAPPR_OUTPUT_NO_PROFILE */
+                ? { kind: 'output', action: code, profile: arg0 }
+                : { kind: 'output', action: code }
+        case 6: {
+            const a: Extract<CanonSemanticAction, { kind: 'lighting' }> = {
+                kind: 'lighting',
+                action: code & 0xff,
+                target: (code >> 8) & 0xff,
+            }
+            const sat = arg1 & 0xff
+            const val = (arg1 >> 8) & 0xff
+            if (arg0 !== 0) a.hue = arg0
+            if (sat !== 0) a.sat = sat
+            if (val !== 0) a.val = val
+            return a
+        }
+        default:
+            return { kind: 'none' }
+    }
 }
 
 // TBL_KEY_OVERRIDE: u16 count + count × 8-byte { u8 trigger, u8 trigger_mods,

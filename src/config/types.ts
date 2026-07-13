@@ -670,6 +670,49 @@ export interface CanonLeaderSequence {
     action: CanonAction
 }
 
+// pattern-check: skip — pure data DTO mirroring the firmware action.h semantic-action
+// record (kind + code/arg packing); discriminated union, no behavior/abstraction.
+/** A semantic action (§F, TBL_ACTION_BINDING) — what a key POSITION emits at the
+ *  personality-OUTPUT layer, resolved by the firmware personality adapter,
+ *  independent of the behavior engine. A faithful typed view of the firmware's
+ *  8-byte `struct remappr_action` {kind, code, arg0, arg1}: fields are the RAW
+ *  wire values (HID usages, REMAPPR_MOD_* masks, enum ordinals), NOT the friendly
+ *  keymap layer — this is the low-level output namespace. Kinds mirror
+ *  `enum remappr_action_kind`. */
+export type CanonSemanticAction =
+    | { kind: 'none' }
+    /** HID keyboard: `usage` 0x04..0x77 or a modifier 0xE0..0xE7; `mods` = extra
+     *  REMAPPR_MOD_* mask asserted with it. */
+    | { kind: 'keyboard'; usage: number; mods?: number }
+    /** HID consumer/media, page 0x0C, 16-bit `usage` (0 = release). */
+    | { kind: 'consumer'; usage: number }
+    /** Pointer: `op` = enum remappr_mouse_op; `code` = button (KEY) or dir
+     *  (MOVE/SCROLL); `magnitude` = motion-rate hint (0/omitted = device default). */
+    | { kind: 'pointer'; op: number; code?: number; magnitude?: number }
+    /** Device system verb: `action` = enum remappr_system_action. */
+    | { kind: 'system'; action: number }
+    /** Connectivity route: `action` = enum remappr_output_action; `profile` = BLE
+     *  profile (omitted = REMAPPR_OUTPUT_NO_PROFILE / 0xFF). */
+    | { kind: 'output'; action: number; profile?: number }
+    /** Lighting verb (lossless mirror of struct remappr_lighting_event). */
+    | {
+          kind: 'lighting'
+          action: number
+          target: number
+          hue?: number
+          sat?: number
+          val?: number
+      }
+
+/** One semantic action bound to a physical key POSITION (§F, TBL_ACTION_BINDING).
+ *  A flat position-space with no layer dimension — matches the wire. ADDITIVE:
+ *  sits alongside the layer bindings; the firmware decodes it and the personality
+ *  output adapter resolves + routes it. */
+export interface CanonActionBinding {
+    position: number
+    action: CanonSemanticAction
+}
+
 // pattern-check: skip — plain data interfaces for new open config sections, no abstraction
 /** A known Zephyr board id, or a custom board on any Zephyr-supported SoC. */
 export type ConfigBoardController =
@@ -745,6 +788,9 @@ export interface ConfigKeymap {
     conditionalLayers?: CanonConditionalLayer[]
     keyOverrides?: CanonKeyOverride[]
     leaderSequences?: CanonLeaderSequence[]
+    /** Position → semantic-action bindings (§F, TBL_ACTION_BINDING) — the
+     *  personality-output layer, additive to the layer bindings. */
+    actionBindings?: CanonActionBinding[]
     // Whole-node config sections (v2) — preserved verbatim, consumed later.
     node?: ConfigNode
     firmware?: Record<string, Record<string, unknown>>
