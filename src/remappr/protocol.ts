@@ -59,6 +59,8 @@ export const Cmd = {
     SET_BASE_LAYER: 0x40,
     GET_LAYER_STATE: 0x41,
     GET_DIAGNOSTICS: 0x50,
+    GET_RATE_LIMITS: 0x52, // COMMON: report-rate caps + current (open read, §7.4)
+    SET_REPORT_RATE: 0x53, // COMMON: set desired report rate (owner-sealed, §7.4)
     CONTROL_AUTH_BEGIN: 0x60,
     CONTROL_AUTH_FINISH: 0x61,
 } as const
@@ -72,6 +74,7 @@ export const PLAINTEXT_CMDS: ReadonlySet<number> = new Set([
     Cmd.GET_PROFILE_STATUS,
     Cmd.GET_LAYER_STATE,
     Cmd.GET_DIAGNOSTICS,
+    Cmd.GET_RATE_LIMITS, // open read; SET_REPORT_RATE stays sealed/mutating
     Cmd.CONTROL_AUTH_BEGIN,
     Cmd.CONTROL_AUTH_FINISH,
 ])
@@ -841,6 +844,51 @@ export function parseMotionConfig(d: Uint8Array): MotionConfig {
 export function buildDpiArg(dpi: number): Uint8Array {
     const out = new Uint8Array(2)
     new DataView(out.buffer).setUint16(0, dpi, true)
+    return out
+}
+
+/** Standard HID report-rate steps (Hz), ascending — mirrors the firmware's
+ *  remappr_report_rate_steps[]. A GET_RATE_LIMITS supportedMask bit i marks
+ *  step i deliverable. */
+export const REPORT_RATE_STEPS = [
+    125, 250, 500, 1000, 2000, 4000, 8000,
+] as const
+
+/** COMMON.GET_RATE_LIMITS reply (§7.4): the transport rate ceilings, the set of
+ *  offerable rates, and the current applied rate — enough for the app to render
+ *  a selector. A cap of 0 means that transport leg is absent. */
+export interface RateLimits {
+    /** Report rates the device can deliver (Hz), decoded from supportedMask. */
+    supported: number[]
+    usbCapHz: number
+    radioCapHz: number
+    currentHz: number
+}
+
+const RATE_LIMITS_LEN = 8
+
+// pattern-check: skip parse/build helpers mirroring parseMotionConfig/buildDpiArg, no abstraction
+export function parseRateLimits(d: Uint8Array): RateLimits {
+    if (d.length < RATE_LIMITS_LEN)
+        throw new Error('rate-limits reply too short')
+    if (d[0] !== 1) throw new Error(`unknown rate-limits version ${d[0]}`)
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const mask = d[1]
+    const supported = REPORT_RATE_STEPS.filter(
+        (_, i) => (mask & (1 << i)) !== 0,
+    )
+    return {
+        supported,
+        usbCapHz: dv.getUint16(2, true),
+        radioCapHz: dv.getUint16(4, true),
+        currentHz: dv.getUint16(6, true),
+    }
+}
+
+/** Build the COMMON.SET_REPORT_RATE arg (u16 desired Hz LE). */
+export function buildReportRateArg(hz: number): Uint8Array {
+    const out = new Uint8Array(2)
+    new DataView(out.buffer).setUint16(0, hz, true)
     return out
 }
 
