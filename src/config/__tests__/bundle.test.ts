@@ -438,3 +438,29 @@ describe('buildProjectBundle — Vial', () => {
         ).not.toContain('VIAL_ENABLE')
     })
 })
+
+describe('buildProjectBundle — Remappr shield', () => {
+    it('emits a self-contained remappr shield project via remappr-board', () => {
+        const b = buildProjectBundle(seedConfig, 'remappr-board')
+        expect(b.rootName).toMatch(/-remappr-shield$/)
+        // the standalone west workspace + Zephyr module manifest + README
+        expect(paths(b)).toEqual(
+            expect.arrayContaining([
+                'west.yml',
+                'zephyr/module.yml',
+                'README.md',
+            ]),
+        )
+        // module.yml exposes boards/shields via board_root
+        expect(fileText(b, 'zephyr/module.yml')).toContain('board_root: .')
+    })
+
+    it('aliases the `remappr` builder id / meta.target to that shield bundle', () => {
+        // the editor Download offers the pinned meta.target ('remappr') verbatim;
+        // it must resolve to the same shield bundle as the 'remappr-board' target.
+        const board = buildProjectBundle(seedConfig, 'remappr-board')
+        const alias = buildProjectBundle(seedConfig, 'remappr')
+        expect(paths(alias)).toEqual(paths(board))
+        expect(alias.rootName).toBe(board.rootName)
+    })
+})
