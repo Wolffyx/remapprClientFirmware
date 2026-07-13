@@ -117,6 +117,10 @@ describe('remappr-board shield compiler', () => {
         expect(ov).toContain('CELL(0, 0)')
         expect(ov).toContain('CELL(2, 3)')
         expect(ov).toContain('CELL(3, 3)')
+        // REMAPPR_MATRIX_KEYMAP is a variadic macro → CELL() args MUST be
+        // comma-separated (space-joined cells fail DTC on real hardware).
+        expect(ov).toContain('CELL(0, 0), CELL(0, 1), CELL(0, 2)')
+        expect(ov).toContain('CELL(3, 0), CELL(3, 1), CELL(3, 2), CELL(3, 3)')
         expect(ov).toContain('row-size = <4>;')
         expect(ov).toContain('col-size = <4>;')
         expect(ov).toContain('compatible = "remappr,keymap"')
