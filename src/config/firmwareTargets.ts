@@ -4,8 +4,9 @@
 // firmware layer so the id set + per-target facts (wireless capability, display
 // name, one-line blurb) are authoritative and not duplicated in the UI.
 
-/** A firmware target the builder can emit for. via/vial compile via QMK. */
-export type BuilderFirmwareId = 'qmk' | 'via' | 'vial' | 'zmk'
+/** A firmware target the builder can emit for. via/vial compile via QMK;
+ *  remappr emits a Zephyr shield via the `remappr-board` compiler. */
+export type BuilderFirmwareId = 'qmk' | 'via' | 'vial' | 'zmk' | 'remappr'
 
 export interface BuilderFirmwareTarget {
     id: BuilderFirmwareId
@@ -38,6 +39,12 @@ export const BUILDER_FIRMWARE_TARGETS: BuilderFirmwareTarget[] = [
         id: 'zmk',
         name: 'ZMK',
         blurb: 'Wireless · devicetree keymap',
+        wireless: true,
+    },
+    {
+        id: 'remappr',
+        name: 'Remappr',
+        blurb: 'Wireless · Zephyr shield + config blob',
         wireless: true,
     },
 ]
