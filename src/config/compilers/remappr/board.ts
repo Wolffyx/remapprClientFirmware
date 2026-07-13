@@ -150,6 +150,22 @@ function chunkByRows(tokens: string[], rowCounts: number[]): string {
     return lines.join('\n')
 }
 
+/** Like chunkByRows but COMMA-joins tokens. REMAPPR_MATRIX_KEYMAP is a variadic
+ *  FOR_EACH_IDX macro, so its CELL() args must be comma-separated — space-joined
+ *  cells parse as a single arg and DTC fails ("expected ')', not '('"). Only the
+ *  matrix keymap needs this; placement / layer actions are phandle-array cells
+ *  that stay space-separated. */
+function chunkCellsByRows(tokens: string[], rowCounts: number[]): string {
+    const lines: string[] = []
+    let i = 0
+    for (const n of rowCounts) {
+        lines.push('\t\t\t\t' + tokens.slice(i, i + n).join(', '))
+        i += n
+    }
+    if (i < tokens.length) lines.push('\t\t\t\t' + tokens.slice(i).join(', '))
+    return lines.join(',\n')
+}
+
 function emitLayer(
     layer: CanonLayer,
     index: number,
@@ -281,7 +297,7 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         `\t\tkeymap {`,
         `\t\t\tcompatible = "input-keymap";`,
         `\t\t\tkeymap = <REMAPPR_MATRIX_KEYMAP(`,
-        chunkByRows(cellTokens, rowCounts),
+        chunkCellsByRows(cellTokens, rowCounts),
         `\t\t\t)>;`,
         `\t\t\trow-size = <${rowSize}>;`,
         `\t\t\tcol-size = <${colSize}>;`,
