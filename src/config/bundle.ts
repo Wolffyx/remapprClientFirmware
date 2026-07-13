@@ -571,12 +571,18 @@ function remapprBoardBundle(config: ConfigKeymap): ProjectBundle {
 }
 
 /** Build the full project bundle for a target. ZMK → zmk-config skeleton;
- *  QMK/Keychron → qmk_userspace skeleton; remappr-board → Zephyr shield dir. */
+ *  QMK/Keychron → qmk_userspace skeleton; remappr-board → Zephyr shield dir.
+ *  `remappr` (the builder firmware id / `meta.target`) aliases `remappr-board`
+ *  so the editor's Download surface — which offers the pinned meta.target
+ *  verbatim — resolves the shield without the pre-mapping BuilderExportModal
+ *  does in its own compilerTargets(). */
+// pattern-check: skip one-line alias branch in existing dispatch, no abstraction
 export function buildProjectBundle(
     config: ConfigKeymap,
     target: Target,
 ): ProjectBundle {
     if (target === 'zmk') return zmkBundle(config)
-    if (target === 'remappr-board') return remapprBoardBundle(config)
+    if (target === 'remappr-board' || target === 'remappr')
+        return remapprBoardBundle(config)
     return qmkBundle(config, target)
 }

@@ -139,10 +139,11 @@ export const supportsOutput = (target: Target, action: OutputAction): boolean =>
 export function resolveAllowedTargets(
     connectedFirmware?: string | null,
 ): Target[] {
-    // NB: the download-bundle families, NOT BUILTIN_TARGETS — `remappr` is
-    // authored as a builder firmware but downloads through the `remappr-board`
-    // shield bundle, so it is offered there (BuilderExportModal), not here.
-    const all: Target[] = ['zmk', 'qmk', 'keychron']
+    // Download-bundle families (what buildProjectBundle accepts), NOT the raw
+    // BUILTIN_TARGETS. `remappr` is authored as a builder firmware and downloads
+    // through the remappr-board shield bundle (buildProjectBundle aliases it), so
+    // the editor's Download offers it here too — not only in BuilderExportModal.
+    const all: Target[] = ['zmk', 'qmk', 'keychron', 'remappr']
     if (!connectedFirmware) return all
     const fam = connectedFirmware.toLowerCase()
     return all.filter((t) => fam.includes(t))
