@@ -2,7 +2,13 @@
 // parser; no GoF abstraction.
 import { describe, expect, it } from 'vitest'
 
-import { parseKeyLayoutChunk } from './protocol'
+import {
+    EVT_ROLE,
+    parseClusterDiag,
+    parseKeyLayoutChunk,
+    parseRoleEvent,
+    parseUchEvent,
+} from './protocol'
 
 /** Build a GET_KEY_LAYOUT chunk: [total u16][start u16][count u8][entries×16].
  *  `bodyEntries` is how many 16-byte entries are actually present, which may be
@@ -40,5 +46,57 @@ describe('parseKeyLayoutChunk', () => {
         // header declares 15 entries but the reassembled body carries only 13 —
         // exactly the "209 B for 15 entries" split-tier relay truncation.
         expect(() => parseKeyLayoutChunk(chunk(15, 0, 15, 13))).toThrow(/truncated/)
+    })
+})
+
+describe('parseClusterDiag (§N4b-3)', () => {
+    it('parses the local role and per-peer status', () => {
+        // version | role=coord | flags | u16 term | count=2, then a
+        // ready+seen follower and an unseen coordinator (term 5, hb 0x01).
+        const d = new Uint8Array([
+            1, 1, 0, 0, 0, 2,
+            0x03, 0, 0, 0, 0,
+            0x00, 1, 5, 0, 1,
+        ])
+        const out = parseClusterDiag(d)
+        expect(out.coordinator).toBe(true)
+        expect(out.localTerm).toBe(0)
+        expect(out.peers).toHaveLength(2)
+        expect(out.peers[0]).toMatchObject({
+            coordinator: false,
+            ready: true,
+            seen: true,
+        })
+        expect(out.peers[1]).toMatchObject({
+            coordinator: true,
+            term: 5,
+            hbFlags: 1,
+            ready: false,
+            seen: false,
+        })
+    })
+
+    it('rejects an unknown reply version', () => {
+        expect(() => parseClusterDiag(new Uint8Array([9, 0, 0, 0, 0, 0]))).toThrow(
+            /version/,
+        )
+    })
+})
+
+describe('parseUchEvent + parseRoleEvent (§N4b-3)', () => {
+    it('decodes a role-transition event frame', () => {
+        // [0xE2][UCH ver2, ns COMMON, flags EVENT, rid][event_id ROLE | seq |
+        // u16 len 4 | payload role=coord, flags 0, term 5].
+        const frame = new Uint8Array([
+            0xe2, 2, 0x00, 0x02, 0xff, 0, 0, 0, 0,
+            EVT_ROLE, 0, 4, 0,
+            1, 0, 5, 0,
+        ])
+        const evt = parseUchEvent(frame)
+        expect(evt.eventId).toBe(EVT_ROLE)
+        expect(evt.payload).toHaveLength(4)
+        const role = parseRoleEvent(evt.payload)
+        expect(role.coordinator).toBe(true)
+        expect(role.term).toBe(5)
     })
 })

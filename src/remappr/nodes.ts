@@ -14,6 +14,7 @@ import {
     DongleVerb,
     Namespace,
     NODE_RECORD_LEN,
+    parseClusterDiag,
     parseErrorCounters,
     parseLinkStats,
     parseNodeList,
@@ -21,6 +22,7 @@ import {
     parsePipeTable,
     Status,
     statusName,
+    type ClusterDiag,
     type ErrorCounters,
     type LinkStats,
     type NodeRecord,
@@ -186,6 +188,27 @@ export async function getErrorCounters(
     if (reply.status !== Status.OK)
         throw new Error(`GET_ERROR_COUNTERS → ${statusName(reply.status)}`)
     return parseErrorCounters(reply.data)
+}
+
+// pattern-check: skip — thin async relay read wrapper mirroring getErrorCounters
+/** Fetch cluster diagnostics (COMMON.GET_CLUSTER_DIAG, §N4b-3): this node's
+ *  cluster role plus each node-bus peer's advertised role status (N4b-2 HELLO
+ *  caps + HEARTBEAT tail). Pass `targetNode` to relay the read to a node behind a
+ *  dongle (retried on the transient §10 relay ERR_STATE). Throws where the
+ *  firmware has no cluster-diag source wired (ERR_CMD). */
+export async function getClusterDiag(
+    rpc: RemapprRpc,
+    targetNode = 0,
+): Promise<ClusterDiag> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.COMMON,
+        CommonVerb.GET_CLUSTER_DIAG,
+        undefined,
+        targetNode ? { targetNode, retries: RELAY_READ_RETRIES } : undefined,
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`GET_CLUSTER_DIAG → ${statusName(reply.status)}`)
+    return parseClusterDiag(reply.data)
 }
 
 // pattern-check: skip — orchestrates establishNodeSession + one callSealedRelay;

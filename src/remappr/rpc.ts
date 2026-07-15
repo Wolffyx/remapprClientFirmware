@@ -16,17 +16,24 @@ import {
     buildRequest,
     buildUch,
     buildUniversal,
+    CommonVerb,
     type ControlResponse,
     EVENT_TAG,
+    EVT_CLASS_ROLE,
     EVT_INPUT,
+    EVT_ROLE,
     FRAG_INTER_TIMEOUT_MS,
     FRAG_REASSEMBLY_CAP,
     FRAME,
     type InputEvent,
+    type RoleEvent,
+    Namespace,
     parseEvent,
     parseInputEvent,
     parseResponse,
+    parseRoleEvent,
     parseUch,
+    parseUchEvent,
     PLAINTEXT_CMDS,
     SEALED_TAG,
     Status,
@@ -94,6 +101,10 @@ export interface RemapprRpc {
     ): Promise<ControlResponse>
     /** Subscribe to live 0xE0 INPUT events (Key-Test). Starts the read pump. */
     subscribeInput(cb: (e: InputEvent) => void): () => void
+    /** Subscribe to RUCP cluster role-transition events (§N4b-3): sends
+     *  SUBSCRIBE_EVENTS(ROLE), fans UCH(EVENT) frames to `cb`, and the returned
+     *  disposer removes the listener + sends UNSUBSCRIBE when the last one goes. */
+    subscribeRole(cb: (e: RoleEvent) => void): Promise<() => Promise<void>>
     onClosed(cb: (reason?: unknown) => void): () => void
     close(opts?: { abortTransport?: boolean }): Promise<void>
 }
@@ -107,6 +118,7 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
     let queue: Promise<unknown> = Promise.resolve()
     const closedListeners = new Set<(reason?: unknown) => void>()
     const inputListeners = new Set<(e: InputEvent) => void>()
+    const roleListeners = new Set<(e: RoleEvent) => void>()
 
     // The single outstanding non-event response waiter (synchronous channel),
     // plus a buffer for non-event frames that arrive before a waiter is armed
@@ -153,6 +165,24 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
                 }
             }
             return // events never satisfy a response waiter
+        }
+        if (
+            frame[0] === UNIVERSAL_TAG &&
+            frame.length > UCH_LEN + 1 &&
+            (frame[3] & UchFlag.EVENT) !== 0
+        ) {
+            const evt = parseUchEvent(frame)
+            if (evt.eventId === EVT_ROLE && evt.payload.length >= 4) {
+                const re = parseRoleEvent(evt.payload)
+                for (const cb of roleListeners) {
+                    try {
+                        cb(re)
+                    } catch {
+                        /* ignore */
+                    }
+                }
+            }
+            return // an unsolicited event never satisfies a response waiter
         }
         if (respWaiter) {
             const w = respWaiter
@@ -440,6 +470,33 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
         return () => inputListeners.delete(cb)
     }
 
+    async function subscribeRole(
+        cb: (e: RoleEvent) => void,
+    ): Promise<() => Promise<void>> {
+        const mask = new Uint8Array(4)
+        new DataView(mask.buffer).setUint32(0, EVT_CLASS_ROLE, true)
+        await callUniversalPlain(
+            Namespace.COMMON,
+            CommonVerb.SUBSCRIBE_EVENTS,
+            mask,
+        )
+        roleListeners.add(cb)
+        return async () => {
+            roleListeners.delete(cb)
+            if (roleListeners.size === 0) {
+                try {
+                    await callUniversalPlain(
+                        Namespace.COMMON,
+                        CommonVerb.UNSUBSCRIBE,
+                        mask,
+                    )
+                } catch {
+                    /* best-effort unsubscribe */
+                }
+            }
+        }
+    }
+
     async function close(opts: { abortTransport?: boolean } = {}): Promise<void> {
         if (closed && !opts.abortTransport) {
             releaseLocks()
@@ -472,6 +529,7 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
         callUniversalPlain,
         callSealedRelay,
         subscribeInput,
+        subscribeRole,
         onClosed(cb) {
             if (closed) {
                 cb()
