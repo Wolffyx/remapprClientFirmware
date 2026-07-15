@@ -118,6 +118,7 @@ export const Cap = {
     AUTH: 1 << 5,
     KEYMAP: 1 << 6,
     PAIRING: 1 << 7,
+    CLUSTER_DIAG: 1 << 12, // GET_CLUSTER_DIAG source wired (§N4b-3)
 } as const
 
 /* ── universal (proto-v2) ───────────────────────────────────────────────── */
@@ -160,6 +161,11 @@ export const CommonVerb = {
      *  {u8 version(=1), u8 flags(bit0 radio counters valid), u32 mic_fail,
      *  u16 tx_chan_fail, u16 link_resync} — free-running since boot. */
     GET_ERROR_COUNTERS: 0x51,
+    /** §N4b-3 cluster diagnostics, no arg (relayable via target_node). Reply:
+     *  {u8 version(=1), u8 local_role, u8 local_flags, u16 local_term,
+     *  u8 peer_count, then peer_count × {u8 flags(bit0 ready, bit1 seen),
+     *  u8 role, u16 term, u8 hb_flags}}. */
+    GET_CLUSTER_DIAG: 0x54,
 } as const
 
 /** LIGHTING-namespace verbs (§5.7 output-feedback family; each is
@@ -325,6 +331,48 @@ export function parseInputEvent(p: Uint8Array): InputEvent {
         src: p[1],
         inputId: dv.getUint16(2, true),
         ts: dv.getUint16(4, true),
+    }
+}
+
+/** A parsed RUCP event frame — [0xE2][UCH flag EVENT][event_id|seq|u16 len|
+ *  payload] (§7.5). Distinct from the 0xE0 legacy ControlEvent above. */
+export interface UchEvent {
+    ns: number
+    eventId: number
+    seq: number
+    payload: Uint8Array
+}
+
+/** Event class bit selected by SUBSCRIBE_EVENTS (§7.5): cluster role transitions. */
+export const EVT_CLASS_ROLE = 1 << 0
+export const EVT_ROLE = 0x01
+
+export function parseUchEvent(frame: Uint8Array): UchEvent {
+    const inner = frame.subarray(1 + UCH_LEN)
+    const dv = new DataView(inner.buffer, inner.byteOffset, inner.byteLength)
+    const len = dv.getUint16(2, true)
+    return {
+        ns: frame[2],
+        eventId: inner[0],
+        seq: inner[1],
+        payload: inner.subarray(4, 4 + len),
+    }
+}
+
+/** A decoded EVT_ROLE payload: a cluster role transition (u8 role | u8 flags |
+ *  u16 term LE). term/flags are 0 until the §6 election lands (N5). */
+export interface RoleEvent {
+    coordinator: boolean
+    flags: number
+    term: number
+}
+
+export function parseRoleEvent(p: Uint8Array): RoleEvent {
+    const dv = new DataView(p.buffer, p.byteOffset, p.byteLength)
+    return {
+        coordinator: (p[0] & 0x01) !== 0,
+        flags: p[1],
+        term: dv.getUint16(2, true),
     }
 }
 
@@ -808,6 +856,54 @@ export function parseErrorCounters(d: Uint8Array): ErrorCounters {
         micFail: dv.getUint32(2, true),
         txChanFail: dv.getUint16(6, true),
         linkResync: dv.getUint16(8, true),
+    }
+}
+
+/** One node-bus peer in a GET_CLUSTER_DIAG reply (§N4b-3). */
+export interface ClusterPeer {
+    coordinator: boolean
+    term: number
+    hbFlags: number
+    ready: boolean
+    seen: boolean
+}
+
+/** COMMON.GET_CLUSTER_DIAG reply (§N4b-3): this node's cluster role plus each
+ *  node-bus peer's advertised role status (N4b-2 HELLO caps + HEARTBEAT tail).
+ *  `localTerm`/`localFlags` are 0 until the §6 election lands (N5). */
+export interface ClusterDiag {
+    coordinator: boolean
+    localFlags: number
+    localTerm: number
+    peers: ClusterPeer[]
+}
+
+const CLUSTER_DIAG_HDR_LEN = 6
+const CLUSTER_DIAG_PEER_LEN = 5
+
+export function parseClusterDiag(d: Uint8Array): ClusterDiag {
+    if (d.length < CLUSTER_DIAG_HDR_LEN)
+        throw new Error('cluster-diag reply too short')
+    if (d[0] !== 1) throw new Error(`unknown cluster-diag version ${d[0]}`)
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const count = d[5]
+    const peers: ClusterPeer[] = []
+    let off = CLUSTER_DIAG_HDR_LEN
+    for (let i = 0; i < count && off + CLUSTER_DIAG_PEER_LEN <= d.length; i++) {
+        peers.push({
+            ready: (d[off] & 0x01) !== 0,
+            seen: (d[off] & 0x02) !== 0,
+            coordinator: (d[off + 1] & 0x01) !== 0,
+            term: dv.getUint16(off + 2, true),
+            hbFlags: d[off + 4],
+        })
+        off += CLUSTER_DIAG_PEER_LEN
+    }
+    return {
+        coordinator: (d[1] & 0x01) !== 0,
+        localFlags: d[2],
+        localTerm: dv.getUint16(3, true),
+        peers,
     }
 }
 
