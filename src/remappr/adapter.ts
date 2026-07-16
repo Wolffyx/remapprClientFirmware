@@ -17,6 +17,7 @@ import type { DeviceInfo } from '../types'
 import { loadOrCreateIdentity, RemapprSession } from './auth'
 import { loadDeviceConfig } from './configRead'
 import { discover, type DiscoveryResult } from './discovery'
+import { buildClusterApi } from './clusterView'
 import { buildNodesApi } from './nodeView'
 import {
     BLE_CONTROL_CHAR_UUID,
@@ -273,6 +274,13 @@ export const remapprAdapter: FirmwareAdapter = {
                 // A dongle relays to bonded nodes; a direct keyboard returns an
                 // empty roster. Read-only views today (relayed-write HW-pending).
                 nodes: buildNodesApi(rpc),
+                // Cluster diagnostics only when the firmware wired a source and
+                // advertised it (Cap.CLUSTER_DIAG). A null capBits means a
+                // pre-capability firmware with no cluster diagnostics → omit.
+                cluster:
+                    capBits !== null && (capBits & Cap.CLUSTER_DIAG) !== 0
+                        ? buildClusterApi(rpc)
+                        : undefined,
             })
         } catch (err) {
             await rpc.close({ abortTransport: true }).catch(() => undefined)
