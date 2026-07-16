@@ -31,6 +31,9 @@ export { isUnlocked } from './types'
 
 export type {
     Capabilities,
+    ClusterApi,
+    ClusterDiag,
+    ClusterPeer,
     DynamicEntriesApi,
     EncoderApi,
     HsvColor,
@@ -40,6 +43,7 @@ export type {
     NodesApi,
     NodeView,
     RgbApi,
+    RoleEvent,
     WirelessApi,
     WirelessLpm,
     WirelessStatus,
