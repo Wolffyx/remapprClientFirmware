@@ -4,6 +4,8 @@ import { filterCatalogByCodec } from '@firmware/catalog/filter'
 import type { KeyCatalog } from '@firmware/catalog/types'
 import type {
     Capabilities,
+    ClusterApi,
+    ClusterDiag,
     DynamicEntriesApi,
     EncoderApi,
     HsvColor,
@@ -12,6 +14,7 @@ import type {
     MacroApi,
     RgbApi,
     RgbEffectState,
+    RoleEvent,
 } from '@firmware/service'
 import type {
     ActionType,
@@ -158,6 +161,7 @@ export class MockKeyboardService
     public readonly dynamic: DynamicEntriesApi
     public readonly macros: MacroApi
     public readonly rgb: RgbApi
+    public readonly cluster: ClusterApi
     // Demo advertises the full feature bitmask so the config-blob editors show
     // (and gray nothing) — the mock honors every §7.4 setting in-memory.
     public readonly limits: Limits = {
@@ -419,6 +423,56 @@ export class MockKeyboardService
             setEffect: async (state) => {
                 this.rgbEffect = { ...state, color: { ...state.color } }
                 this.markPending(true)
+            },
+        }
+
+        // Cluster diagnostics (§N4b-3). The snapshot mirrors the firmware test
+        // double: a coordinator with two node-bus followers (one ready+seen, one
+        // still coming up). The real role event is dormant until the N5 election,
+        // so — for the demo device only — emit one simulated transition a beat
+        // after the first subscriber so the live feed isn't empty; the timer is
+        // cleared when the last listener leaves.
+        const roleListeners = new Set<(e: RoleEvent) => void>()
+        let roleDemoTimer: ReturnType<typeof setTimeout> | null = null
+        this.cluster = {
+            getDiag: async (): Promise<ClusterDiag> => ({
+                coordinator: true,
+                localFlags: 0,
+                localTerm: 0,
+                peers: [
+                    {
+                        coordinator: false,
+                        ready: true,
+                        seen: true,
+                        term: 0,
+                        hbFlags: 0x01,
+                    },
+                    {
+                        coordinator: false,
+                        ready: false,
+                        seen: true,
+                        term: 0,
+                        hbFlags: 0x00,
+                    },
+                ],
+            }),
+            onRoleChanged: (cb) => {
+                roleListeners.add(cb)
+                if (roleListeners.size === 1) {
+                    roleDemoTimer = setTimeout(() => {
+                        for (const l of roleListeners) {
+                            l({ coordinator: false, flags: 0, term: 1 })
+                        }
+                        roleDemoTimer = null
+                    }, 2000)
+                }
+                return () => {
+                    roleListeners.delete(cb)
+                    if (roleListeners.size === 0 && roleDemoTimer) {
+                        clearTimeout(roleDemoTimer)
+                        roleDemoTimer = null
+                    }
+                }
             },
         }
     }

@@ -1,7 +1,7 @@
 import type { KeyCatalog } from './catalog/types'
 import type { KeycodeCodec } from './codec'
 import type { LightingCatalog } from './lighting'
-import type { Limits } from './remappr/protocol'
+import type { ClusterDiag, Limits, RoleEvent } from './remappr/protocol'
 import type {
     ActionType,
     AdapterNotification,
@@ -426,6 +426,29 @@ export interface RadioPipeTable {
     pipes: RadioPipeEntry[]
 }
 
+// Pattern check: Facade (Tier 1) — applied — the §N4b-3 cluster-diagnostics
+// surface (role snapshot + live role-transition events) behind one optional
+// service member, sibling of keyTest/nodes. The renderer reads `service.cluster`
+// once instead of threading the relay RPC + the RUCP event pump.
+
+/** Re-exported so a consumer imports the whole cluster surface (facade + its
+ *  wire DTOs) from one entry point. */
+export type { ClusterDiag, ClusterPeer, RoleEvent } from './remappr/protocol'
+
+export interface ClusterApi {
+    /** Snapshot this node's cluster role plus each node-bus peer's advertised
+     *  role status (COMMON.GET_CLUSTER_DIAG §N4b-3). Idempotent read for the
+     *  diagnostics view. */
+    getDiag(): Promise<ClusterDiag>
+
+    /** Subscribe to live cluster role-transition events. Returns a disposer; the
+     *  wire SUBSCRIBE_EVENTS(ROLE) is sent on the first listener and UNSUBSCRIBE
+     *  when the last one leaves. The event fires only on a *runtime* role change
+     *  — the config-blob role is boot-only — so on current firmware the feed
+     *  stays quiet until the §6 election (N5) lands. */
+    onRoleChanged(cb: (e: RoleEvent) => void): () => void
+}
+
 export interface KeyboardService {
     readonly deviceInfo: DeviceInfo
     readonly capabilities: Capabilities
@@ -483,6 +506,10 @@ export interface KeyboardService {
     /** Behind-dongle node roster (present on dongle devices; `list()` is empty for
      *  a directly-attached keyboard). Views are read-only today. */
     nodes?: NodesApi
+    /** Cluster diagnostics + live role-transition events (§N4b-3). Present only on
+     *  a directly-attached node whose firmware wired a cluster-diag source
+     *  (Cap.CLUSTER_DIAG); omitted on dongles and read-only node views. */
+    cluster?: ClusterApi
 
     addLayer(): Promise<Layer>
 
