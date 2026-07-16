@@ -103,6 +103,16 @@ export class ZmkKeyboardService implements KeyboardService {
     private layouts: ZmkPhysicalLayouts | null = null
     private cachedKeymap: ZmkKeymap | null = null
 
+    // Single-flight guards: every RPC is serialized behind the lib's rpc
+    // mutex, so N concurrent callers (use-layouts mounts, Drawer's getKeymap,
+    // both binding editors' listActionTypes, …) would otherwise queue N
+    // duplicate device reads at connect. Concurrent callers share one promise;
+    // completed results are cached (layouts/behaviors) or refetched fresh on
+    // the next sequential call (keymap).
+    private layoutsInFlight: Promise<ZmkPhysicalLayouts> | null = null
+    private behaviorsInFlight: Promise<void> | null = null
+    private keymapInFlight: Promise<Keymap> | null = null
+
     private readonly notificationListeners = new Set<NotificationHandler>()
     private readonly lockStateListeners = new Set<LockStateHandler>()
     private readonly pendingChangesListeners = new Set<PendingChangesHandler>()
@@ -209,30 +219,49 @@ export class ZmkKeyboardService implements KeyboardService {
     }
 
     private async loadBehaviors(): Promise<void> {
-        const list = await this.call({ behaviors: { listAllBehaviors: true } })
-        const ids = list.behaviors?.listAllBehaviors?.behaviors ?? []
-        for (const behaviorId of ids) {
-            const detailsResp = await this.call({
-                behaviors: { getBehaviorDetails: { behaviorId } },
+        if (Object.keys(this.behaviors).length > 0) return
+        this.behaviorsInFlight ??= (async (): Promise<void> => {
+            const list = await this.call({
+                behaviors: { listAllBehaviors: true },
             })
-            const details: GetBehaviorDetailsResponse | undefined =
-                detailsResp.behaviors?.getBehaviorDetails
-            if (details) this.behaviors[details.id] = details
-        }
+            const ids = list.behaviors?.listAllBehaviors?.behaviors ?? []
+            for (const behaviorId of ids) {
+                const detailsResp = await this.call({
+                    behaviors: { getBehaviorDetails: { behaviorId } },
+                })
+                const details: GetBehaviorDetailsResponse | undefined =
+                    detailsResp.behaviors?.getBehaviorDetails
+                if (details) this.behaviors[details.id] = details
+            }
+        })().finally(() => {
+            this.behaviorsInFlight = null
+        })
+        return this.behaviorsInFlight
     }
 
     async listActionTypes(): Promise<ActionType[]> {
-        if (Object.keys(this.behaviors).length === 0) await this.loadBehaviors()
+        await this.loadBehaviors()
         return behaviorsToActionTypes(this.behaviors)
     }
 
     private async ensureLayouts(): Promise<ZmkPhysicalLayouts> {
         if (this.layouts) return this.layouts
-        const resp = await this.call({ keymap: { getPhysicalLayouts: true } })
-        const got = resp.keymap?.getPhysicalLayouts
-        if (!got) throw new ProtocolError('getPhysicalLayouts returned empty')
-        this.layouts = got
-        return got
+        this.layoutsInFlight ??= this.call({
+            keymap: { getPhysicalLayouts: true },
+        })
+            .then((resp) => {
+                const got = resp.keymap?.getPhysicalLayouts
+                if (!got)
+                    throw new ProtocolError(
+                        'getPhysicalLayouts returned empty',
+                    )
+                this.layouts = got
+                return got
+            })
+            .finally(() => {
+                this.layoutsInFlight = null
+            })
+        return this.layoutsInFlight
     }
 
     async getPhysicalLayouts(): Promise<{
@@ -259,13 +288,19 @@ export class ZmkKeyboardService implements KeyboardService {
     }
 
     async getKeymap(): Promise<Keymap> {
-        if (Object.keys(this.behaviors).length === 0) await this.loadBehaviors()
-        const layouts = await this.ensureLayouts()
-        const resp = await this.call({ keymap: { getKeymap: true } })
-        const km = resp.keymap?.getKeymap
-        if (!km) throw new ProtocolError('getKeymap returned empty')
-        this.cachedKeymap = km
-        return zmkKeymapToNeutral(km, layouts, this.behaviors)
+        // Share concurrent reads only — a sequential call refetches fresh.
+        this.keymapInFlight ??= (async (): Promise<Keymap> => {
+            await this.loadBehaviors()
+            const layouts = await this.ensureLayouts()
+            const resp = await this.call({ keymap: { getKeymap: true } })
+            const km = resp.keymap?.getKeymap
+            if (!km) throw new ProtocolError('getKeymap returned empty')
+            this.cachedKeymap = km
+            return zmkKeymapToNeutral(km, layouts, this.behaviors)
+        })().finally(() => {
+            this.keymapInFlight = null
+        })
+        return this.keymapInFlight
     }
 
     private actionToBinding(action: KeyAction): BehaviorBinding {
@@ -309,6 +344,14 @@ export class ZmkKeyboardService implements KeyboardService {
             throw new ProtocolError(
                 `setLayerBinding failed: ${resp.keymap?.setLayerBinding}`,
             )
+        }
+        // Mirror the edit into cachedKeymap so cache-based raises
+        // (getConfigSource) see it without a full getKeymap re-read.
+        const cachedLayer = this.cachedKeymap?.layers.find(
+            (l) => l.id === layerId,
+        )
+        if (cachedLayer && position < cachedLayer.bindings.length) {
+            cachedLayer.bindings[position] = binding
         }
         this.markPending(true)
     }
@@ -488,6 +531,9 @@ export class ZmkKeyboardService implements KeyboardService {
                 `discardChanges failed: ${resp.keymap?.discardChanges}`,
             )
         }
+        // Device reverted to saved state — the mirror is now wrong; drop it so
+        // the next read (getKeymap / getConfigSource) refetches.
+        this.cachedKeymap = null
         this.markPending(false)
     }
 
@@ -498,6 +544,7 @@ export class ZmkKeyboardService implements KeyboardService {
                 `resetSettings failed: ${resp.core?.resetSettings}`,
             )
         }
+        this.cachedKeymap = null
         this.markPending(false)
     }
 
@@ -529,7 +576,7 @@ export class ZmkKeyboardService implements KeyboardService {
     }
 
     async exportConfig(): Promise<ExportedFile[]> {
-        if (Object.keys(this.behaviors).length === 0) await this.loadBehaviors()
+        await this.loadBehaviors()
         const km = await this.getKeymap()
         const keyboardName = this.deviceInfo.name || 'keyboard'
         const keymapName = 'default'
@@ -559,7 +606,22 @@ export class ZmkKeyboardService implements KeyboardService {
     // degrade to transparent and are logged — see ./raise.
     async getConfigSource(): Promise<string | null> {
         try {
-            const km = await this.getKeymap()
+            // Raise from the in-memory mirror when warm: getKeymap() always does
+            // a full keymap RPC, and this runs after EVERY save (config re-seed),
+            // where a device round-trip would queue behind the rpc mutex and
+            // stall the next edit. cachedKeymap tracks every mutation (setKey /
+            // layer ops) and is dropped on discard/reset, so the raise stays
+            // faithful to device truth.
+            const km =
+                this.cachedKeymap &&
+                this.layouts &&
+                Object.keys(this.behaviors).length > 0
+                    ? zmkKeymapToNeutral(
+                          this.cachedKeymap,
+                          this.layouts,
+                          this.behaviors,
+                      )
+                    : await this.getKeymap()
             const { config, diagnostics } = zmkNeutralToConfig(
                 km,
                 this.deviceInfo,
