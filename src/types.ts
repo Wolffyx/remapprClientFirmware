@@ -104,6 +104,11 @@ export interface ActionType {
      *  ones suppressed without a command because this firmware can't set them
      *  (e.g. ZMK &mmv / &msc expose no param metadata). */
     subsumes?: string[]
+    /** False when the firmware cannot bind this behavior over its protocol —
+     *  e.g. a ZMK parameterized macro (macro-one/two-param) whose device-side
+     *  metadata derivation yields zero sets: the device then rejects EVERY
+     *  setLayerBinding for it (INVALID_PARAMETERS). Undefined = settable. */
+    settable?: boolean
 }
 
 // Pattern check: no GoF pattern (-) — rejected — plain data ref {kind, params}
