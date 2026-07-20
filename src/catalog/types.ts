@@ -40,6 +40,10 @@ export interface CatalogEntry {
     // .keymap file). Picker click shows a toast instead of dispatching
     // a binding because there's no firmware path to set the entry.
     displayOnly?: boolean
+    // Toast text shown on a displayOnly click, replacing the generic
+    // sideloaded-combo message (e.g. why a parameterized macro can't be
+    // assigned over the wire).
+    displayOnlyNote?: string
 }
 
 export interface CatalogPage {

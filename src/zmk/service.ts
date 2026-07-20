@@ -341,9 +341,19 @@ export class ZmkKeyboardService implements KeyboardService {
             },
         })
         if (resp.keymap?.setLayerBinding !== 0) {
-            throw new ProtocolError(
-                `setLayerBinding failed: ${resp.keymap?.setLayerBinding}`,
-            )
+            const code = resp.keymap?.setLayerBinding
+            // SetLayerBindingResponse: 1 invalid location, 2 invalid behavior,
+            // 3 invalid parameters (e.g. a parameterized macro with no
+            // device-side param metadata — nothing the client sends is valid).
+            const reason =
+                code === 1
+                    ? 'the keyboard rejected the key position'
+                    : code === 2
+                      ? 'the keyboard does not know this behavior'
+                      : code === 3
+                        ? 'the keyboard rejected the binding parameters'
+                        : `error ${code}`
+            throw new ProtocolError(`Failed to set key: ${reason}`)
         }
         // Mirror the edit into cachedKeymap so cache-based raises
         // (getConfigSource) see it without a full getKeymap re-read.

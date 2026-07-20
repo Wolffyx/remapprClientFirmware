@@ -191,11 +191,18 @@ export function behaviorToActionType(
     }
     const icon = ZMK_BEHAVIOR_LEGENDS[displayNameToBinding(behavior.displayName)]
         ?.icon
+    // Zero metadata SETS ≠ "no params": a plain user macro reports one set with
+    // empty param columns (bindable with 0,0), while a parameterized macro whose
+    // device-side metadata derivation failed reports NO sets — and the device
+    // then rejects every binding attempt with INVALID_PARAMETERS. Flag those so
+    // the UI offers no broken assign path (same class as &mmv / &msc).
+    const unsettable = sets.length === 0
     return {
         id: String(behavior.id),
         displayName: prettyBehaviorName(behavior.displayName),
         ...(icon ? { icon } : {}),
         slots,
+        ...(unsettable ? { settable: false } : {}),
     }
 }
 
@@ -244,7 +251,10 @@ export function synthesizeMouseActionType(
             if (behaviorToActionType(b).slots.length > 0) settable.add(binding)
         } else if (
             !KNOWN_BINDING_PREFIXES.includes(binding) &&
-            /mouse/i.test(b.displayName)
+            /mouse/i.test(b.displayName) &&
+            // Parameterized macros report zero metadata sets and the device
+            // rejects binding them — don't fold a broken command in.
+            (b.metadata ?? []).length > 0
         ) {
             macros.push({ id: b.id, name: prettyBehaviorName(b.displayName) })
         }
