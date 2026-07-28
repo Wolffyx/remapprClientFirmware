@@ -54,6 +54,10 @@ const ZMK_CAPABILITIES: Capabilities = {
     // `saveChanges` (can fail — SaveChangesErrorCode). Mirrors ZMK Studio's Save
     // button. NOT firmware persistence (the debounced flash write is separate).
     saveMode: 'manual',
+    // Backup/restore rides entirely on the neutral keymap path (getKeymap /
+    // setKeys / commit + layer ops), so the renderer's profile-restore feature
+    // can recover a wiped ZMK keyboard's layout. HW-verified for ZMK.
+    profileRestore: true,
     behaviors: { capsWord: true },
     // No `macros`: ZMK macros are compile-time devicetree nodes, and the Studio
     // protocol exposes only keymap *bindings* (`&macro_name`), not the macro step
