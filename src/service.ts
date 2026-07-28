@@ -67,6 +67,12 @@ export interface Capabilities {
      *  relayed-write path is HW-proof-pending. The UI gates editing affordances
      *  on this — never on a firmware name. */
     readOnly?: boolean
+    /** The adapter supports whole-profile backup + restore-to-device purely
+     *  through the neutral `getKeymap`/`setKeys`/`commit` (+ layer ops) path, so
+     *  the renderer's profile backup/restore feature can safely drive it. Set
+     *  per firmware once HW-verified; the UI gates every backup/restore
+     *  affordance on this flag (never on a firmware name). */
+    profileRestore?: boolean
 }
 
 // Pattern check: Facade (Tier 1) — applied — group related optional methods into 3 cohesive feature facades for renderer single-guard reads
