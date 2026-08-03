@@ -121,6 +121,12 @@ export {
     sameConditionalList,
     conditionalLayersPatch,
     conditionalError,
+    ROLE_OPTIONS,
+    FORWARD_MODE_OPTIONS,
+    CLUSTER_UID_MAX_HEX,
+    CLUSTER_POSITION_MAX,
+    emptyClusterNode,
+    clusterError,
 } from './editorFields'
 export {
     type DerivedMatrix,
