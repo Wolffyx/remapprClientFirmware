@@ -36,7 +36,50 @@ export const TableId = {
     Poshold: 18,
     Names: 19,
     Encoder: 20,
+    Cluster: 21,
 } as const
+
+/** TBL_PERSONALITY byte 1 role_flags (config_blob.h REMAPPR_CFG_ROLE_*). */
+export const CFG_ROLE_VALID = 0x01
+export const CFG_ROLE_COORD = 0x02
+/** TBL_PERSONALITY byte 2 fwd_mode (config_blob.h REMAPPR_FWD_MODE_*): mode B
+ *  (resolved HID, the default) vs mode A (raw matrix positions). */
+export const FWD_MODE_RESOLVED = 0
+export const FWD_MODE_PHYSICAL = 1
+/** TBL_CLUSTER framing (config_blob.h): 2-byte header, 16-byte UID field,
+ *  25-byte per-node stride. */
+export const CLUSTER_TBL_HDR_LEN = 2
+export const CLUSTER_UID_MAX = 16
+export const CLUSTER_NODE_WIRE = 25
+
+// pattern-check: skip pure hex<->bytes codec helpers, no abstraction
+/** Parse a hex string ("00ff1a…") to bytes; a stray odd nibble is dropped. */
+export function hexToBytes(hex: string): Uint8Array {
+    const clean = hex.replace(/[^0-9a-fA-F]/g, '')
+    const n = clean.length >> 1
+    const out = new Uint8Array(n)
+    for (let i = 0; i < n; i++) out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16)
+    return out
+}
+
+/** Format bytes as a lower-case hex string (inverse of hexToBytes). */
+export function bytesToHex(bytes: Uint8Array | number[]): string {
+    let s = ''
+    for (const b of bytes) s += (b & 0xff).toString(16).padStart(2, '0')
+    return s
+}
+
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_CLUSTER entry
+/** One TBL_CLUSTER entry (§N4c mode-A): a node's UID→address-base assignment.
+ *  `uid` is the raw hardware UID bytes (≤16, zero-padded to 16 on the wire). */
+export interface ClusterNodeRecord {
+    uid: Uint8Array
+    positionBase: number
+    rows: number
+    cols: number
+    encoderBase: number
+    pointerBase: number
+}
 
 /** Wire sentinel for an unbound encoder direction/press (config_blob.h
  *  REMAPPR_ENCODER_BH_NONE): the firmware decodes it to a NONE no-op. */
@@ -724,13 +767,39 @@ export class BlobBuilder {
     }
 
     // pattern-check: skip one more table-emit method on the existing Builder
-    /** TBL_PERSONALITY (id 16): u8 personality + 3 reserved bytes (only byte 0
-     *  is read by the decoder). */
-    personalityTable(personality: number): this {
+    /** TBL_PERSONALITY (id 16): u8 personality, u8 role_flags (byte 1, §N4b),
+     *  u8 fwd_mode (byte 2, §N4c), u8 reserved. Defaults keep every byte after
+     *  the personality zero, so a personality-only call is byte-identical to the
+     *  original 4-byte table the firmware decode_personality expects. */
+    personalityTable(personality: number, roleFlags = 0, fwdMode = 0): this {
         this.tableBegin(TableId.Personality, 1)
         this.w.u8(personality)
-        this.w.u8(0)
-        this.w.u16(0)
+        this.w.u8(roleFlags)
+        this.w.u8(fwdMode)
+        this.w.u8(0) // reserved
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_CLUSTER (id 21, §N4c mode-A): u8 node_count, u8 flags (reserved 0),
+     *  then node_count × 25-byte entries { u8 uid_len, u8 uid[16], u16
+     *  position_base, u8 rows, u8 cols, u16 encoder_base, u16 pointer_base } —
+     *  matching firmware decode_cluster.c. */
+    clusterTable(nodes: ClusterNodeRecord[]): this {
+        this.tableBegin(TableId.Cluster, 1)
+        this.w.u8(nodes.length)
+        this.w.u8(0) // flags (reserved)
+        for (const n of nodes) {
+            const uid = n.uid.subarray(0, CLUSTER_UID_MAX)
+            this.w.u8(uid.length)
+            for (let i = 0; i < CLUSTER_UID_MAX; i++) this.w.u8(uid[i] ?? 0)
+            this.w.u16(n.positionBase)
+            this.w.u8(n.rows)
+            this.w.u8(n.cols)
+            this.w.u16(n.encoderBase)
+            this.w.u16(n.pointerBase)
+        }
         this.tableEnd()
         return this
     }
