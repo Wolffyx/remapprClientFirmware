@@ -164,7 +164,8 @@ export const CommonVerb = {
     /** §N4b-3 cluster diagnostics, no arg (relayable via target_node). Reply:
      *  {u8 version(=1), u8 local_role, u8 local_flags, u16 local_term,
      *  u8 peer_count, then peer_count × {u8 flags(bit0 ready, bit1 seen),
-     *  u8 role, u16 term, u8 hb_flags}}. */
+     *  u8 role, u16 term, u8 hb_flags}}. §N4c appends an optional 8-byte tail
+     *  {u32 no_node, u32 oob} on a POSITION_FWD coordinator (append-only). */
     GET_CLUSTER_DIAG: 0x54,
 } as const
 
@@ -876,10 +877,18 @@ export interface ClusterDiag {
     localFlags: number
     localTerm: number
     peers: ClusterPeer[]
+    /** §N4c mode-A RX drop counters, appended after the peers on a coordinator
+     *  built with POSITION_FWD. Counts each §5.2 drop by reason: `noNode` (a source
+     *  absent from the cluster map, incl. a relayed descendant whose UID never
+     *  reached the coordinator) and `oob` (a position past the follower's declared
+     *  rows*cols). Undefined when the reply carries no tail — a reader stops at
+     *  peer_count and skips it (append-only, no version bump). */
+    modeADrops?: { noNode: number; oob: number }
 }
 
 const CLUSTER_DIAG_HDR_LEN = 6
 const CLUSTER_DIAG_PEER_LEN = 5
+const CLUSTER_DIAG_TAIL_LEN = 8
 
 export function parseClusterDiag(d: Uint8Array): ClusterDiag {
     if (d.length < CLUSTER_DIAG_HDR_LEN)
@@ -899,11 +908,21 @@ export function parseClusterDiag(d: Uint8Array): ClusterDiag {
         })
         off += CLUSTER_DIAG_PEER_LEN
     }
+    // §N4c: optional mode-A drop-counter tail (append-only; present only when all
+    // peers were consumed and 8 trailing bytes remain — a POSITION_FWD coordinator).
+    let modeADrops: ClusterDiag['modeADrops']
+    if (off + CLUSTER_DIAG_TAIL_LEN <= d.length) {
+        modeADrops = {
+            noNode: dv.getUint32(off, true),
+            oob: dv.getUint32(off + 4, true),
+        }
+    }
     return {
         coordinator: (d[1] & 0x01) !== 0,
         localFlags: d[2],
         localTerm: dv.getUint16(3, true),
         peers,
+        modeADrops,
     }
 }
 

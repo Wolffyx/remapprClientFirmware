@@ -76,6 +76,22 @@ describe('parseClusterDiag (§N4b-3)', () => {
         })
     })
 
+    it('leaves modeADrops undefined when the reply has no §N4c tail', () => {
+        // 2 peers, tail-less (§N4b-3 build / follower / mode-B): 6 + 2*5 = 16 B.
+        const d = new Uint8Array([1, 0, 0, 0, 0, 2, 0x03, 0, 0, 0, 0, 0x03, 0, 0, 0, 0])
+        expect(parseClusterDiag(d).modeADrops).toBeUndefined()
+    })
+
+    it('decodes the §N4c mode-A drop-counter tail when present', () => {
+        // 1 peer, then the 8-byte tail {u32 no_node=7, u32 oob=0x0102} LE.
+        const d = new Uint8Array([
+            1, 1, 0, 0, 0, 1,
+            0x03, 0, 0, 0, 0,
+            7, 0, 0, 0, 0x02, 0x01, 0, 0,
+        ])
+        expect(parseClusterDiag(d).modeADrops).toEqual({ noNode: 7, oob: 0x0102 })
+    })
+
     it('rejects an unknown reply version', () => {
         expect(() => parseClusterDiag(new Uint8Array([9, 0, 0, 0, 0, 0]))).toThrow(
             /version/,
