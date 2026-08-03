@@ -36,6 +36,7 @@ import {
     type CanonTapDance,
     type ConfigDefaults,
     type ConfigKeymap,
+    type ConfigNode,
     serializeKeymap,
 } from '../config'
 import { buildRemapprBlob } from '../config/compilers/remappr'
@@ -188,6 +189,11 @@ export class RemapprKeyboardService
     // (null = no edit) — closer to editedDefaults than the per-index maps. Staged
     // via concrete-service setConditionalLayers(), not the generic interface.
     private editedConditionalLayers: CanonConditionalLayer[] | null = null
+    // Pending whole-node config edit (§N4b role / §N4c forwardMode + cluster map),
+    // accumulated as a patch and overlaid on `config.node` at commit — same
+    // key-wise merge as editedDefaults, so an unedited node field (personality /
+    // mouse) is preserved from device truth. Staged via concrete-service setNode().
+    private editedNode: Partial<ConfigNode> = {}
 
     private readonly notificationListeners = new Set<NotificationHandler>()
     private readonly pendingChangesListeners = new Set<PendingChangesHandler>()
@@ -358,13 +364,15 @@ export class RemapprKeyboardService
      *  edits overlaid (for commit/export). */
     private withEdits(base: ConfigKeymap): ConfigKeymap {
         const hasDefaultEdits = Object.keys(this.editedDefaults).length > 0
+        const hasNodeEdits = Object.keys(this.editedNode).length > 0
         if (
             this.editedMacros.size === 0 &&
             this.editedTapDances.size === 0 &&
             this.editedHoldTaps.size === 0 &&
             this.editedModMorphs.size === 0 &&
             this.editedConditionalLayers === null &&
-            !hasDefaultEdits
+            !hasDefaultEdits &&
+            !hasNodeEdits
         ) {
             return base
         }
@@ -400,6 +408,9 @@ export class RemapprKeyboardService
             ...(hasDefaultEdits
                 ? { defaults: { ...base.defaults, ...this.editedDefaults } }
                 : {}),
+            ...(hasNodeEdits
+                ? { node: { ...base.node, ...this.editedNode } }
+                : {}),
         }
     }
 
@@ -410,6 +421,7 @@ export class RemapprKeyboardService
         this.editedHoldTaps.clear()
         this.editedModMorphs.clear()
         this.editedConditionalLayers = null
+        this.editedNode = {}
     }
 
     private seedLayersFromConfig(): void {
@@ -704,6 +716,38 @@ export class RemapprKeyboardService
             ifLayers: [...c.ifLayers],
             thenLayer: c.thenLayer,
         }))
+        this.markPending(true)
+    }
+
+    /* ── whole-node config (§N4b role / §N4c mode-A) ─────────────────────────
+     * Node personality lives in the config blob (TBL_PERSONALITY role_flags +
+     * fwd_mode, TBL_CLUSTER), so — like the timing defaults — the setter is on the
+     * concrete service, patch-merged onto `config.node` and landed at the next
+     * commit(). The cluster address map is authored whole (setNode({ cluster })). */
+
+    /** The node config — device truth merged with any staged edit. Returns a copy
+     *  (cluster rows cloned) so a UI editor can mutate its working array freely. */
+    getNode(): ConfigNode {
+        const merged: ConfigNode = { ...this.config.node, ...this.editedNode }
+        return merged.cluster
+            ? { ...merged, cluster: merged.cluster.map((n) => ({ ...n })) }
+            : merged
+    }
+
+    /** Stage a node-config patch (role / forwardMode / cluster), applied at the
+     *  next commit(). A key set to `undefined` drops its pending edit (reverts to
+     *  the committed value), matching setConfigDefaults; `cluster` is replaced
+     *  whole. A malformed cluster map is caught by the editor (clusterError), and
+     *  unknown UIDs resolve on the firmware — not here. Marks pending; discard
+     *  reverts to device truth. */
+    setNode(patch: Partial<ConfigNode>): void {
+        this.assertWritable()
+        const edited = this.editedNode as Record<string, unknown>
+        const p = patch as Record<string, unknown>
+        for (const key of Object.keys(p)) {
+            if (p[key] === undefined) delete edited[key]
+            else edited[key] = p[key]
+        }
         this.markPending(true)
     }
 

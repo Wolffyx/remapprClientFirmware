@@ -27,6 +27,11 @@ import {
     sameConditionalList,
     toggleIfLayer,
     toggleModifier,
+    ROLE_OPTIONS,
+    FORWARD_MODE_OPTIONS,
+    CLUSTER_UID_MAX_HEX,
+    emptyClusterNode,
+    clusterError,
 } from '../editorFields'
 import { HoldTapDefSchema, ModMorphSchema } from '../schema'
 
@@ -200,5 +205,66 @@ describe('behavior def factories', () => {
         const vals = HOLD_TAP_BEHAVIOR_TOKENS.map((t) => t.value)
         expect(vals).toContain('&kp')
         expect(vals).toContain('&mo')
+    })
+})
+
+describe('node role / mode-A cluster editor metadata (§N4b/§N4c)', () => {
+    it('offers the two node-bus roles and forward modes', () => {
+        expect(ROLE_OPTIONS.map((o) => o.value)).toEqual([
+            'coordinator',
+            'follower',
+        ])
+        expect(FORWARD_MODE_OPTIONS.map((o) => o.value)).toEqual([
+            'resolved',
+            'physical',
+        ])
+    })
+
+    it('emptyClusterNode is a valid single-key row', () => {
+        const n = emptyClusterNode()
+        expect(n).toEqual({ uid: '', positionBase: 0, rows: 1, cols: 1 })
+        // ... but empty until a UID is entered, so it does not yet validate.
+        expect(clusterError([n])).toMatch(/UID/)
+    })
+
+    it('accepts a well-formed cluster map', () => {
+        expect(
+            clusterError([
+                { uid: 'deadbeef', positionBase: 0, rows: 6, cols: 5 },
+                { uid: '0102', positionBase: 30, rows: 4, cols: 4, encoderBase: 2 },
+            ]),
+        ).toBeNull()
+    })
+
+    it('rejects a UID that is not whole hex bytes', () => {
+        expect(clusterError([{ uid: 'abc', positionBase: 0, rows: 1, cols: 1 }])).toMatch(
+            /even hex length/,
+        )
+        expect(clusterError([{ uid: 'xy', positionBase: 0, rows: 1, cols: 1 }])).toMatch(
+            /hex/,
+        )
+        expect(
+            clusterError([
+                { uid: 'a'.repeat(CLUSTER_UID_MAX_HEX + 2), positionBase: 0, rows: 1, cols: 1 },
+            ]),
+        ).toMatch(/longer than/)
+    })
+
+    it('rejects a duplicate UID (it would shadow a node on the coordinator)', () => {
+        expect(
+            clusterError([
+                { uid: 'deadbeef', positionBase: 0, rows: 1, cols: 1 },
+                { uid: 'DEADBEEF', positionBase: 1, rows: 1, cols: 1 },
+            ]),
+        ).toMatch(/duplicate/i)
+    })
+
+    it('rejects dims and a base that overrun the u16 position space', () => {
+        expect(clusterError([{ uid: 'ab', positionBase: 0, rows: 0, cols: 1 }])).toMatch(
+            /rows/,
+        )
+        expect(
+            clusterError([{ uid: 'ab', positionBase: 0xfffe, rows: 2, cols: 2 }]),
+        ).toMatch(/overruns/)
     })
 })

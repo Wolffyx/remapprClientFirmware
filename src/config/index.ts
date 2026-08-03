@@ -46,6 +46,8 @@ export type {
     ConfigPins,
     ConfigDefaults,
     ConfigMeta,
+    ConfigNode,
+    ConfigClusterNode,
     DiodeDirection,
     GpioSpec,
     LayerMode,

@@ -37,6 +37,17 @@ describe('MockKeyboardService config-blob editing (demo)', () => {
         expect(svc.getConfigDefaults().tappingTermMs).toBe(200)
     })
 
+    it('round-trips a node role/forwardMode edit; undefined drops to seed', () => {
+        const svc = new MockKeyboardService()
+        const seed = svc.getNode()
+        svc.setNode({ role: 'coordinator', forwardMode: 'physical' })
+        expect(svc.getNode().role).toBe('coordinator')
+        expect(svc.getNode().forwardMode).toBe('physical')
+        svc.setNode({ role: undefined, forwardMode: undefined })
+        expect(svc.getNode().role).toBe(seed.role)
+        expect(svc.getNode().forwardMode).toBe(seed.forwardMode)
+    })
+
     it('round-trips a conditional-layer edit and reflects it in getConfigSource', async () => {
         const svc = new MockKeyboardService()
         // The demo seed ships one sample tri-layer so the editor opens with data.
