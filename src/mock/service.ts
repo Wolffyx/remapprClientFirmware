@@ -55,6 +55,7 @@ import {
     type CanonModMorph,
     type ConfigDefaults,
     type ConfigKeymap,
+    type ConfigNode,
 } from '@firmware/config'
 import type { RemapprConfigEditing } from '@firmware/remappr/configEditing'
 import type { Limits } from '@firmware/remappr/protocol'
@@ -813,6 +814,35 @@ export class MockKeyboardService
                 thenLayer: c.thenLayer,
             })),
         }
+        this.configEdited = true
+        this.markPending(true)
+    }
+
+    getNode(): ConfigNode {
+        const node: ConfigNode = { ...this.cfg.node }
+        return node.cluster
+            ? { ...node, cluster: node.cluster.map((n) => ({ ...n })) }
+            : node
+    }
+
+    setNode(patch: Partial<ConfigNode>): void {
+        this.requireUnlocked()
+        const node = { ...this.cfg.node } as Record<string, unknown>
+        const seed = (this.seedCfg.node ?? {}) as Record<string, unknown>
+        const p = patch as Record<string, unknown>
+        for (const key of Object.keys(p)) {
+            if (p[key] !== undefined) {
+                node[key] = p[key]
+            } else if (seed[key] !== undefined) {
+                // undefined reverts the key to the seed (committed) value, matching
+                // the concrete service where dropping a staged edit falls back to
+                // device truth rather than deleting the field.
+                node[key] = seed[key]
+            } else {
+                delete node[key]
+            }
+        }
+        this.cfg = { ...this.cfg, node: node as ConfigNode }
         this.configEdited = true
         this.markPending(true)
     }

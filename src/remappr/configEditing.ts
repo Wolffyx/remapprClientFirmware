@@ -15,6 +15,7 @@ import type {
     CanonHoldTapDef,
     CanonModMorph,
     ConfigDefaults,
+    ConfigNode,
 } from '../config'
 
 export interface RemapprConfigEditing {
@@ -34,6 +35,12 @@ export interface RemapprConfigEditing {
     getConditionalLayers(): CanonConditionalLayer[]
     /** Stage the full conditional-layer list (the editor owns add / remove). */
     setConditionalLayers(list: CanonConditionalLayer[]): void
+    /** Whole-node config (§N4b role / §N4c forwardMode + cluster map), device-truth
+     *  merged with staged edits. */
+    getNode(): ConfigNode
+    /** Stage a node-config patch (role / forwardMode / cluster); an `undefined`
+     *  value drops that key back to committed, mirroring setConfigDefaults. */
+    setNode(patch: Partial<ConfigNode>): void
 }
 
 /** True when `service` exposes the config-blob editing surface — a concrete
@@ -53,6 +60,8 @@ export function supportsConfigEditing(
         typeof s.getModMorphs === 'function' &&
         typeof s.setModMorph === 'function' &&
         typeof s.getConditionalLayers === 'function' &&
-        typeof s.setConditionalLayers === 'function'
+        typeof s.setConditionalLayers === 'function' &&
+        typeof s.getNode === 'function' &&
+        typeof s.setNode === 'function'
     )
 }
