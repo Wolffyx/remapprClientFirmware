@@ -13,7 +13,9 @@ import type {
     CanonConditionalLayer,
     CanonHoldTapDef,
     CanonModMorph,
+    ConfigClusterNode,
     ConfigDefaults,
+    ConfigNode,
 } from './types'
 import { MODIFIERS, type Modifier } from './keycodes'
 import type { FeatureName } from './featureWarnings'
@@ -392,6 +394,102 @@ export function conditionalError(
         if (unknownIf) return `${row}: unknown layer "${unknownIf}"`
         if (!layerNames.includes(c.thenLayer))
             return `${row}: unknown layer "${c.thenLayer}"`
+    }
+    return null
+}
+
+/* ── node-bus role + mode-A cluster (§N4b/§N4c, TBL_PERSONALITY + TBL_CLUSTER) ─
+ * Metadata for the whole-node editor: the node-bus role (which node is the
+ * cluster coordinator) and the mode-A forward mode + cluster address map. These
+ * live on ConfigNode (role / forwardMode / cluster) and ride the config blob, so
+ * — like the timing / behavior editors above — the front-end supplies the inputs
+ * and the write path; this module owns the option tables + pure validation. */
+
+/** Node-bus role options; an absent role leaves the firmware Kconfig default, so
+ *  the editor offers a third "unset" choice by writing `role: undefined`. */
+export const ROLE_OPTIONS: readonly {
+    value: NonNullable<ConfigNode['role']>
+    label: string
+    help: string
+}[] = [
+    {
+        value: 'coordinator',
+        label: 'Coordinator',
+        help: 'Cluster main — merges every node’s input and drives the host link.',
+    },
+    {
+        value: 'follower',
+        label: 'Follower',
+        help: 'Forwards its input upstream to the coordinator; no local host.',
+    },
+]
+
+/** Mode-A vs mode-B forwarding. Absent ⇒ 'resolved' (mode B), today’s default. */
+export const FORWARD_MODE_OPTIONS: readonly {
+    value: NonNullable<ConfigNode['forwardMode']>
+    label: string
+    help: string
+}[] = [
+    {
+        value: 'resolved',
+        label: 'Resolved HID (mode B)',
+        help: 'The follower resolves its own keymap and forwards HID usages (default).',
+    },
+    {
+        value: 'physical',
+        label: 'Physical positions (mode A)',
+        help: 'The follower forwards raw matrix positions; the coordinator resolves them against the cluster keymap. Needs a cluster map below.',
+    },
+]
+
+/** Max UID length: 16 bytes = 32 hex chars (matches REMAPPR_CLUSTER_UID_MAX). */
+export const CLUSTER_UID_MAX_HEX = 32
+/** Absolute position space is u16, so a node’s base + rows*cols must fit it. */
+export const CLUSTER_POSITION_MAX = 0xffff
+
+/** A fresh, empty cluster-map row for an editor’s "add" action. */
+export function emptyClusterNode(): ConfigClusterNode {
+    return { uid: '', positionBase: 0, rows: 1, cols: 1 }
+}
+
+/** First problem with the mode-A cluster map, or null when every row is
+ *  well-formed. Mirrors the firmware decode_cluster.c / remappr_cluster_resolve
+ *  bounds (uid ≤16 bytes, dims fit the u16 position space) plus a duplicate-UID
+ *  check — the coordinator looks a source up by UID and finds the FIRST match, so
+ *  a repeated UID silently shadows a node. Lets the UI name the bad row and block
+ *  Save before a push the firmware would reject. */
+export function clusterError(list: readonly ConfigClusterNode[]): string | null {
+    const seen = new Set<string>()
+
+    for (let i = 0; i < list.length; i++) {
+        const n = list[i]
+        const row = `Node ${i + 1}`
+        const uid = n.uid.toLowerCase()
+
+        if (uid.length === 0) return `${row}: enter a hardware UID`
+        if (uid.length % 2 !== 0)
+            return `${row}: UID must be whole bytes (even hex length)`
+        if (uid.length > CLUSTER_UID_MAX_HEX)
+            return `${row}: UID is longer than ${CLUSTER_UID_MAX_HEX / 2} bytes`
+        if (!/^[0-9a-f]+$/.test(uid)) return `${row}: UID must be hex`
+        if (seen.has(uid)) return `${row}: duplicate UID "${n.uid}"`
+        seen.add(uid)
+
+        if (!Number.isInteger(n.rows) || n.rows < 1 || n.rows > 255)
+            return `${row}: rows must be 1–255`
+        if (!Number.isInteger(n.cols) || n.cols < 1 || n.cols > 255)
+            return `${row}: cols must be 1–255`
+        if (!Number.isInteger(n.positionBase) || n.positionBase < 0)
+            return `${row}: position base must be ≥ 0`
+        if (n.positionBase + n.rows * n.cols > CLUSTER_POSITION_MAX + 1)
+            return `${row}: position base + rows×cols overruns the ${CLUSTER_POSITION_MAX + 1}-position space`
+        for (const [key, v] of [
+            ['encoder base', n.encoderBase],
+            ['pointer base', n.pointerBase],
+        ] as const) {
+            if (v !== undefined && (!Number.isInteger(v) || v < 0 || v > CLUSTER_POSITION_MAX))
+                return `${row}: ${key} must be 0–${CLUSTER_POSITION_MAX}`
+        }
     }
     return null
 }
