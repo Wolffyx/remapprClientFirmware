@@ -49,7 +49,14 @@ import {
     OutputActionCode,
     PeripheralKind,
     SystemAction,
+    CFG_ROLE_VALID,
+    CFG_ROLE_COORD,
+    FWD_MODE_PHYSICAL,
+    FWD_MODE_RESOLVED,
+    CLUSTER_UID_MAX,
+    hexToBytes,
     type ActionBindingRecord,
+    type ClusterNodeRecord,
     type BehaviorRecord,
     type ComboRecord,
     type ConditionalRecord,
@@ -1399,17 +1406,59 @@ function encodeBlob(
     // TBL_PERSONALITY (§4c): the declared node identity. Only keyboard/mouse have
     // a firmware personality today; joystick/dongle are reserved (dongle settings
     // ride control verbs), so they warn instead of emitting a lossy identity.
-    const personality = config.node?.personality
-    if (personality) {
-        const code = ({ keyboard: 1, mouse: 2 } as Record<string, number>)[
-            personality
-        ]
-        if (code !== undefined) builder.personalityTable(code)
-        else
-            diag.warn(
-                `node personality '${personality}' has no firmware personality yet — not emitted`,
-                ['node', 'personality'],
-            )
+    // pattern-check: skip — data-lowering emit of node identity/role/fwd + cluster
+    // map, additive to the existing table emits; no new abstraction.
+    // Emit TBL_PERSONALITY when the node declares ANY of a firmware personality
+    // (byte 0), a node-bus role (byte 1, §N4b), or mode-A forwarding (byte 2,
+    // §N4c) — a role-only follower still needs the table, so a null personality
+    // rides byte 0 = 0 (unknown). Only keyboard/mouse have a firmware identity.
+    const nodeCfg = config.node
+    const personality = nodeCfg?.personality
+    const personalityCode = personality
+        ? ({ keyboard: 1, mouse: 2 } as Record<string, number>)[personality]
+        : undefined
+    if (personality && personalityCode === undefined) {
+        diag.warn(
+            `node personality '${personality}' has no firmware personality yet — not emitted`,
+            ['node', 'personality'],
+        )
+    }
+    const role = nodeCfg?.role
+    const roleFlags = role
+        ? CFG_ROLE_VALID | (role === 'coordinator' ? CFG_ROLE_COORD : 0)
+        : 0
+    const fwdMode =
+        nodeCfg?.forwardMode === 'physical' ? FWD_MODE_PHYSICAL : FWD_MODE_RESOLVED
+    // Skip the table when nothing but defaults would ride it, so a plain config
+    // (no personality/role, resolved forwarding) stays byte-stable.
+    if (
+        personalityCode !== undefined ||
+        roleFlags !== 0 ||
+        fwdMode !== FWD_MODE_RESOLVED
+    ) {
+        builder.personalityTable(personalityCode ?? 0, roleFlags, fwdMode)
+    }
+    // TBL_CLUSTER (§N4c mode-A): the coordinator's UID→address map. Each uid is a
+    // hex string; a uid over the 16-byte wire field is truncated with a warning.
+    const clusterNodes = nodeCfg?.cluster
+    if (clusterNodes && clusterNodes.length > 0) {
+        const records: ClusterNodeRecord[] = clusterNodes.map((c, i) => {
+            const uid = hexToBytes(c.uid)
+            if (uid.length > CLUSTER_UID_MAX)
+                diag.warn(
+                    `cluster node ${i} uid is ${uid.length} bytes — truncated to ${CLUSTER_UID_MAX}`,
+                    ['node', 'cluster', i],
+                )
+            return {
+                uid: uid.subarray(0, CLUSTER_UID_MAX),
+                positionBase: c.positionBase,
+                rows: c.rows,
+                cols: c.cols,
+                encoderBase: c.encoderBase ?? 0,
+                pointerBase: c.pointerBase ?? 0,
+            }
+        })
+        builder.clusterTable(records)
     }
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
