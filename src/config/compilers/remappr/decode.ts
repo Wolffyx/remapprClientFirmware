@@ -34,6 +34,7 @@ import type {
     CanonModMorph,
     CanonTapDance,
     CanonTapDanceStep,
+    ConfigClusterNode,
     ConfigKeymap,
     ConfigMouse,
     ConfigNode,
@@ -67,6 +68,13 @@ import {
     PeripheralKind,
     SystemAction,
     TableId,
+    CFG_ROLE_VALID,
+    CFG_ROLE_COORD,
+    FWD_MODE_PHYSICAL,
+    CLUSTER_TBL_HDR_LEN,
+    CLUSTER_UID_MAX,
+    CLUSTER_NODE_WIRE,
+    bytesToHex,
     type BehaviorRecord,
 } from './blobWriter'
 
@@ -824,24 +832,30 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const mouseT = table(TableId.Mouse)
     const mouse = mouseT ? readMouse(bytes, mouseT, diag) : undefined
 
-    // ── PERSONALITY (optional, id 16, §4c) → v2 node.personality identity ──
+    // ── PERSONALITY (optional, id 16) → node identity (§4c) + node-bus role
+    //    (§N4b) + cluster forward-mode (§N4c) ──
     const personalityT = table(TableId.Personality)
-    const personality = personalityT
-        ? readPersonality(bytes, personalityT)
-        : undefined
+    const pers = personalityT ? readPersonality(bytes, personalityT) : {}
+
+    // ── CLUSTER (optional, id 21, §N4c mode-A) → node.cluster UID→address map ──
+    const clusterT = table(TableId.Cluster)
+    const cluster = clusterT ? readCluster(bytes, clusterT, diag) : undefined
 
     // ── ACTION_BINDING (optional, id 17, §F) → top-level actionBindings[] ──
     const actionT = table(TableId.ActionBinding)
     const actionBindings = actionT ? readActionBindings(bytes, actionT) : []
 
     // Reassemble the v2 node section from its decoded parts (§4b mouse, §4c
-    // personality). Only keyboard/mouse personalities have a firmware identity,
-    // so an unknown code leaves personality undefined.
+    // personality, §N4b role, §N4c forward-mode + cluster). An unknown personality
+    // code, an unset role, and mode-B forwarding each leave their field undefined.
     const node: ConfigNode | undefined =
-        mouse || personality
+        mouse || pers.personality || pers.role || pers.forwardMode || cluster
             ? {
-                  ...(personality ? { personality } : {}),
+                  ...(pers.personality ? { personality: pers.personality } : {}),
+                  ...(pers.role ? { role: pers.role } : {}),
+                  ...(pers.forwardMode ? { forwardMode: pers.forwardMode } : {}),
                   ...(mouse ? { mouse } : {}),
+                  ...(cluster ? { cluster } : {}),
               }
             : undefined
 
@@ -1030,21 +1044,83 @@ function readMouse(
     return Object.keys(out).length ? out : undefined
 }
 
-// TBL_PERSONALITY (id 16, §4c): u8 personality + 3 reserved bytes. Only the
-// keyboard/mouse identities have a firmware personality; any other code (unknown
-// / recovery / reserved) decodes to undefined so it isn't reconstructed.
+// pattern-check: skip pure wire-decode fn mirroring the TBL_PERSONALITY layout
+// TBL_PERSONALITY (id 16): u8 personality (§4c), u8 role_flags (byte 1, §N4b),
+// u8 fwd_mode (byte 2, §N4c), u8 reserved. Only keyboard/mouse map to a firmware
+// personality; role_flags/fwd_mode are append-only bytes an older producer omits
+// (a shorter table). Mode-B (resolved) forwarding is the default, so it decodes
+// to undefined and round-trips clean. Inverse of blobWriter.personalityTable.
 function readPersonality(
     bytes: Uint8Array,
     t: TableFrame,
-): ConfigNode['personality'] | undefined {
-    if (t.end - t.start < 1) return undefined
+): Pick<ConfigNode, 'personality' | 'role' | 'forwardMode'> {
+    const len = t.end - t.start
+    if (len < 1) return {}
     const r = new ByteReader(bytes)
     r.seek(t.start)
-    const code = r.u8()
-    return ({ 1: 'keyboard', 2: 'mouse' } as Record<
+    const out: Pick<ConfigNode, 'personality' | 'role' | 'forwardMode'> = {}
+    const p = ({ 1: 'keyboard', 2: 'mouse' } as Record<
         number,
         ConfigNode['personality']
-    >)[code]
+    >)[r.u8()]
+    if (p) out.personality = p
+    if (len > 1) {
+        const roleFlags = r.u8()
+        if (roleFlags & CFG_ROLE_VALID)
+            out.role = roleFlags & CFG_ROLE_COORD ? 'coordinator' : 'follower'
+    }
+    if (len > 2 && r.u8() === FWD_MODE_PHYSICAL) out.forwardMode = 'physical'
+    return out
+}
+
+// pattern-check: skip pure wire-decode fn mirroring the TBL_CLUSTER layout
+// TBL_CLUSTER (id 21, §N4c mode-A): u8 node_count, u8 flags, then count × 25-byte
+// entries { u8 uid_len, u8 uid[16], u16 position_base, u8 rows, u8 cols, u16
+// encoder_base, u16 pointer_base }. Bounds-checked so a foreign/truncated blob
+// can't throw. Inverse of blobWriter.clusterTable / index.ts node.cluster.
+function readCluster(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigClusterNode[] | undefined {
+    if (t.end - t.start < CLUSTER_TBL_HDR_LEN) {
+        diag.error('cluster table header truncated')
+        return undefined
+    }
+    const r = new ByteReader(bytes)
+    r.seek(t.start)
+    const count = r.u8()
+    r.u8() // flags (reserved)
+    if (t.start + CLUSTER_TBL_HDR_LEN + count * CLUSTER_NODE_WIRE > t.end) {
+        diag.error('cluster table truncated')
+        return undefined
+    }
+    const nodes: ConfigClusterNode[] = []
+    for (let i = 0; i < count; i++) {
+        const uidLen = r.u8()
+        const uidBytes: number[] = []
+        for (let j = 0; j < CLUSTER_UID_MAX; j++) uidBytes.push(r.u8())
+        const positionBase = r.u16()
+        const rows = r.u8()
+        const cols = r.u8()
+        const encoderBase = r.u16()
+        const pointerBase = r.u16()
+        if (uidLen > CLUSTER_UID_MAX) {
+            diag.error(
+                `cluster node ${i} uid_len ${uidLen} exceeds ${CLUSTER_UID_MAX}`,
+            )
+            return undefined
+        }
+        nodes.push({
+            uid: bytesToHex(uidBytes.slice(0, uidLen)),
+            positionBase,
+            rows,
+            cols,
+            ...(encoderBase ? { encoderBase } : {}),
+            ...(pointerBase ? { pointerBase } : {}),
+        })
+    }
+    return nodes.length ? nodes : undefined
 }
 
 interface DecodedNames {

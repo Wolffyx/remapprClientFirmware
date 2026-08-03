@@ -983,3 +983,94 @@ describe('remappr action bindings round-trip (TBL_ACTION_BINDING, §F)', () => {
         expect(decodeRemapprBlob(blob).config?.actionBindings).toHaveLength(6)
     })
 })
+
+describe('decodeRemapprBlob node role + forwardMode (§N4b/§N4c TBL_PERSONALITY)', () => {
+    // pattern-check: skip — decode/round-trip fixtures, no production logic
+    const nodeJson = (node: string): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "N", "target": "zmk" }, ${kb(2)},
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+        "node": ${node}
+    }`
+
+    it('lowers a coordinator + physical (mode-A) node and decodes it back', () => {
+        const cfg = parseKeymap(
+            nodeJson('{ "role": "coordinator", "forwardMode": "physical" }'),
+        )
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node?.role).toBe('coordinator')
+        expect(config?.node?.forwardMode).toBe('physical')
+    })
+
+    it('decodes a follower role (VALID without COORD); mode-B is the default', () => {
+        const cfg = parseKeymap(nodeJson('{ "role": "follower" }'))
+        const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const { config } = decodeRemapprBlob(blob)
+        expect(config?.node?.role).toBe('follower')
+        // resolved (mode B) is the default → not reconstructed.
+        expect(config?.node?.forwardMode).toBeUndefined()
+    })
+
+    it('emits no TBL_PERSONALITY for a default node (resolved, no role)', () => {
+        const cfg = parseKeymap(nodeJson('{ "forwardMode": "resolved" }'))
+        const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node?.role).toBeUndefined()
+        expect(config?.node?.forwardMode).toBeUndefined()
+    })
+
+    it('keeps personality + role + fwd together and byte-stable', () => {
+        roundTrips(
+            nodeJson(
+                '{ "personality": "keyboard", "role": "coordinator", "forwardMode": "physical" }',
+            ),
+        )
+    })
+})
+
+describe('decodeRemapprBlob TBL_CLUSTER (id 21, §N4c mode-A)', () => {
+    // pattern-check: skip — decode/round-trip fixtures, no production logic
+    const clusterJson = (cluster: string): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "C", "target": "zmk" }, ${kb(2)},
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+        "node": { "role": "coordinator", "forwardMode": "physical", "cluster": ${cluster} }
+    }`
+
+    it('lowers the coordinator UID→address map and decodes it back', () => {
+        const cfg = parseKeymap(
+            clusterJson(`[
+                { "uid": "0011223344", "positionBase": 0, "rows": 2, "cols": 3, "encoderBase": 1, "pointerBase": 4 },
+                { "uid": "aabbcc", "positionBase": 6, "rows": 1, "cols": 4 }
+            ]`),
+        )
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        // A short uid keeps its byte length; a 0 encoder/pointer base is omitted.
+        expect(config?.node?.cluster).toEqual([
+            {
+                uid: '0011223344',
+                positionBase: 0,
+                rows: 2,
+                cols: 3,
+                encoderBase: 1,
+                pointerBase: 4,
+            },
+            { uid: 'aabbcc', positionBase: 6, rows: 1, cols: 4 },
+        ])
+    })
+
+    it('round-trips a cluster map byte-stably', () => {
+        roundTrips(
+            clusterJson(
+                `[{ "uid": "deadbeef", "positionBase": 8, "rows": 4, "cols": 5 }]`,
+            ),
+        )
+    })
+})

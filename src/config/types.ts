@@ -764,12 +764,41 @@ export interface ConfigMouse {
     accel?: Array<[number, number]>
 }
 
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_CLUSTER layout
+/** One cluster node's address-space assignment, keyed by hardware UID (§N4c
+ *  mode-A, TBL_CLUSTER). Mirrors the firmware struct remappr_cluster_node. */
+export interface ConfigClusterNode {
+    /** Stable hardware UID as a hex string (≤16 bytes / 32 hex chars) — the map
+     *  key, since short-ids are assigned dynamically at join and are not stable. */
+    uid: string
+    /** Absolute cluster position of this node's local position 0. */
+    positionBase: number
+    /** This node's matrix dimensions within the cluster address space. */
+    rows: number
+    cols: number
+    /** Absolute encoder-index base (omit / 0 = none). */
+    encoderBase?: number
+    /** Absolute pointer-index base (omit / 0 = none). */
+    pointerBase?: number
+}
+
+// pattern-check: skip adding well-known optional fields to an existing wire-DTO
 /** Per-personality node configuration (v2). Open shape; `personality` and the
  *  `mouse` pointer block are well-known, the rest is preserved for later phases. */
 export interface ConfigNode {
     personality?: 'keyboard' | 'mouse' | 'joystick' | 'dongle'
     /** Pointer settings (§4b, TBL_MOUSE) — present on mouse / hybrid nodes. */
     mouse?: ConfigMouse
+    /** Node-bus role (§N4b, TBL_PERSONALITY byte 1): 'coordinator' = cluster main,
+     *  'follower' = forwards upstream. Absent leaves the firmware Kconfig default. */
+    role?: 'coordinator' | 'follower'
+    /** Cluster input-forward mode (§N4c, TBL_PERSONALITY byte 2): 'resolved'
+     *  (mode B, the default — forward resolved HID) or 'physical' (mode A — forward
+     *  raw matrix positions for the coordinator to resolve against a cluster keymap). */
+    forwardMode?: 'resolved' | 'physical'
+    /** Mode-A cluster address map (§N4c, TBL_CLUSTER) — the coordinator's UID→
+     *  address assignment for each cluster node. Present on a mode-A coordinator. */
+    cluster?: ConfigClusterNode[]
     [k: string]: unknown
 }
 

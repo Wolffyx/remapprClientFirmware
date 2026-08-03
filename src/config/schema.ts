@@ -859,12 +859,31 @@ export const MouseSchema = z
             'timeout, and an acceleration curve of [speedIn, multX100] points.',
     )
 
+// pattern-check: skip plain zod wire-DTO schema mirroring TBL_CLUSTER
+export const ClusterNodeSchema = z
+    .object({
+        uid: z
+            .string()
+            .regex(/^[0-9a-fA-F]*$/, 'uid must be hex')
+            .describe('Hardware UID, hex string (≤16 bytes / 32 hex chars).'),
+        positionBase: z.number().int().nonnegative(),
+        rows: z.number().int().nonnegative(),
+        cols: z.number().int().nonnegative(),
+        encoderBase: z.number().int().nonnegative().optional(),
+        pointerBase: z.number().int().nonnegative().optional(),
+    })
+    .describe("One cluster node's UID→address-base assignment (§N4c mode-A).")
+
+// pattern-check: skip adding well-known optional fields to an existing zod schema
 export const NodeSchema = z
     .looseObject({
         personality: z
             .enum(['keyboard', 'mouse', 'joystick', 'dongle'])
             .optional(),
         mouse: MouseSchema.optional(),
+        role: z.enum(['coordinator', 'follower']).optional(),
+        forwardMode: z.enum(['resolved', 'physical']).optional(),
+        cluster: z.array(ClusterNodeSchema).optional(),
     })
     .describe(
         'Per-personality node configuration; a dongle has a limited surface, a ' +
