@@ -13,6 +13,10 @@ export const BLOB_MAGIC = 0x43424d52 // "RMBC"
 export const BLOB_READER_VERSION = 1
 export const BLOB_HEADER_LEN = 20
 
+// TBL_CLUSTER_SEC key length (§6 election/roster MAC, N5b). Mirrors
+// REMAPPR_CLUSTER_PSK_LEN in include/remappr/config_blob.h.
+export const CLUSTER_PSK_LEN = 16
+
 // enum remappr_table_id (config_blob.h). Ids 2(LAYOUT), 8(MOUSE), 9(PROFILE),
 // 10(ALIAS), 11(SECURITY) are reserved — the firmware does not decode them.
 export const TableId = {
@@ -37,6 +41,7 @@ export const TableId = {
     Names: 19,
     Encoder: 20,
     Cluster: 21,
+    ClusterSec: 22, // cluster PSK for §6 election/roster MAC (N5b)
 } as const
 
 /** TBL_PERSONALITY byte 1 role_flags (config_blob.h REMAPPR_CFG_ROLE_*). */
@@ -823,6 +828,23 @@ export class BlobBuilder {
             this.w.u16(r.arg0)
             this.w.u16(r.arg1)
         }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_CLUSTER_SEC (id 22, §6 election/roster MAC, N5b): a single 16-byte
+     *  cluster PSK. Cluster-scoped (byte-identical on every node) and OPTIONAL —
+     *  omit the table for an unauthenticated cluster. Mirrors the firmware
+     *  decoder lib/config_blob/decode_cluster.c (remappr_config_decode_cluster_psk). */
+    clusterSecTable(psk: Uint8Array): this {
+        if (psk.length !== CLUSTER_PSK_LEN) {
+            throw new Error(
+                `cluster PSK must be ${CLUSTER_PSK_LEN} bytes, got ${psk.length}`,
+            )
+        }
+        this.tableBegin(TableId.ClusterSec, 1)
+        for (const b of psk) this.w.u8(b)
         this.tableEnd()
         return this
     }
