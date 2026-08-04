@@ -155,6 +155,9 @@ export const CommonVerb = {
     GET_LIMITS: 0x06,
     SUBSCRIBE_EVENTS: 0x07,
     UNSUBSCRIBE: 0x08,
+    /** §8 (N6) link-profile knob min/max ranges, no arg. Reply: [u8 count] then
+     *  count × { u32 min, u32 max } LE in knob-id order (see parseLinkLimits). */
+    GET_LINK_LIMITS: 0x09,
     QUERY_STAGE_OFFSET: 0x16,
     GET_CONFIG_METADATA: 0x17,
     /** §20 error counters, no arg (relayable via target_node). Reply 10 B:
@@ -509,6 +512,49 @@ export function parseLimits(d: Uint8Array): Limits {
         // Append-only u32 tail; older firmware omits it (12-byte payload) → 0.
         featureBitmask: d.byteLength >= 16 ? dv.getUint32(12, true) : 0,
     }
+}
+
+/** enum remappr_link_profile_knob (fw include/remappr/link_profile.h) — the
+ *  knob-id order of a GET_LINK_LIMITS reply. Append-only. */
+export const LinkProfileKnob = {
+    usartBaud: 0,
+    tElectMs: 1,
+    electHeartbeatMs: 2,
+    electMissLimit: 3,
+    candidacyStableMs: 4,
+    demotionDelayMs: 5,
+    handoverMinIntervalMs: 6,
+    powerTier: 7,
+} as const
+
+/** One firmware-owned knob range from GET_LINK_LIMITS. */
+export interface LinkLimitKnob {
+    knob: number // enum remappr_link_profile_knob id (index in the reply)
+    min: number
+    max: number
+}
+
+/**
+ * §8 (N6) GET_LINK_LIMITS: the firmware-owned link-profile knob ranges, so a
+ * profile UI never offers an out-of-range value. Wire: [u8 count] then
+ * count × { u32 min, u32 max } LE in knob-id order.
+ */
+export function parseLinkLimits(d: Uint8Array): LinkLimitKnob[] {
+    if (d.byteLength < 1) throw new Error('link-limits reply empty')
+    const count = d[0]
+    const need = 1 + count * 8
+    if (d.byteLength < need)
+        throw new Error(`link-limits reply too short (${d.byteLength} B, need ${need})`)
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const out: LinkLimitKnob[] = []
+    for (let i = 0; i < count; i++) {
+        out.push({
+            knob: i,
+            min: dv.getUint32(1 + i * 8, true),
+            max: dv.getUint32(1 + i * 8 + 4, true),
+        })
+    }
+    return out
 }
 
 export interface PersonalityMap {
