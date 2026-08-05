@@ -782,6 +782,32 @@ export interface ConfigClusterNode {
     pointerBase?: number
 }
 
+// pattern-check: skip plain wire-DTO mirroring one TBL_LINK_PROFILE override record
+/** One per-knob override in a link profile (§8, N6, TBL_LINK_PROFILE): replaces
+ *  the base profile's value for `knob`. Mirrors struct
+ *  remappr_link_profile_override. `knob` is an enum remappr_link_profile_knob id
+ *  (0..7, see LinkProfileKnob / LINK_KNOB_FIELDS); `value` is range-checked at
+ *  COMMIT against the firmware constraint table (GET_LINK_LIMITS). */
+export interface ConfigLinkProfileOverride {
+    knob: number
+    value: number
+}
+
+// pattern-check: skip plain wire-DTO mirroring the TBL_LINK_PROFILE layout
+/** Node-bus link/latency profile (§8, N6, TBL_LINK_PROFILE): a base profile
+ *  selector plus optional per-knob overrides that resolve to the effective link
+ *  knobs (USART baud, §6 election cadence, power tier). Absent ⇒ the firmware
+ *  resolves the balanced default (bit-identical to today's build), so a plain
+ *  config stays byte-stable. */
+export interface ConfigLinkProfile {
+    /** Base profile the overrides layer onto (enum remappr_link_profile_id):
+     *  'balanced' (today's tuned default), 'gaming' (low-latency, wired-only), or
+     *  'powerSave' (slow cadences, battery-friendly). */
+    profile: 'balanced' | 'gaming' | 'powerSave'
+    /** Per-knob overrides onto the base profile; omit / empty for the base as-is. */
+    overrides?: ConfigLinkProfileOverride[]
+}
+
 // pattern-check: skip adding well-known optional fields to an existing wire-DTO
 /** Per-personality node configuration (v2). Open shape; `personality` and the
  *  `mouse` pointer block are well-known, the rest is preserved for later phases. */
@@ -799,6 +825,9 @@ export interface ConfigNode {
     /** Mode-A cluster address map (§N4c, TBL_CLUSTER) — the coordinator's UID→
      *  address assignment for each cluster node. Present on a mode-A coordinator. */
     cluster?: ConfigClusterNode[]
+    /** Node-bus link/latency profile (§8, N6, TBL_LINK_PROFILE) — base profile +
+     *  per-knob overrides for the USART baud / §6 election cadence / power tier. */
+    linkProfile?: ConfigLinkProfile
     [k: string]: unknown
 }
 

@@ -50,6 +50,7 @@ import { configToPhysicalLayout, lowerConfigToMock } from './configBridge'
 import {
     parseKeymap,
     serializeKeymap,
+    LINK_KNOB_FIELDS,
     type CanonConditionalLayer,
     type CanonHoldTapDef,
     type CanonModMorph,
@@ -58,7 +59,7 @@ import {
     type ConfigNode,
 } from '@firmware/config'
 import type { RemapprConfigEditing } from '@firmware/remappr/configEditing'
-import type { Limits } from '@firmware/remappr/protocol'
+import type { Limits, LinkLimitKnob } from '@firmware/remappr/protocol'
 // Raw JSON source of the demo remappr.keymap — the config editor + download
 // modal's source of truth. `?raw` hands back the file verbatim as a string, so
 // it round-trips through parseKeymap unchanged. Parsed once: it both seeds the
@@ -820,9 +821,39 @@ export class MockKeyboardService
 
     getNode(): ConfigNode {
         const node: ConfigNode = { ...this.cfg.node }
-        return node.cluster
-            ? { ...node, cluster: node.cluster.map((n) => ({ ...n })) }
-            : node
+        return {
+            ...node,
+            ...(node.cluster
+                ? { cluster: node.cluster.map((n) => ({ ...n })) }
+                : {}),
+            ...(node.linkProfile
+                ? {
+                      linkProfile: {
+                          ...node.linkProfile,
+                          ...(node.linkProfile.overrides
+                              ? {
+                                    overrides: node.linkProfile.overrides.map(
+                                        (o) => ({ ...o }),
+                                    ),
+                                }
+                              : {}),
+                      },
+                  }
+                : {}),
+        }
+    }
+
+    /** Demo GET_LINK_LIMITS: the firmware-owned constraint table (LINK_KNOB_FIELDS
+     *  mirrors lib/config_blob/link_profile.c), so the editor bounds the same way
+     *  it would against a real N6 device. */
+    getLinkLimits(): Promise<LinkLimitKnob[]> {
+        return Promise.resolve(
+            LINK_KNOB_FIELDS.map((f) => ({
+                knob: f.knob,
+                min: f.min,
+                max: f.max,
+            })),
+        )
     }
 
     setNode(patch: Partial<ConfigNode>): void {

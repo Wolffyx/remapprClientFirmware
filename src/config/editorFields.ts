@@ -15,11 +15,12 @@ import type {
     CanonModMorph,
     ConfigClusterNode,
     ConfigDefaults,
+    ConfigLinkProfile,
     ConfigNode,
 } from './types'
 import { MODIFIERS, type Modifier } from './keycodes'
 import type { FeatureName } from './featureWarnings'
-import { LimitsFeature } from '../remappr/protocol'
+import { LimitsFeature, LinkProfileKnob, type LinkLimitKnob } from '../remappr/protocol'
 
 /* ── timing defaults (§7.4) ──────────────────────────────────────────────── */
 
@@ -491,5 +492,214 @@ export function clusterError(list: readonly ConfigClusterNode[]): string | null 
                 return `${row}: ${key} must be 0–${CLUSTER_POSITION_MAX}`
         }
     }
+    return null
+}
+
+/* ── node-bus link/latency profile (§8, N6, TBL_LINK_PROFILE) ────────────────
+ * Metadata + pure validation for the link-profile editor: a base profile
+ * (balanced / gaming / power-save) plus per-knob overrides for the node-bus USART
+ * baud, the §6 election cadence, and a power tier. The firmware owns the min/max
+ * ranges (GET_LINK_LIMITS / parseLinkLimits) and re-validates at COMMIT; this
+ * module mirrors that constraint table so the editor bounds each input and blocks
+ * Save on an out-of-range or cross-knob-inconsistent combo — never a blind push.
+ * Knob order + ids match enum remappr_link_profile_knob (LinkProfileKnob). */
+
+/** Base-profile options (enum remappr_link_profile_id). */
+export const LINK_PROFILE_OPTIONS: readonly {
+    value: ConfigLinkProfile['profile']
+    label: string
+    help: string
+}[] = [
+    {
+        value: 'balanced',
+        label: 'Balanced',
+        help: 'Today’s tuned defaults — runs on battery or wired (default).',
+    },
+    {
+        value: 'gaming',
+        label: 'Gaming',
+        help: 'Fast election cadence + max baud for lowest latency. Requires wired / charging power.',
+    },
+    {
+        value: 'powerSave',
+        label: 'Power save',
+        help: 'Slower cadences to save battery.',
+    },
+]
+
+/** Power-tier knob values (enum remappr_power_tier), rendered as a select. */
+export const POWER_TIER_OPTIONS: readonly { value: number; label: string }[] = [
+    { value: 0, label: 'Any (battery or wired)' },
+    { value: 1, label: 'Wired / charging only' },
+]
+
+// pattern-check: skip plain metadata table describing the link-profile knobs
+/** One editable link-profile knob. `knob` is the enum remappr_link_profile_knob
+ *  id (the GET_LINK_LIMITS reply order); `min`/`max` mirror the firmware
+ *  constraint table (lib/config_blob/link_profile.c) as the fallback when a
+ *  device predates GET_LINK_LIMITS. `enumOptions` marks a discrete knob (power
+ *  tier) the editor renders as a select rather than a number input. */
+export interface LinkKnobField {
+    knob: number
+    label: string
+    help: string
+    unit?: string
+    min: number
+    max: number
+    enumOptions?: readonly { value: number; label: string }[]
+}
+
+export const LINK_KNOB_FIELDS: readonly LinkKnobField[] = [
+    {
+        knob: LinkProfileKnob.usartBaud,
+        label: 'USART baud',
+        help: 'Node-bus wire speed between coordinator and followers.',
+        unit: 'baud',
+        min: 115200,
+        max: 2000000,
+    },
+    {
+        knob: LinkProfileKnob.tElectMs,
+        label: 'Election window',
+        help: '§6 campaign window before a coordinator is chosen.',
+        unit: 'ms',
+        min: 20,
+        max: 1000,
+    },
+    {
+        knob: LinkProfileKnob.electHeartbeatMs,
+        label: 'Heartbeat period',
+        help: '§6 coordinator beacon / heartbeat period.',
+        unit: 'ms',
+        min: 40,
+        max: 1000,
+    },
+    {
+        knob: LinkProfileKnob.electMissLimit,
+        label: 'Missed-beacon limit',
+        help: 'Missed heartbeats before a follower fails over.',
+        min: 1,
+        max: 16,
+    },
+    {
+        knob: LinkProfileKnob.candidacyStableMs,
+        label: 'Candidacy-stable window',
+        help: 'Link-stable time before a node may campaign (≥ heartbeat period).',
+        unit: 'ms',
+        min: 40,
+        max: 5000,
+    },
+    {
+        knob: LinkProfileKnob.demotionDelayMs,
+        label: 'Demotion delay',
+        help: 'Voluntary-demotion settle delay.',
+        unit: 'ms',
+        min: 100,
+        max: 10000,
+    },
+    {
+        knob: LinkProfileKnob.handoverMinIntervalMs,
+        label: 'Handover min interval',
+        help: 'Minimum spacing between handovers (≥ demotion delay).',
+        unit: 'ms',
+        min: 100,
+        max: 20000,
+    },
+    {
+        knob: LinkProfileKnob.powerTier,
+        label: 'Power tier',
+        help: 'Wired-only profiles need external / charging power (enforced at save).',
+        min: 0,
+        max: 1,
+        enumOptions: POWER_TIER_OPTIONS,
+    },
+]
+
+/** The three base profiles' effective knob values, indexed by knob id — mirrors
+ *  the firmware `profiles[]` table (link_profile.c). The editor shows these as
+ *  each knob's default and treats an input equal to the base as "no override". */
+export const LINK_PROFILE_BASE: Record<
+    ConfigLinkProfile['profile'],
+    readonly number[]
+> = {
+    //          baud     tElect  hb  miss cand  demo  handover tier
+    balanced: [1000000, 100, 100, 3, 500, 1000, 3000, 0],
+    gaming: [2000000, 50, 50, 3, 300, 800, 2000, 1],
+    powerSave: [1000000, 150, 250, 4, 800, 1500, 4000, 0],
+}
+
+/** A fresh link profile for an editor's default state (balanced, no overrides). */
+export function emptyLinkProfile(): ConfigLinkProfile {
+    return { profile: 'balanced' }
+}
+
+/** Effective value of `knob` in `lp` — its override if set, else the base
+ *  profile's value (mirrors remappr_link_profile_resolve). */
+export function linkKnobValue(lp: ConfigLinkProfile, knob: number): number {
+    const ovr = lp.overrides?.find((o) => o.knob === knob)
+    return ovr ? ovr.value : (LINK_PROFILE_BASE[lp.profile][knob] ?? 0)
+}
+
+/** The [min,max] for `knob` — the live GET_LINK_LIMITS range when present, else
+ *  the static firmware constraint table (LINK_KNOB_FIELDS). */
+export function linkKnobRange(
+    knob: number,
+    limits?: readonly LinkLimitKnob[],
+): { min: number; max: number } {
+    const live = limits?.find((l) => l.knob === knob)
+    if (live) return { min: live.min, max: live.max }
+    const f = LINK_KNOB_FIELDS.find((k) => k.knob === knob)
+    return { min: f?.min ?? 0, max: f?.max ?? 0xffffffff }
+}
+
+/** Set/clear the override for `knob`: a value equal to the base profile default
+ *  drops the override (keeping the blob byte-minimal + default-equivalent), any
+ *  other value adds/replaces it. Returns a new profile (pure). */
+export function withLinkOverride(
+    lp: ConfigLinkProfile,
+    knob: number,
+    value: number,
+): ConfigLinkProfile {
+    const rest = (lp.overrides ?? []).filter((o) => o.knob !== knob)
+    const base = LINK_PROFILE_BASE[lp.profile][knob] ?? 0
+    const overrides =
+        value === base ? rest : [...rest, { knob, value }]
+    overrides.sort((a, b) => a.knob - b.knob)
+    return overrides.length ? { ...lp, overrides } : { profile: lp.profile }
+}
+
+/** First problem with the link profile, or null when it would pass the firmware
+ *  COMMIT validation. Mirrors remappr_link_profile_validate: every effective knob
+ *  within its range (live GET_LINK_LIMITS when supplied, else the static table)
+ *  plus the two cross-knob rules (candidacy ≥ heartbeat, handover ≥ demotion).
+ *  Lets the editor block Save before a push the firmware would reject. */
+export function linkProfileError(
+    lp: ConfigLinkProfile,
+    limits?: readonly LinkLimitKnob[],
+): string | null {
+    for (const o of lp.overrides ?? []) {
+        const f = LINK_KNOB_FIELDS.find((k) => k.knob === o.knob)
+        if (!f) return `unknown knob id ${o.knob}`
+        if (!Number.isInteger(o.value) || o.value < 0)
+            return `${f.label} must be a whole number`
+    }
+    for (const f of LINK_KNOB_FIELDS) {
+        const v = linkKnobValue(lp, f.knob)
+        const { min, max } = linkKnobRange(f.knob, limits)
+        if (v < min || v > max)
+            return `${f.label} must be ${min}–${max}${f.unit ? ' ' + f.unit : ''}`
+    }
+    // Cross-knob dependencies (§8): survive one heartbeat before campaigning, and
+    // don't re-hand-over faster than a demotion settles.
+    if (
+        linkKnobValue(lp, LinkProfileKnob.candidacyStableMs) <
+        linkKnobValue(lp, LinkProfileKnob.electHeartbeatMs)
+    )
+        return 'Candidacy-stable window must be ≥ the heartbeat period'
+    if (
+        linkKnobValue(lp, LinkProfileKnob.handoverMinIntervalMs) <
+        linkKnobValue(lp, LinkProfileKnob.demotionDelayMs)
+    )
+        return 'Handover min interval must be ≥ the demotion delay'
     return null
 }

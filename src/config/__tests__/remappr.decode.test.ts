@@ -1074,3 +1074,63 @@ describe('decodeRemapprBlob TBL_CLUSTER (id 21, §N4c mode-A)', () => {
         )
     })
 })
+
+describe('decodeRemapprBlob node linkProfile (§8 N6 TBL_LINK_PROFILE)', () => {
+    // pattern-check: skip — decode/round-trip fixtures, no production logic
+    const nodeJson = (node: string): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "N", "target": "zmk" }, ${kb(2)},
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+        "node": ${node}
+    }`
+
+    it('lowers a gaming profile + overrides and decodes it back', () => {
+        const cfg = parseKeymap(
+            nodeJson(
+                '{ "linkProfile": { "profile": "gaming", "overrides": [{ "knob": 1, "value": 40 }, { "knob": 2, "value": 60 }] } }',
+            ),
+        )
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node?.linkProfile?.profile).toBe('gaming')
+        expect(config?.node?.linkProfile?.overrides).toEqual([
+            { knob: 1, value: 40 },
+            { knob: 2, value: 60 },
+        ])
+    })
+
+    it('emits no TBL_LINK_PROFILE for balanced with no overrides (default-equivalent)', () => {
+        const cfg = parseKeymap(
+            nodeJson('{ "linkProfile": { "profile": "balanced" } }'),
+        )
+        const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        // balanced + no overrides resolves identically to no table → not carried.
+        expect(config?.node?.linkProfile).toBeUndefined()
+    })
+
+    it('carries a balanced profile once it has an override', () => {
+        const cfg = parseKeymap(
+            nodeJson(
+                '{ "linkProfile": { "profile": "balanced", "overrides": [{ "knob": 0, "value": 500000 }] } }',
+            ),
+        )
+        const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const { config } = decodeRemapprBlob(blob)
+        expect(config?.node?.linkProfile?.profile).toBe('balanced')
+        expect(config?.node?.linkProfile?.overrides).toEqual([
+            { knob: 0, value: 500000 },
+        ])
+    })
+
+    it('round-trips a link profile byte-stably', () => {
+        roundTrips(
+            nodeJson(
+                '{ "linkProfile": { "profile": "powerSave", "overrides": [{ "knob": 0, "value": 2000000 }, { "knob": 7, "value": 1 }] } }',
+            ),
+        )
+    })
+})
