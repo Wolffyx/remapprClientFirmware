@@ -87,6 +87,27 @@ const RGB = parseKeymap(`{
         "storage": "nvs" }
 }`)
 
+// STM32 board with a WS2812 strip on SPI1 + GPDMA (the bench-proven path):
+// ws2812.stm32 carries the raw pinctrl / dmas the emitter can't guess.
+const STMRGB = parseKeymap(`{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "Glow U5", "target": "zmk" },
+    "keyboard": { "id": "glow_u5", "name": "Glow U5",
+        "keys": [ {"x":0,"y":0},{"x":1,"y":0} ],
+        "hardware": {
+            "transform": { "rows": 1, "columns": 2, "map": [[0,0],[0,1]] },
+            "ws2812": { "spi": "spi1", "dataPin": "PA7", "chainLength": 14,
+                "stm32": {
+                    "pinctrl": ["&spi1_sck_pa5","&spi1_miso_pa6","&spi1_mosi_pa7"],
+                    "dmas": "<&gpdma1 0 7 (STM32_DMA_PERIPH_TX | STM32_DMA_PRIORITY_HIGH)>, <&gpdma1 1 6 (STM32_DMA_PERIPH_RX | STM32_DMA_PRIORITY_HIGH)>",
+                    "deleteCs": true } } } },
+    "layers": [ { "name": "base", "bindings": ["A","B"] } ],
+    "board": { "matrix": { "diode": "row2col",
+        "rows": ["&gpioe 11 GPIO_ACTIVE_LOW"],
+        "cols": ["&gpiof 15 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)",
+                 "&gpioe 13 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)"] } }
+}`)
+
 const overlayOf = (config: typeof NRF, slug: string): string =>
     String(
         getCompiler('remappr-board')
@@ -222,6 +243,32 @@ describe('remappr-board shield compiler', () => {
                 .content,
         )
         expect(defcfg).toContain('config REMAPPR_RGB_LED')
+        expect(defcfg).toContain('config WS2812_STRIP_SPI')
+    })
+
+    it('emits an STM32 ws2812 block with GPDMA + motorola framing when ws2812.stm32 is set', () => {
+        const ov = overlayOf(STMRGB, 'glow_u5')
+        expect(ov).toContain('#include <zephyr/dt-bindings/dma/stm32_dma.h>')
+        expect(ov).toContain('/delete-property/ cs-gpios;')
+        expect(ov).toContain(
+            'pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6 &spi1_mosi_pa7>;',
+        )
+        expect(ov).toContain('dmas = <&gpdma1 0 7')
+        expect(ov).toContain('dma-names = "tx", "rx";')
+        expect(ov).toContain('compatible = "worldsemi,ws2812-spi"')
+        expect(ov).toContain('chain-length = <14>;')
+        expect(ov).toContain('spi-one-frame = <0xF0>;')
+        expect(ov).toContain('remappr,led-strip = <&led_strip>;')
+        // NOT the nRF psel / FIXME-scaffold path.
+        expect(ov).not.toContain('NRF_PSEL')
+        expect(ov).not.toContain('nordic,nrf-spim')
+        const defcfg = String(
+            getCompiler('remappr-board')
+                .compile(STMRGB)
+                .files.find((f) => f.filename.endsWith('Kconfig.defconfig'))!
+                .content,
+        )
+        expect(defcfg).toContain('config SPI_STM32_DMA')
         expect(defcfg).toContain('config WS2812_STRIP_SPI')
     })
 
