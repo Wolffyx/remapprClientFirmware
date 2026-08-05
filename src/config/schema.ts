@@ -671,6 +671,16 @@ export const Ws2812Schema = z
         chainLength: z.number().int().positive(),
         colorOrder: z.enum(['GRB', 'RGB', 'BGR', 'RGBW', 'GRBW']).optional(),
         spiMaxFrequency: z.number().int().positive().optional(),
+        // STM32-only raw wiring: ws2812-over-SPI needs GPDMA + the SPI node's own
+        // pinctrl (board/SoC-specific, can't be derived). Presence selects the
+        // STM32 emit path in the remappr-board compiler.
+        stm32: z
+            .object({
+                pinctrl: z.array(z.string()),
+                dmas: z.string().optional(),
+                deleteCs: z.boolean().optional(),
+            })
+            .optional(),
     })
     .describe(
         'WS2812 underglow strip on an SPI peripheral (drives zmk,underglow).',

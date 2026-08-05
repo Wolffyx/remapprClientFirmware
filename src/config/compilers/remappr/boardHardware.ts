@@ -13,7 +13,7 @@
 //            declares the hardware only (warned).
 import type { DiagnosticBag } from '../../diagnostics'
 import { gpioSpec, resolveZmkPin } from '../../pinmaps'
-import type { ConfigKeymap } from '../../types'
+import type { CanonWs2812, ConfigKeymap } from '../../types'
 import { emitWs2812 } from '../zmk/hardware'
 
 /** A peripheral's contribution to the shield: header `#include`s, top-level DT
@@ -48,9 +48,98 @@ function resolveEncoderPin(
     return s
 }
 
+// pattern-check: skip — no GoF pattern; private DT-string emitters, mirrors emitWs2812 soc branching
+/** WS2812 wire order → `color-mapping` LED_COLOR_ID_* token list. */
+function colorMapping(order: string): string {
+    const M: Record<string, string> = {
+        R: 'RED',
+        G: 'GREEN',
+        B: 'BLUE',
+        W: 'WHITE',
+    }
+    return (order || 'GRB')
+        .toUpperCase()
+        .split('')
+        .map((c) => `LED_COLOR_ID_${M[c] ?? 'GREEN'}`)
+        .join(' ')
+}
+
+/** STM32 WS2812-over-SPI shield fragment. Unlike nRF (EasyDMA), an STM32 SPI must
+ *  be GPDMA-fed or inter-byte gaps latch as a WS2812 reset (→ dark); it also needs
+ *  the SPI controller's own pinctrl and (on the Arduino bus) its cs-gpios dropped.
+ *  Those board/SoC specifics come from `ws.stm32` (raw — exact GPDMA request lines
+ *  and pin-AF nodes can't be guessed). Frames are the bench-proven 5 MHz /
+ *  0xF0-0xC0 / motorola values (TI framing corrupts the raw WS2812 bitstream). */
+function emitRgbStm32(ws: CanonWs2812): PeripheralFragment {
+    const s = ws.stm32!
+    const freq = ws.spiMaxFrequency ?? 5000000
+    const mapping = colorMapping(ws.colorOrder ?? 'GRB')
+    // GPDMA is opt-in: present → gapless color-correct path; absent → the basic
+    // CPU/FIFO path (fewer moving parts; may need DMA added back for clean color).
+    const dma = !!s.dmas
+    const nodes = [
+        `&${ws.spi} {`,
+        ...(s.deleteCs
+            ? [`\t/* A WS2812 strip has no chip-select. */`, `\t/delete-property/ cs-gpios;`, ``]
+            : []),
+        `\tpinctrl-0 = <${s.pinctrl.join(' ')}>;`,
+        `\tpinctrl-names = "default";`,
+        `\tstatus = "okay";`,
+        ...(dma
+            ? [
+                  ``,
+                  `\t/* GPDMA streams the strip buffer gaplessly — needed on STM32 for`,
+                  `\t   color-correct output (a CPU/FIFO transfer inserts inter-byte gaps`,
+                  `\t   a latch-sensitive WS2812 reads as a reset). Both channels required. */`,
+                  `\tdmas = ${s.dmas};`,
+                  `\tdma-names = "tx", "rx";`,
+              ]
+            : []),
+        ``,
+        `\tled_strip: ws2812@0 {`,
+        `\t\tcompatible = "worldsemi,ws2812-spi";`,
+        `\t\treg = <0>;`,
+        `\t\tspi-max-frequency = <${freq}>;`,
+        `\t\tchain-length = <${ws.chainLength}>;`,
+        `\t\tspi-one-frame = <0xF0>;`,
+        `\t\tspi-zero-frame = <0xC0>;`,
+        `\t\tcolor-mapping = <${mapping}>;`,
+        `\t};`,
+        `};`,
+        ``,
+        `/ {`,
+        `\tchosen {`,
+        `\t\t/* Runtime RGB service renders the per-key map / effects here. */`,
+        `\t\tremappr,led-strip = &led_strip;`,
+        `\t};`,
+        `};`,
+    ]
+    return {
+        includes: [
+            `#include <zephyr/dt-bindings/led/led.h>`,
+            ...(dma ? [`#include <zephyr/dt-bindings/dma/stm32_dma.h>`] : []),
+        ],
+        nodes,
+        kconfig: [
+            ``,
+            `# WS2812 per-key RGB (chain-length ${ws.chainLength}) over ${ws.spi}${dma ? ' + GPDMA' : ''}.`,
+            `config REMAPPR_RGB_LED`,
+            `\tdefault y`,
+            `config SPI`,
+            `\tdefault y`,
+            `config WS2812_STRIP_SPI`,
+            `\tdefault y`,
+            ...(dma
+                ? [`config DMA`, `\tdefault y`, `config SPI_STM32_DMA`, `\tdefault y`]
+                : []),
+        ],
+    }
+}
+
 /** WS2812 per-key RGB from `keyboard.hardware.ws2812` (chain-length = LED count).
  *  Emits the SPI led_strip block + a `chosen remappr,led-strip` the runtime RGB
- *  service renders the per-key map / effects onto. No ws2812 → empty fragment. */
+ *  service renders the per-key map / effects onto. No ws2812 → empty fragment.
+ *  STM32 boards take the GPDMA path (emitRgbStm32); nRF/rp2040 use emitWs2812. */
 export function emitRgb(
     config: ConfigKeymap,
     board: string | undefined,
@@ -58,6 +147,7 @@ export function emitRgb(
 ): PeripheralFragment {
     const ws = config.keyboard.hardware?.ws2812
     if (!ws) return EMPTY
+    if (ws.stm32) return emitRgbStm32(ws)
     const { pinctrl, block } = emitWs2812(ws, diag, board)
     const nodes = [
         `&pinctrl {`,
@@ -69,7 +159,7 @@ export function emitRgb(
         `/ {`,
         `\tchosen {`,
         `\t\t/* Runtime RGB service renders the per-key map / effects here. */`,
-        `\t\tremappr,led-strip = <&led_strip>;`,
+        `\t\tremappr,led-strip = &led_strip;`,
         `\t};`,
         `};`,
     ]
