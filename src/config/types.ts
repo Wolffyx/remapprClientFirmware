@@ -461,8 +461,26 @@ export interface CanonWs2812 {
     chainLength: number
     /** Wire color order. Default "GRB". */
     colorOrder?: 'GRB' | 'RGB' | 'BGR' | 'RGBW' | 'GRBW'
-    /** SPI bit clock in Hz. Default 4_000_000. */
+    /** SPI bit clock in Hz. Default 4_000_000 (nRF); 5_000_000 for STM32. */
     spiMaxFrequency?: number
+    /** STM32-only wiring. WS2812-over-SPI on STM32 needs the SPI controller's
+     *  own pinctrl + GPDMA (a CPU/FIFO-fed transfer inserts inter-byte gaps that
+     *  latch as a WS2812 reset → dark). These are board/SoC-specific (exact GPDMA
+     *  request lines, pin AF nodes), so they are supplied raw rather than derived.
+     *  Presence of this field selects the STM32 emit path. */
+    stm32?: {
+        /** pinctrl-0 phandles for the SPI node, e.g.
+         *  ["&spi1_sck_pa5", "&spi1_miso_pa6", "&spi1_mosi_pa7"]. */
+        pinctrl: string[]
+        /** Optional raw `dmas` value (tx then rx), e.g.
+         *  "<&gpdma1 0 7 (STM32_DMA_PERIPH_TX | STM32_DMA_PRIORITY_HIGH)>, <&gpdma1 1 6 (STM32_DMA_PERIPH_RX | STM32_DMA_PRIORITY_HIGH)>".
+         *  Omit for the basic (CPU/FIFO) path; GPDMA is only needed for gapless
+         *  color-correct output on latch-sensitive strips. */
+        dmas?: string
+        /** Drop a pre-existing `cs-gpios` (e.g. the Arduino SPI bus defines one;
+         *  a WS2812 strip has no chip-select). */
+        deleteCs?: boolean
+    }
 }
 
 /** `zmk,ext-power-generic` control node — a GPIO that gates peripheral power. */
