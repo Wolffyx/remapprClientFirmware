@@ -32,6 +32,13 @@ import {
     CLUSTER_UID_MAX_HEX,
     emptyClusterNode,
     clusterError,
+    LINK_PROFILE_OPTIONS,
+    LINK_KNOB_FIELDS,
+    emptyLinkProfile,
+    linkKnobValue,
+    linkKnobRange,
+    withLinkOverride,
+    linkProfileError,
 } from '../editorFields'
 import { HoldTapDefSchema, ModMorphSchema } from '../schema'
 
@@ -266,5 +273,89 @@ describe('node role / mode-A cluster editor metadata (§N4b/§N4c)', () => {
         expect(
             clusterError([{ uid: 'ab', positionBase: 0xfffe, rows: 2, cols: 2 }]),
         ).toMatch(/overruns/)
+    })
+})
+
+describe('link/latency profile helpers (§8 N6)', () => {
+    it('offers the three base profiles and eight knobs', () => {
+        expect(LINK_PROFILE_OPTIONS.map((o) => o.value)).toEqual([
+            'balanced',
+            'gaming',
+            'powerSave',
+        ])
+        expect(LINK_KNOB_FIELDS).toHaveLength(8)
+        expect(LINK_KNOB_FIELDS.map((f) => f.knob)).toEqual([
+            0, 1, 2, 3, 4, 5, 6, 7,
+        ])
+    })
+
+    it('emptyLinkProfile is balanced with no overrides', () => {
+        expect(emptyLinkProfile()).toEqual({ profile: 'balanced' })
+    })
+
+    it('linkKnobValue returns the base default, then the override', () => {
+        const lp = emptyLinkProfile()
+        expect(linkKnobValue(lp, 0)).toBe(1000000) // balanced baud
+        expect(linkKnobValue({ profile: 'gaming' }, 0)).toBe(2000000)
+        expect(
+            linkKnobValue({ profile: 'balanced', overrides: [{ knob: 0, value: 500000 }] }, 0),
+        ).toBe(500000)
+    })
+
+    it('withLinkOverride adds, replaces, drops-at-default, and keeps knobs sorted', () => {
+        const a = withLinkOverride(emptyLinkProfile(), 2, 200) // heartbeat 100→200
+        expect(a.overrides).toEqual([{ knob: 2, value: 200 }])
+        const b = withLinkOverride(a, 0, 500000) // add baud, sorted before knob 2
+        expect(b.overrides).toEqual([
+            { knob: 0, value: 500000 },
+            { knob: 2, value: 200 },
+        ])
+        const c = withLinkOverride(b, 2, 100) // back to the base default → dropped
+        expect(c.overrides).toEqual([{ knob: 0, value: 500000 }])
+        const d = withLinkOverride(c, 0, 1000000) // baud back to base → no overrides
+        expect(d).toEqual({ profile: 'balanced' })
+    })
+
+    it('linkKnobRange prefers live GET_LINK_LIMITS, else the static table', () => {
+        expect(linkKnobRange(0)).toEqual({ min: 115200, max: 2000000 })
+        expect(linkKnobRange(0, [{ knob: 0, min: 200000, max: 900000 }])).toEqual({
+            min: 200000,
+            max: 900000,
+        })
+    })
+
+    it('accepts a valid profile and the base defaults', () => {
+        expect(linkProfileError(emptyLinkProfile())).toBeNull()
+        expect(linkProfileError({ profile: 'gaming' })).toBeNull()
+        expect(
+            linkProfileError({ profile: 'balanced', overrides: [{ knob: 0, value: 500000 }] }),
+        ).toBeNull()
+    })
+
+    it('rejects an out-of-range override (static table)', () => {
+        expect(
+            linkProfileError({ profile: 'balanced', overrides: [{ knob: 0, value: 50 }] }),
+        ).toMatch(/USART baud/)
+    })
+
+    it('rejects a value outside the live GET_LINK_LIMITS range', () => {
+        // 1 000 000 is fine statically but over the live max of 900 000.
+        expect(
+            linkProfileError(
+                { profile: 'balanced', overrides: [{ knob: 0, value: 1000000 }] },
+                [{ knob: 0, min: 200000, max: 900000 }],
+            ),
+        ).toMatch(/USART baud/)
+    })
+
+    it('enforces the two cross-knob dependency rules', () => {
+        // candidacy (40) < heartbeat (100) → depend error.
+        expect(
+            linkProfileError({ profile: 'balanced', overrides: [{ knob: 4, value: 40 }] }),
+        ).toMatch(/Candidacy/)
+        // handover (500) < demotion (1000) → depend error.
+        expect(
+            linkProfileError({ profile: 'balanced', overrides: [{ knob: 6, value: 500 }] }),
+        ).toMatch(/Handover/)
     })
 })

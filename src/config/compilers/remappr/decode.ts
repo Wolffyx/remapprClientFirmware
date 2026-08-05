@@ -36,6 +36,8 @@ import type {
     CanonTapDanceStep,
     ConfigClusterNode,
     ConfigKeymap,
+    ConfigLinkProfile,
+    ConfigLinkProfileOverride,
     ConfigMouse,
     ConfigNode,
     Direction,
@@ -74,6 +76,9 @@ import {
     CLUSTER_TBL_HDR_LEN,
     CLUSTER_UID_MAX,
     CLUSTER_NODE_WIRE,
+    LINK_PROFILE_TBL_HDR_LEN,
+    LINK_PROFILE_OVR_WIRE,
+    LinkProfileId,
     bytesToHex,
     type BehaviorRecord,
 } from './blobWriter'
@@ -841,6 +846,12 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const clusterT = table(TableId.Cluster)
     const cluster = clusterT ? readCluster(bytes, clusterT, diag) : undefined
 
+    // ── LINK_PROFILE (optional, id 23, §8 N6) → node.linkProfile ──
+    const linkProfileT = table(TableId.LinkProfile)
+    const linkProfile = linkProfileT
+        ? readLinkProfile(bytes, linkProfileT, diag)
+        : undefined
+
     // ── ACTION_BINDING (optional, id 17, §F) → top-level actionBindings[] ──
     const actionT = table(TableId.ActionBinding)
     const actionBindings = actionT ? readActionBindings(bytes, actionT) : []
@@ -849,13 +860,19 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     // personality, §N4b role, §N4c forward-mode + cluster). An unknown personality
     // code, an unset role, and mode-B forwarding each leave their field undefined.
     const node: ConfigNode | undefined =
-        mouse || pers.personality || pers.role || pers.forwardMode || cluster
+        mouse ||
+        pers.personality ||
+        pers.role ||
+        pers.forwardMode ||
+        cluster ||
+        linkProfile
             ? {
                   ...(pers.personality ? { personality: pers.personality } : {}),
                   ...(pers.role ? { role: pers.role } : {}),
                   ...(pers.forwardMode ? { forwardMode: pers.forwardMode } : {}),
                   ...(mouse ? { mouse } : {}),
                   ...(cluster ? { cluster } : {}),
+                  ...(linkProfile ? { linkProfile } : {}),
               }
             : undefined
 
@@ -1121,6 +1138,50 @@ function readCluster(
         })
     }
     return nodes.length ? nodes : undefined
+}
+
+// pattern-check: skip pure wire-decode fn mirroring the TBL_LINK_PROFILE layout
+// TBL_LINK_PROFILE (id 23, §8 N6): u8 profile_id, u8 override_count, then count ×
+// { u8 knob, u32 value (LE) }. Bounds-checked so a foreign/truncated blob can't
+// throw. Inverse of blobWriter.linkProfileTable / index.ts node.linkProfile.
+function readLinkProfile(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigLinkProfile | undefined {
+    if (t.end - t.start < LINK_PROFILE_TBL_HDR_LEN) {
+        diag.error('link-profile table header truncated')
+        return undefined
+    }
+    const r = new ByteReader(bytes)
+    r.seek(t.start)
+    const profileId = r.u8()
+    const count = r.u8()
+    if (
+        t.start + LINK_PROFILE_TBL_HDR_LEN + count * LINK_PROFILE_OVR_WIRE >
+        t.end
+    ) {
+        diag.error('link-profile table truncated')
+        return undefined
+    }
+    const profile = (
+        {
+            [LinkProfileId.balanced]: 'balanced',
+            [LinkProfileId.gaming]: 'gaming',
+            [LinkProfileId.powerSave]: 'powerSave',
+        } as Record<number, ConfigLinkProfile['profile']>
+    )[profileId]
+    if (!profile) {
+        diag.error(`link-profile unknown base profile id ${profileId}`)
+        return undefined
+    }
+    const overrides: ConfigLinkProfileOverride[] = []
+    for (let i = 0; i < count; i++) {
+        const knob = r.u8()
+        const value = r.u32()
+        overrides.push({ knob, value })
+    }
+    return overrides.length ? { profile, overrides } : { profile }
 }
 
 interface DecodedNames {

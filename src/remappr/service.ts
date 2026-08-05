@@ -66,8 +66,12 @@ import type { RemapprSession } from './auth'
 import {
     BLOB_ALIGN,
     Cmd,
+    CommonVerb,
     LEGACY_SEALED_CHUNK,
     type Limits,
+    type LinkLimitKnob,
+    Namespace,
+    parseLinkLimits,
     Status,
     statusName,
 } from './protocol'
@@ -726,12 +730,30 @@ export class RemapprKeyboardService
      * commit(). The cluster address map is authored whole (setNode({ cluster })). */
 
     /** The node config — device truth merged with any staged edit. Returns a copy
-     *  (cluster rows cloned) so a UI editor can mutate its working array freely. */
+     *  (cluster rows + link-profile overrides cloned) so a UI editor can mutate its
+     *  working arrays freely. */
     getNode(): ConfigNode {
         const merged: ConfigNode = { ...this.config.node, ...this.editedNode }
-        return merged.cluster
-            ? { ...merged, cluster: merged.cluster.map((n) => ({ ...n })) }
-            : merged
+        return {
+            ...merged,
+            ...(merged.cluster
+                ? { cluster: merged.cluster.map((n) => ({ ...n })) }
+                : {}),
+            ...(merged.linkProfile
+                ? {
+                      linkProfile: {
+                          ...merged.linkProfile,
+                          ...(merged.linkProfile.overrides
+                              ? {
+                                    overrides: merged.linkProfile.overrides.map(
+                                        (o) => ({ ...o }),
+                                    ),
+                                }
+                              : {}),
+                      },
+                  }
+                : {}),
+        }
     }
 
     /** Stage a node-config patch (role / forwardMode / cluster), applied at the
@@ -749,6 +771,18 @@ export class RemapprKeyboardService
             else edited[key] = p[key]
         }
         this.markPending(true)
+    }
+
+    /** Live GET_LINK_LIMITS (§8, N6): the firmware-owned per-knob min/max ranges,
+     *  read fresh so the link-profile editor bounds its inputs to what this device
+     *  actually accepts. A direct read (targetNode 0); a pre-N6 device answers
+     *  ERR_UNSUPPORTED, which surfaces to the caller as a rejected promise. */
+    async getLinkLimits(): Promise<LinkLimitKnob[]> {
+        const reply = await this.rpc.callUniversalPlain(
+            Namespace.COMMON,
+            CommonVerb.GET_LINK_LIMITS,
+        )
+        return parseLinkLimits(reply.data)
     }
 
     async commit(): Promise<void> {

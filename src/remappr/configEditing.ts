@@ -17,6 +17,7 @@ import type {
     ConfigDefaults,
     ConfigNode,
 } from '../config'
+import type { LinkLimitKnob } from './protocol'
 
 export interface RemapprConfigEditing {
     /** Active §7.4 timing defaults with any pending edit applied. */
@@ -38,9 +39,13 @@ export interface RemapprConfigEditing {
     /** Whole-node config (§N4b role / §N4c forwardMode + cluster map), device-truth
      *  merged with staged edits. */
     getNode(): ConfigNode
-    /** Stage a node-config patch (role / forwardMode / cluster); an `undefined`
-     *  value drops that key back to committed, mirroring setConfigDefaults. */
+    /** Stage a node-config patch (role / forwardMode / cluster / linkProfile); an
+     *  `undefined` value drops that key back to committed, mirroring
+     *  setConfigDefaults. The link profile is staged whole (setNode({ linkProfile })). */
     setNode(patch: Partial<ConfigNode>): void
+    /** Live GET_LINK_LIMITS (§8, N6): the firmware-owned per-knob min/max ranges
+     *  for the link-profile editor, so it never offers an out-of-range value. */
+    getLinkLimits(): Promise<LinkLimitKnob[]>
 }
 
 /** True when `service` exposes the config-blob editing surface — a concrete
@@ -62,6 +67,7 @@ export function supportsConfigEditing(
         typeof s.getConditionalLayers === 'function' &&
         typeof s.setConditionalLayers === 'function' &&
         typeof s.getNode === 'function' &&
-        typeof s.setNode === 'function'
+        typeof s.setNode === 'function' &&
+        typeof s.getLinkLimits === 'function'
     )
 }

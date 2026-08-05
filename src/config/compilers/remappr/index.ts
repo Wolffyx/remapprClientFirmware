@@ -54,9 +54,11 @@ import {
     FWD_MODE_PHYSICAL,
     FWD_MODE_RESOLVED,
     CLUSTER_UID_MAX,
+    LinkProfileId,
     hexToBytes,
     type ActionBindingRecord,
     type ClusterNodeRecord,
+    type LinkProfileOverrideRecord,
     type BehaviorRecord,
     type ComboRecord,
     type ConditionalRecord,
@@ -1459,6 +1461,20 @@ function encodeBlob(
             }
         })
         builder.clusterTable(records)
+    }
+    // TBL_LINK_PROFILE (§8 N6): the node-bus link/latency profile — a base
+    // profile + per-knob overrides (USART baud, §6 election cadence, power tier).
+    // Skip the table for the trivial balanced / no-override case so a plain config
+    // resolves bit-identically to a pre-N6 blob (the default-equivalence invariant).
+    const linkProfile = nodeCfg?.linkProfile
+    if (linkProfile) {
+        const overrides: LinkProfileOverrideRecord[] = (
+            linkProfile.overrides ?? []
+        ).map((o) => ({ knob: o.knob, value: o.value >>> 0 }))
+        const profileId = LinkProfileId[linkProfile.profile]
+        if (profileId !== LinkProfileId.balanced || overrides.length > 0) {
+            builder.linkProfileTable(profileId, overrides)
+        }
     }
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
