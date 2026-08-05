@@ -42,6 +42,7 @@ export const TableId = {
     Encoder: 20,
     Cluster: 21,
     ClusterSec: 22, // cluster PSK for §6 election/roster MAC (N5b)
+    LinkProfile: 23, // latency/link profile + knob overrides (§8, N6)
 } as const
 
 /** TBL_PERSONALITY byte 1 role_flags (config_blob.h REMAPPR_CFG_ROLE_*). */
@@ -56,6 +57,18 @@ export const FWD_MODE_PHYSICAL = 1
 export const CLUSTER_TBL_HDR_LEN = 2
 export const CLUSTER_UID_MAX = 16
 export const CLUSTER_NODE_WIRE = 25
+
+/** TBL_LINK_PROFILE framing (config_blob.h, §8 N6): 2-byte header
+ *  { u8 profile_id, u8 override_count } then override_count × 5-byte records
+ *  { u8 knob, u32 value }. Mirrors REMAPPR_LINK_PROFILE_TBL_HDR_LEN / _OVR_WIRE. */
+export const LINK_PROFILE_TBL_HDR_LEN = 2
+export const LINK_PROFILE_OVR_WIRE = 5
+/** enum remappr_link_profile_id — the TBL_LINK_PROFILE base-profile byte. */
+export const LinkProfileId = {
+    balanced: 0,
+    gaming: 1,
+    powerSave: 2,
+} as const
 
 // pattern-check: skip pure hex<->bytes codec helpers, no abstraction
 /** Parse a hex string ("00ff1a…") to bytes; a stray odd nibble is dropped. */
@@ -84,6 +97,14 @@ export interface ClusterNodeRecord {
     cols: number
     encoderBase: number
     pointerBase: number
+}
+
+// pattern-check: skip plain wire-DTO for one TBL_LINK_PROFILE override record
+/** One TBL_LINK_PROFILE override (§8 N6): replaces base-profile knob `knob` with
+ *  `value` (u32, LE on the wire). `knob` is an enum remappr_link_profile_knob id. */
+export interface LinkProfileOverrideRecord {
+    knob: number
+    value: number
 }
 
 /** Wire sentinel for an unbound encoder direction/press (config_blob.h
@@ -845,6 +866,26 @@ export class BlobBuilder {
         }
         this.tableBegin(TableId.ClusterSec, 1)
         for (const b of psk) this.w.u8(b)
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_LINK_PROFILE (id 23, §8 N6): u8 profile_id, u8 override_count, then
+     *  override_count × { u8 knob, u32 value (LE) }. Mirrors the firmware decoder
+     *  lib/config_blob/decode_link_profile.c. OPTIONAL — omit for the balanced
+     *  default (byte-identical to a pre-N6 blob, the default-equivalence invariant). */
+    linkProfileTable(
+        profileId: number,
+        overrides: LinkProfileOverrideRecord[],
+    ): this {
+        this.tableBegin(TableId.LinkProfile, 1)
+        this.w.u8(profileId)
+        this.w.u8(overrides.length)
+        for (const o of overrides) {
+            this.w.u8(o.knob)
+            this.w.u32(o.value >>> 0)
+        }
         this.tableEnd()
         return this
     }

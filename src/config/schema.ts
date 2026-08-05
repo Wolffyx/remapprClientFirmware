@@ -874,6 +874,25 @@ export const ClusterNodeSchema = z
     })
     .describe("One cluster node's UID→address-base assignment (§N4c mode-A).")
 
+// pattern-check: skip plain zod wire-DTO schema mirroring TBL_LINK_PROFILE
+export const LinkProfileSchema = z
+    .object({
+        profile: z.enum(['balanced', 'gaming', 'powerSave']),
+        overrides: z
+            .array(
+                z.object({
+                    knob: z.number().int().min(0).max(7),
+                    value: z.number().int().nonnegative(),
+                }),
+            )
+            .optional(),
+    })
+    .describe(
+        'Node-bus link/latency profile (§8, N6, TBL_LINK_PROFILE): a base ' +
+            'profile plus per-knob overrides (USART baud, §6 election cadence, ' +
+            'power tier). Absent ⇒ the balanced default.',
+    )
+
 // pattern-check: skip adding well-known optional fields to an existing zod schema
 export const NodeSchema = z
     .looseObject({
@@ -884,6 +903,7 @@ export const NodeSchema = z
         role: z.enum(['coordinator', 'follower']).optional(),
         forwardMode: z.enum(['resolved', 'physical']).optional(),
         cluster: z.array(ClusterNodeSchema).optional(),
+        linkProfile: LinkProfileSchema.optional(),
     })
     .describe(
         'Per-personality node configuration; a dongle has a limited surface, a ' +
