@@ -110,7 +110,7 @@ function emitRgbStm32(ws: CanonWs2812): PeripheralFragment {
         `/ {`,
         `\tchosen {`,
         `\t\t/* Runtime RGB service renders the per-key map / effects here. */`,
-        `\t\tremappr,led-strip = <&led_strip>;`,
+        `\t\tremappr,led-strip = &led_strip;`,
         `\t};`,
         `};`,
     ]
@@ -159,7 +159,7 @@ export function emitRgb(
         `/ {`,
         `\tchosen {`,
         `\t\t/* Runtime RGB service renders the per-key map / effects here. */`,
-        `\t\tremappr,led-strip = <&led_strip>;`,
+        `\t\tremappr,led-strip = &led_strip;`,
         `\t};`,
         `};`,
     ]

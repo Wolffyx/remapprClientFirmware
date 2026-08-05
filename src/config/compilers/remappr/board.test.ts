@@ -233,7 +233,11 @@ describe('remappr-board shield compiler', () => {
         expect(ov).toContain('led_strip: ws2812@0 {')
         expect(ov).toContain('compatible = "worldsemi,ws2812-spi"')
         expect(ov).toContain('chain-length = <2>;')
-        expect(ov).toContain('remappr,led-strip = <&led_strip>;')
+        // chosen must be a PLAIN phandle (= &led_strip), never a phandle-array
+        // (<&led_strip>): the array form never registers DT_CHOSEN(remappr_led_strip),
+        // so the firmware rgb backend probes -ENODEV (bug that cost real bench hours).
+        expect(ov).toContain('remappr,led-strip = &led_strip;')
+        expect(ov).not.toContain('remappr,led-strip = <&led_strip>;')
         // nice_nano_v2 controller → real nRF pinctrl psel, not a FIXME scaffold.
         expect(ov).toContain('NRF_PSEL(SPIM_MOSI, 0, 6)')
         const defcfg = String(
@@ -258,7 +262,8 @@ describe('remappr-board shield compiler', () => {
         expect(ov).toContain('compatible = "worldsemi,ws2812-spi"')
         expect(ov).toContain('chain-length = <14>;')
         expect(ov).toContain('spi-one-frame = <0xF0>;')
-        expect(ov).toContain('remappr,led-strip = <&led_strip>;')
+        expect(ov).toContain('remappr,led-strip = &led_strip;')
+        expect(ov).not.toContain('remappr,led-strip = <&led_strip>;')
         // NOT the nRF psel / FIXME-scaffold path.
         expect(ov).not.toContain('NRF_PSEL')
         expect(ov).not.toContain('nordic,nrf-spim')
