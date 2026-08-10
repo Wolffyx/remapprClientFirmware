@@ -43,6 +43,7 @@ export const TableId = {
     Cluster: 21,
     ClusterSec: 22, // cluster PSK for §6 election/roster MAC (N5b)
     LinkProfile: 23, // latency/link profile + knob overrides (§8, N6)
+    Autocorrect: 24, // on-device autocorrect dictionary (§5.2-E)
 } as const
 
 /** TBL_PERSONALITY byte 1 role_flags (config_blob.h REMAPPR_CFG_ROLE_*). */
@@ -866,6 +867,19 @@ export class BlobBuilder {
         }
         this.tableBegin(TableId.ClusterSec, 1)
         for (const b of psk) this.w.u8(b)
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_AUTOCORRECT (id 24, §5.2-E): the serialized dictionary trie, carried
+     *  verbatim (build it with encodeAutocorrectDictionary). Mirrors the firmware
+     *  decoder lib/config_blob/decode_autocorrect.c. OPTIONAL — omit it for a
+     *  board that does not correct; emit it EMPTY to clear a device's existing
+     *  dictionary without dropping the table. */
+    autocorrectTable(dict: Uint8Array): this {
+        this.tableBegin(TableId.Autocorrect, 1)
+        for (const b of dict) this.w.u8(b)
         this.tableEnd()
         return this
     }
