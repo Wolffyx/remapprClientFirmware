@@ -43,4 +43,9 @@ export {
     setReportRate,
     type RateLimits,
 } from './reportRate'
+export {
+    getUnicodeMode,
+    setUnicodeMode,
+    type UnicodeModeState,
+} from './unicode'
 export * as remapprProtocol from './protocol'
