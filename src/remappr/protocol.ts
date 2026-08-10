@@ -58,6 +58,8 @@ export const Cmd = {
     SET_RGB: 0x30,
     SET_BASE_LAYER: 0x40,
     GET_LAYER_STATE: 0x41,
+    GET_UNICODE_MODE: 0x44, // KEYBOARD: &unicode input method + support mask (open read, §5.2-E)
+    SET_UNICODE_MODE: 0x45, // KEYBOARD: select it (owner-sealed, persisted, §5.2-E)
     GET_DIAGNOSTICS: 0x50,
     GET_RATE_LIMITS: 0x52, // COMMON: report-rate caps + current (open read, §7.4)
     SET_REPORT_RATE: 0x53, // COMMON: set desired report rate (owner-sealed, §7.4)
@@ -75,6 +77,7 @@ export const PLAINTEXT_CMDS: ReadonlySet<number> = new Set([
     Cmd.GET_LAYER_STATE,
     Cmd.GET_DIAGNOSTICS,
     Cmd.GET_RATE_LIMITS, // open read; SET_REPORT_RATE stays sealed/mutating
+    Cmd.GET_UNICODE_MODE, // open read; SET_UNICODE_MODE stays sealed/mutating
     Cmd.CONTROL_AUTH_BEGIN,
     Cmd.CONTROL_AUTH_FINISH,
 ])
@@ -1051,6 +1054,62 @@ export function buildReportRateArg(hz: number): Uint8Array {
     const out = new Uint8Array(2)
     new DataView(out.buffer).setUint16(0, hz, true)
     return out
+}
+
+/** Host input method a &unicode codepoint is typed with (§5.2-E; mirrors
+ *  enum remappr_unicode_mode). There is no HID report carrying a codepoint, so
+ *  the node types a per-OS keystroke sequence and the host must already be set
+ *  up for the selected method — the device cannot detect which one that is. */
+export const UnicodeMode = {
+    /** Type nothing; the firmware's unicode sink (if any) still fires. */
+    OFF: 0,
+    /** IBUS/GTK: Ctrl+Shift+U, hex, Enter. */
+    LINUX: 1,
+    /** Option held + hex; needs the "Unicode Hex Input" layout selected. */
+    MACOS: 2,
+    /** Alt held + keypad '+' + hex; needs the EnableHexNumpad registry value. */
+    WINDOWS: 3,
+    /** WinCompose: Compose, 'u', hex, Enter. */
+    WINCOMPOSE: 4,
+} as const
+
+/** Display names by mode value — index i is mode i, matching the `supported`
+ *  bitmask (bit i = mode i). */
+export const UNICODE_MODE_NAMES = [
+    'off',
+    'linux',
+    'macos',
+    'windows',
+    'wincompose',
+] as const
+
+/** KEYBOARD.GET_UNICODE_MODE reply (§5.2-E): the selected method plus the ones
+ *  this node can type. Bit 0 ("off") is always set. */
+export interface UnicodeModeState {
+    /** Selected method (a UnicodeMode value). */
+    mode: number
+    /** Methods this node can type, decoded from the support bitmask. */
+    supported: number[]
+}
+
+const UNICODE_MODE_LEN = 2
+
+// pattern-check: skip parse/build helpers mirroring parseRateLimits/buildReportRateArg, no abstraction
+export function parseUnicodeMode(d: Uint8Array): UnicodeModeState {
+    if (d.length < UNICODE_MODE_LEN)
+        throw new Error('unicode-mode reply too short')
+    const mask = d[1]
+    return {
+        mode: d[0],
+        supported: UNICODE_MODE_NAMES.map((_, i) => i).filter(
+            (i) => (mask & (1 << i)) !== 0,
+        ),
+    }
+}
+
+/** Build the KEYBOARD.SET_UNICODE_MODE arg (u8 mode). */
+export function buildUnicodeModeArg(mode: number): Uint8Array {
+    return Uint8Array.of(mode & 0xff)
 }
 
 /** Build the LIGHTING.HAPTIC_PULSE arg: {u8 effect, u8 intensity,
