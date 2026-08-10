@@ -122,6 +122,7 @@ export const Cap = {
     KEYMAP: 1 << 6,
     PAIRING: 1 << 7,
     CLUSTER_DIAG: 1 << 12, // GET_CLUSTER_DIAG source wired (§N4b-3)
+    UNICODE: 1 << 14, // unicode input-method ops wired (§5.2-E)
 } as const
 
 /* ── universal (proto-v2) ───────────────────────────────────────────────── */

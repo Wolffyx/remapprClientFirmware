@@ -19,6 +19,7 @@ import { loadDeviceConfig } from './configRead'
 import { discover, type DiscoveryResult } from './discovery'
 import { buildClusterApi } from './clusterView'
 import { buildNodesApi } from './nodeView'
+import { buildUnicodeApi } from './unicodeView'
 import {
     BLE_CONTROL_CHAR_UUID,
     BLE_SERVICE_UUID,
@@ -280,6 +281,13 @@ export const remapprAdapter: FirmwareAdapter = {
                 cluster:
                     capBits !== null && (capBits & Cap.CLUSTER_DIAG) !== 0
                         ? buildClusterApi(rpc)
+                        : undefined,
+                // §5.2-E: only where the firmware wired unicode ops and said so
+                // (Cap.UNICODE). The verbs answer ERR_CMD otherwise, and a null
+                // capBits is a firmware that predates them entirely → omit.
+                unicode:
+                    capBits !== null && (capBits & Cap.UNICODE) !== 0
+                        ? buildUnicodeApi(rpc)
                         : undefined,
             })
         } catch (err) {

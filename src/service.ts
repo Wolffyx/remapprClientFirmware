@@ -1,7 +1,12 @@
 import type { KeyCatalog } from './catalog/types'
 import type { KeycodeCodec } from './codec'
 import type { LightingCatalog } from './lighting'
-import type { ClusterDiag, Limits, RoleEvent } from './remappr/protocol'
+import type {
+    ClusterDiag,
+    Limits,
+    RoleEvent,
+    UnicodeModeState,
+} from './remappr/protocol'
 import type {
     ActionType,
     AdapterNotification,
@@ -455,6 +460,23 @@ export interface ClusterApi {
     onRoleChanged(cb: (e: RoleEvent) => void): () => void
 }
 
+/** Re-exported alongside ClusterDiag so a consumer imports the unicode surface
+ *  (facade + its wire DTO) from one entry point. */
+export type { UnicodeModeState } from './remappr/protocol'
+
+export interface UnicodeApi {
+    /** Read the selected host input method plus the methods this node can type
+     *  (KEYBOARD.GET_UNICODE_MODE §5.2-E). Idempotent read. */
+    getMode(): Promise<UnicodeModeState>
+
+    /** Select the method (KEYBOARD.SET_UNICODE_MODE). The node persists it across
+     *  reboots. A method outside the reported `supported` set is rejected by the
+     *  device — there is no HID report carrying a codepoint, so it types a per-OS
+     *  keystroke sequence the host must already be configured for, and guessing
+     *  an unknown one would inject garbage. */
+    setMode(mode: number): Promise<void>
+}
+
 export interface KeyboardService {
     readonly deviceInfo: DeviceInfo
     readonly capabilities: Capabilities
@@ -516,6 +538,10 @@ export interface KeyboardService {
      *  a directly-attached node whose firmware wired a cluster-diag source
      *  (Cap.CLUSTER_DIAG); omitted on dongles and read-only node views. */
     cluster?: ClusterApi
+    /** Host input method a `&unicode` binding types its codepoint with (§5.2-E).
+     *  Present only on a node whose firmware wired unicode ops (Cap.UNICODE);
+     *  omitted on dongles and on firmware predating the verbs. */
+    unicode?: UnicodeApi
 
     addLayer(): Promise<Layer>
 

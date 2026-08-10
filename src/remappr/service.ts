@@ -14,6 +14,7 @@ import type {
     KeyTestApi,
     MacroApi,
     NodesApi,
+    UnicodeApi,
 } from '../service'
 import type {
     ActionType,
@@ -112,6 +113,9 @@ export interface RemapprServiceDeps {
     /** Cluster-diagnostics facade — set on a directly-attached node advertising
      *  Cap.CLUSTER_DIAG; omitted on the dongle and read-only node views. */
     cluster?: ClusterApi
+    /** §5.2-E unicode input-method facade — set on a directly-attached node
+     *  advertising Cap.UNICODE; omitted otherwise. */
+    unicode?: UnicodeApi
 }
 
 /** Round `b` up to a multiple of `align` with zero padding (flash alignment). */
@@ -140,6 +144,9 @@ export class RemapprKeyboardService
     /** Cluster diagnostics + live role events (§N4b-3) — present on a directly-
      *  attached node advertising Cap.CLUSTER_DIAG; omitted otherwise. */
     public readonly cluster?: ClusterApi
+    /** §5.2-E host input method for `&unicode` bindings — present on a directly-
+     *  attached node advertising Cap.UNICODE; omitted otherwise. */
+    public readonly unicode?: UnicodeApi
     /** Read-only macro list (§24): the active config's macros surfaced to the
      *  Macros tab by their real DT names. Editing (setMacro) lands with the
      *  round-trip; for now `readonly: true`. */
@@ -211,6 +218,7 @@ export class RemapprKeyboardService
         this.kind = deps.kind ?? 'keyboard'
         this.nodes = deps.nodes
         this.cluster = deps.cluster
+        this.unicode = deps.unicode
         this.limits = deps.limits
         this.deviceInfo = deps.deviceInfo
         this.config = deps.config
