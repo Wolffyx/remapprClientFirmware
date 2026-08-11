@@ -826,6 +826,18 @@ export interface ConfigLinkProfile {
     overrides?: ConfigLinkProfileOverride[]
 }
 
+/** One {typo → correction} pair of the on-device dictionary (§5.2-E). */
+export interface CanonAutocorrectEntry {
+    typo: string
+    correction: string
+}
+
+/** The dictionary as authored. An empty `entries` is meaningful: it emits an
+ *  empty TBL_AUTOCORRECT, which clears whatever the device already holds. */
+export interface ConfigAutocorrect {
+    entries: CanonAutocorrectEntry[]
+}
+
 // pattern-check: skip adding well-known optional fields to an existing wire-DTO
 /** Per-personality node configuration (v2). Open shape; `personality` and the
  *  `mouse` pointer block are well-known, the rest is preserved for later phases. */
@@ -867,6 +879,8 @@ export interface ConfigKeymap {
     /** Position → semantic-action bindings (§F, TBL_ACTION_BINDING) — the
      *  personality-output layer, additive to the layer bindings. */
     actionBindings?: CanonActionBinding[]
+    /** On-device autocorrect dictionary (§5.2-E, TBL_AUTOCORRECT). */
+    autocorrect?: ConfigAutocorrect
     // Whole-node config sections (v2) — preserved verbatim, consumed later.
     node?: ConfigNode
     firmware?: Record<string, Record<string, unknown>>

@@ -10,6 +10,7 @@
 // service-agnostic: the front-ends supply their own inputs and write path.
 import type {
     CanonAction,
+    CanonAutocorrectEntry,
     CanonConditionalLayer,
     CanonHoldTapDef,
     CanonModMorph,
@@ -19,6 +20,12 @@ import type {
     ConfigNode,
 } from './types'
 import { MODIFIERS, type Modifier } from './keycodes'
+import { DEFAULT_AUTOCORRECT_ENTRIES } from './autocorrectDictionary'
+import {
+    AUTOCORRECT_MAX_TYPO,
+    REPL_ALPHABET as AUTOCORRECT_REPL_ALPHABET,
+    TYPO_ALPHABET as AUTOCORRECT_TYPO_ALPHABET,
+} from './compilers/remappr/autocorrect'
 import type { FeatureName } from './featureWarnings'
 import { LimitsFeature, LinkProfileKnob, type LinkLimitKnob } from '../remappr/protocol'
 
@@ -395,6 +402,62 @@ export function conditionalError(
         if (unknownIf) return `${row}: unknown layer "${unknownIf}"`
         if (!layerNames.includes(c.thenLayer))
             return `${row}: unknown layer "${c.thenLayer}"`
+    }
+    return null
+}
+
+/* ── autocorrect dictionary (§5.2-E, TBL_AUTOCORRECT) ─────────────────────────
+ * The dictionary editor is a plain two-column list, so all the front-end needs
+ * from here is a blank row, the "load the starter list" merge, and the same
+ * validation the encoder would apply — run per row, while the user is typing,
+ * instead of as one throw at commit time. */
+
+/** A blank dictionary row for the editor's "add" button. */
+export function emptyAutocorrectEntry(): CanonAutocorrectEntry {
+    return { typo: '', correction: '' }
+}
+
+/** `entries` with every starter pair whose typo is not already present appended.
+ *  Merging rather than replacing means "load defaults" can never silently discard
+ *  what the user wrote, and running it twice changes nothing. */
+export function withDefaultAutocorrect(
+    entries: readonly CanonAutocorrectEntry[],
+): CanonAutocorrectEntry[] {
+    const have = new Set(entries.map((e) => e.typo.trim().toLowerCase()))
+    return [
+        ...entries.map((e) => ({ ...e })),
+        ...DEFAULT_AUTOCORRECT_ENTRIES.filter((d) => !have.has(d.typo)).map(
+            (d) => ({ ...d }),
+        ),
+    ]
+}
+
+/** First problem with the dictionary, or null when every row is one the device
+ *  would accept. Mirrors the encoder's rules (which throw at commit) plus the
+ *  duplicate check, naming the offending row so the UI can block Save. */
+export function autocorrectError(
+    entries: readonly CanonAutocorrectEntry[],
+): string | null {
+    const seen = new Set<string>()
+
+    for (let i = 0; i < entries.length; i++) {
+        const row = `Entry ${i + 1}`
+        const typo = entries[i].typo.trim().toLowerCase()
+        const correction = entries[i].correction.trim()
+
+        if (!typo) return `${row}: enter the misspelling to correct`
+        if (!AUTOCORRECT_TYPO_ALPHABET.test(typo))
+            return `${row}: a typo may only contain letters, digits, ' and -`
+        if (typo.length > AUTOCORRECT_MAX_TYPO)
+            return `${row}: "${typo}" is longer than the ${AUTOCORRECT_MAX_TYPO} characters the keyboard remembers`
+        if (!correction) return `${row}: enter what "${typo}" should become`
+        if (!AUTOCORRECT_REPL_ALPHABET.test(correction))
+            return `${row}: a correction may only contain letters, digits, ' and - (no spaces)`
+        if (correction.length > 255) return `${row}: correction is too long`
+        if (correction.toLowerCase() === typo)
+            return `${row}: "${typo}" corrects to itself`
+        if (seen.has(typo)) return `${row}: "${typo}" is listed twice`
+        seen.add(typo)
     }
     return null
 }

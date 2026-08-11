@@ -648,6 +648,19 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
         ...(km.actionBindings
             ? { actionBindings: cloneJson(km.actionBindings) }
             : {}),
+        // Autocorrect entries carry through as authored, except that typos are
+        // lowercased here: the device matches case-insensitively, so canonical
+        // form must not depend on how the author capitalised the misspelling.
+        ...(km.autocorrect
+            ? {
+                  autocorrect: {
+                      entries: km.autocorrect.entries.map((e) => ({
+                          typo: e.typo.toLowerCase(),
+                          correction: e.correction,
+                      })),
+                  },
+              }
+            : {}),
         // Whole-node sections carry through opaquely (no surface sugar); deep-clone
         // so canonical never aliases the surface object.
         ...(km.node ? { node: cloneJson(km.node) } : {}),

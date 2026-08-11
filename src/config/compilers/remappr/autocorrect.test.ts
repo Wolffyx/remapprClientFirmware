@@ -11,6 +11,7 @@ import {
     AUTOCORRECT_MAX_TYPO,
     encodeAutocorrectDictionary,
 } from './autocorrect'
+import { defaultAutocorrectEntries } from '../../autocorrectDictionary'
 
 const HDR_MATCH = 0x80
 
@@ -165,5 +166,37 @@ describe('autocorrect dictionary encoder', () => {
                 { typo: 'teh', correction: 'tea' },
             ]),
         ).toThrow(/duplicate/)
+    })
+})
+
+describe('the shipped default dictionary', () => {
+    const entries = defaultAutocorrectEntries()
+
+    it('encodes — every entry is one the device would accept', () => {
+        expect(entries.length).toBeGreaterThan(50)
+        expect(() => encodeAutocorrectDictionary(entries)).not.toThrow()
+    })
+
+    it('has no duplicate typos and stays inside the device alphabets', () => {
+        expect(new Set(entries.map((e) => e.typo)).size).toBe(entries.length)
+        for (const { typo, correction } of entries) {
+            expect(typo).toMatch(/^[a-z0-9'-]+$/)
+            expect(typo.length).toBeLessThanOrEqual(AUTOCORRECT_MAX_TYPO)
+            expect(correction).toMatch(/^[A-Za-z0-9'-]+$/)
+            expect(correction).not.toBe(typo)
+        }
+    })
+
+    it('never lists a typo that is a suffix of another entry’s correction', () => {
+        // The matcher has no right-hand word boundary: it fires as soon as the
+        // typed run ENDS with an entry. A typo that is the tail of a word we
+        // ourselves consider correct would corrupt that word on the next pass.
+        const corrections = entries.map((e) => e.correction.toLowerCase())
+        for (const { typo } of entries) {
+            const clash = corrections.find(
+                (c) => c !== typo && c.endsWith(typo),
+            )
+            expect(clash, `"${typo}" would rewrite "${clash}"`).toBeUndefined()
+        }
     })
 })

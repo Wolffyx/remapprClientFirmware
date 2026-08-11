@@ -13,6 +13,11 @@ import { z } from 'zod'
 import { MODIFIERS, isKnownKeycode, isKnownKeyToken } from './keycodes'
 import { migrateToV1 } from './migrate'
 import { BUILTIN_TARGETS } from './types'
+import {
+    AUTOCORRECT_MAX_TYPO,
+    REPL_ALPHABET,
+    TYPO_ALPHABET,
+} from './compilers/remappr/autocorrect'
 
 /* ── leaf vocabularies ─────────────────────────────────────────────────── */
 
@@ -605,6 +610,44 @@ export const ActionBindingSchema = z
             'personality-output layer, additive to the layer bindings.',
     )
 
+/* ── autocorrect dictionary (§5.2-E, TBL_AUTOCORRECT) ──────────────────── */
+
+/**
+ * One {typo → correction} pair. The alphabets are the encoder's own (imported so
+ * the two cannot drift): the device tracks only characters it can recover from
+ * HID usages, and can only replace with what it can type. Typos match
+ * case-insensitively, so they are lowercased on the way to the trie.
+ */
+export const AutocorrectEntrySchema = z
+    .object({
+        typo: z
+            .string()
+            .min(1)
+            .max(AUTOCORRECT_MAX_TYPO)
+            .refine((s) => TYPO_ALPHABET.test(s.toLowerCase()), {
+                message: "typo may only contain a-z 0-9 ' -",
+            })
+            .describe('The misspelling, as typed (matched case-insensitively).'),
+        correction: z
+            .string()
+            .max(255)
+            .refine((s) => REPL_ALPHABET.test(s), {
+                message: "correction may only contain A-Z a-z 0-9 ' -",
+            })
+            .describe('What replaces the typo once it has been deleted.'),
+    })
+    .describe('A single autocorrect dictionary entry.')
+
+export const AutocorrectSchema = z
+    .object({
+        entries: z.array(AutocorrectEntrySchema),
+    })
+    .describe(
+        'On-device autocorrect dictionary (§5.2-E, TBL_AUTOCORRECT). An empty ' +
+            'entry list still emits the table — that is how a device is told to ' +
+            'drop a dictionary it already holds.',
+    )
+
 /* ── board hardware (kscan wiring + electrical transform) ──────────────── */
 
 /** A raw devicetree GPIO phandle+specifier, kept verbatim. */
@@ -1017,6 +1060,7 @@ const BaseKeymapSchema = z.object({
     keyOverrides: z.array(KeyOverrideSchema).optional(),
     leaderSequences: z.array(LeaderSequenceSchema).optional(),
     actionBindings: z.array(ActionBindingSchema).optional(),
+    autocorrect: AutocorrectSchema.optional(),
     // Whole-node config sections (v2) — validated + preserved, consumed later.
     node: NodeSchema.optional(),
     firmware: FirmwareSettingsSchema.optional(),
@@ -1287,6 +1331,20 @@ export const KeymapSchema = BaseKeymapSchema.superRefine((km, ctx) => {
     ;(km.leaderSequences ?? []).forEach((ls, li) =>
         checkAction(ls.action, ['leaderSequences', li, 'action']),
     )
+    // Two entries for the same typo would collide in the trie, which the encoder
+    // throws on — a field-level error naming the row is far more useful.
+    const seenTypos = new Set<string>()
+    ;(km.autocorrect?.entries ?? []).forEach((e, ei) => {
+        const typo = e.typo.toLowerCase()
+        if (seenTypos.has(typo)) {
+            ctx.addIssue({
+                code: 'custom',
+                message: `duplicate autocorrect entry for typo "${typo}"`,
+                path: ['autocorrect', 'entries', ei, 'typo'],
+            })
+        }
+        seenTypos.add(typo)
+    })
 })
 
 /* ── types + helpers ───────────────────────────────────────────────────── */

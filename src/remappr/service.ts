@@ -30,7 +30,9 @@ import type {
 } from '../types'
 import { ProtocolError } from '../errors'
 import {
+    type CanonAutocorrectEntry,
     type CanonConditionalLayer,
+    type ConfigAutocorrect,
     type CanonHoldTapDef,
     type CanonMacro,
     type CanonModMorph,
@@ -200,6 +202,11 @@ export class RemapprKeyboardService
     // (null = no edit) — closer to editedDefaults than the per-index maps. Staged
     // via concrete-service setConditionalLayers(), not the generic interface.
     private editedConditionalLayers: CanonConditionalLayer[] | null = null
+    // Pending autocorrect-dictionary edit (§5.2-E, TBL_AUTOCORRECT), overlaid on
+    // `config.autocorrect` at commit. Whole-list like the tri-layers, with one
+    // extra state to represent: an EMPTY list is not "no edit" — it is the
+    // request to drop the device's dictionary — so `null` alone means unedited.
+    private editedAutocorrect: ConfigAutocorrect | null = null
     // Pending whole-node config edit (§N4b role / §N4c forwardMode + cluster map),
     // accumulated as a patch and overlaid on `config.node` at commit — same
     // key-wise merge as editedDefaults, so an unedited node field (personality /
@@ -383,6 +390,7 @@ export class RemapprKeyboardService
             this.editedHoldTaps.size === 0 &&
             this.editedModMorphs.size === 0 &&
             this.editedConditionalLayers === null &&
+            this.editedAutocorrect === null &&
             !hasDefaultEdits &&
             !hasNodeEdits
         ) {
@@ -417,6 +425,9 @@ export class RemapprKeyboardService
             ...(this.editedConditionalLayers
                 ? { conditionalLayers: this.editedConditionalLayers }
                 : {}),
+            ...(this.editedAutocorrect
+                ? { autocorrect: this.editedAutocorrect }
+                : {}),
             ...(hasDefaultEdits
                 ? { defaults: { ...base.defaults, ...this.editedDefaults } }
                 : {}),
@@ -433,6 +444,7 @@ export class RemapprKeyboardService
         this.editedHoldTaps.clear()
         this.editedModMorphs.clear()
         this.editedConditionalLayers = null
+        this.editedAutocorrect = null
         this.editedNode = {}
     }
 
@@ -728,6 +740,30 @@ export class RemapprKeyboardService
             ifLayers: [...c.ifLayers],
             thenLayer: c.thenLayer,
         }))
+        this.markPending(true)
+    }
+
+    /* ── autocorrect dictionary (§5.2-E, TBL_AUTOCORRECT) ────────────────────
+     * A blob-backed, whole-list surface like the tri-layers: the user authors the
+     * pairs from scratch, so add / remove / edit all route through one setter and
+     * land at the next commit(). */
+
+    /** The autocorrect dictionary — device truth, or the staged list once edited.
+     *  Returns a deep copy so a UI editor can mutate its working array freely. */
+    getAutocorrect(): CanonAutocorrectEntry[] {
+        const src = this.editedAutocorrect ?? this.config.autocorrect
+        return (src?.entries ?? []).map((e) => ({ ...e }))
+    }
+
+    /** Stage the full dictionary, replacing the committed one at the next commit().
+     *  An EMPTY list is meaningful and is staged as such: it emits an empty
+     *  TBL_AUTOCORRECT, which tells the device to drop the dictionary it holds.
+     *  Entries the device could never match (characters outside a-z 0-9 ' -, a
+     *  typo past the 24-character history, a duplicate) throw at commit() from the
+     *  encoder, not here. Marks pending; discard reverts to device truth. */
+    setAutocorrect(entries: CanonAutocorrectEntry[]): void {
+        this.assertWritable()
+        this.editedAutocorrect = { entries: entries.map((e) => ({ ...e })) }
         this.markPending(true)
     }
 

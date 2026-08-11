@@ -22,6 +22,8 @@ export type {
     CanonHoldTapDef,
     CanonModMorph,
     CanonConditionalLayer,
+    CanonAutocorrectEntry,
+    ConfigAutocorrect,
     CanonActionBinding,
     CanonSemanticAction,
     CanonKscan,
@@ -123,6 +125,9 @@ export {
     sameConditionalList,
     conditionalLayersPatch,
     conditionalError,
+    emptyAutocorrectEntry,
+    withDefaultAutocorrect,
+    autocorrectError,
     ROLE_OPTIONS,
     FORWARD_MODE_OPTIONS,
     CLUSTER_UID_MAX_HEX,
@@ -154,6 +159,17 @@ export {
     type FirmwareReadiness,
     type ReadinessIssue,
 } from './completeness'
+export {
+    type AutocorrectEntry,
+    AUTOCORRECT_MAX_TYPO,
+    REPL_ALPHABET as AUTOCORRECT_REPL_ALPHABET,
+    TYPO_ALPHABET as AUTOCORRECT_TYPO_ALPHABET,
+    encodeAutocorrectDictionary,
+} from './compilers/remappr/autocorrect'
+export {
+    DEFAULT_AUTOCORRECT_ENTRIES,
+    defaultAutocorrectEntries,
+} from './autocorrectDictionary'
 export { normalizeAction, normalizeKeymap, parseKeymap } from './normalize'
 export {
     denormalizeAction,
