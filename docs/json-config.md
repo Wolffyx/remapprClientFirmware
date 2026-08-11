@@ -161,6 +161,38 @@ firmware ignores it. The two inner behaviors default to key-presses.
 Combo `keys` are position indices; `do` is the action. _(Key-name resolution in
 combos is planned.)_
 
+## Autocorrect
+
+```jsonc
+"autocorrect": {
+  "entries": [
+    { "typo": "teh", "correction": "the" },
+    { "typo": "recieve", "correction": "receive" }
+  ]
+}
+```
+
+Compiled into `TBL_AUTOCORRECT` (§5.2-E) as the reversed trie the device walks.
+Typos match case-insensitively and may contain `a-z 0-9 ' -`; corrections may
+also be capitalised. A typo may be at most 24 characters — the length of the
+history the firmware keeps — and, because corrections are replayed through the
+same alphabet, they cannot contain spaces.
+
+The section is emitted whenever it is present: `"entries": []` writes an empty
+table, which is how a device is told to **drop** a dictionary it already holds.
+Omit the section entirely to leave the device's dictionary untouched.
+
+Correction only happens while the `&autocorrect` toggle is on. The device turns
+it on by itself when a non-empty dictionary is committed, so pushing a config
+with entries is enough; bind `&autocorrect` (`off` / `toggle`) to a key to
+control it afterwards.
+
+`DEFAULT_AUTOCORRECT_ENTRIES` (and `defaultAutocorrectEntries()`) export a
+starter English list. Note that the matcher has no right-hand word boundary — it
+fires as soon as the typed run *ends with* an entry — so a typo that is the tail
+of a correctly-spelled word (`wich` inside `sandwich`) will corrupt that word.
+The shipped list avoids those; custom entries should too.
+
 ## Whole-node config sections
 
 Beyond the keymap, a document can describe the entire node. These sections are

@@ -40,9 +40,13 @@ export interface AutocorrectEntry {
  * Characters the firmware's usage↔character mapping can both TRACK and TYPE.
  * Anything else would either never match or produce an untypeable replacement,
  * so it is rejected here rather than at the device where the failure is silent.
+ *
+ * Exported because the config schema rejects the same characters up front: a
+ * validation error on the field the user typed is worth far more than the same
+ * failure thrown from the encoder at compile time.
  */
-const TYPO_ALPHABET = /^[a-z0-9'-]+$/
-const REPL_ALPHABET = /^[A-Za-z0-9'-]*$/
+export const TYPO_ALPHABET = /^[a-z0-9'-]+$/
+export const REPL_ALPHABET = /^[A-Za-z0-9'-]*$/
 
 interface TrieNode {
     children: Map<number, TrieNode>

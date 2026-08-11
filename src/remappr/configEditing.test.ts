@@ -63,6 +63,24 @@ describe('MockKeyboardService config-blob editing (demo)', () => {
         expect(String(await svc.getConfigSource())).toContain('conditionalLayers')
     })
 
+    it('round-trips an autocorrect dictionary edit into the config source', async () => {
+        const svc = new MockKeyboardService()
+        expect(svc.getAutocorrect()).toEqual([])
+        svc.setAutocorrect([{ typo: 'teh', correction: 'the' }])
+        expect(svc.getAutocorrect()).toEqual([{ typo: 'teh', correction: 'the' }])
+        expect(String(await svc.getConfigSource())).toContain('autocorrect')
+    })
+
+    it('keeps an emptied dictionary as an edit, not as "never touched"', async () => {
+        // An empty list is the request to DROP the device's dictionary, so it has
+        // to survive into the config the commit compiles.
+        const svc = new MockKeyboardService()
+        svc.setAutocorrect([{ typo: 'teh', correction: 'the' }])
+        svc.setAutocorrect([])
+        expect(svc.getAutocorrect()).toEqual([])
+        expect(String(await svc.getConfigSource())).toContain('autocorrect')
+    })
+
     it('edits an in-range seeded hold-tap and rejects an out-of-range index', () => {
         const svc = new MockKeyboardService()
         expect(svc.getHoldTaps().length).toBeGreaterThan(0)

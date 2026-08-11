@@ -8,6 +8,8 @@ import { LimitsFeature } from '../../remappr/protocol'
 
 import {
     ALL_MODIFIERS,
+    autocorrectError,
+    withDefaultAutocorrect,
     FLAVOR_OPTIONS,
     HOLD_TAP_BEHAVIOR_TOKENS,
     TIMING_FIELDS,
@@ -357,5 +359,54 @@ describe('link/latency profile helpers (§8 N6)', () => {
         expect(
             linkProfileError({ profile: 'balanced', overrides: [{ knob: 6, value: 500 }] }),
         ).toMatch(/Handover/)
+    })
+})
+
+describe('autocorrect dictionary editor helpers', () => {
+    it('accepts a well-formed dictionary', () => {
+        expect(
+            autocorrectError([
+                { typo: 'teh', correction: 'the' },
+                { typo: 'Recieve', correction: 'Receive' },
+            ]),
+        ).toBeNull()
+    })
+
+    it('names the row for each rule the device would enforce', () => {
+        expect(autocorrectError([{ typo: '', correction: 'the' }])).toMatch(
+            /Entry 1: enter the misspelling/,
+        )
+        expect(
+            autocorrectError([{ typo: 'te h', correction: 'the' }]),
+        ).toMatch(/Entry 1: a typo may only/)
+        expect(
+            autocorrectError([{ typo: 'x'.repeat(25), correction: 'the' }]),
+        ).toMatch(/longer than the 24 characters/)
+        expect(autocorrectError([{ typo: 'teh', correction: '' }])).toMatch(
+            /Entry 1: enter what "teh"/,
+        )
+        expect(
+            autocorrectError([{ typo: 'teh', correction: 'a lot' }]),
+        ).toMatch(/no spaces/)
+        expect(
+            autocorrectError([{ typo: 'teh', correction: 'Teh' }]),
+        ).toMatch(/corrects to itself/)
+        expect(
+            autocorrectError([
+                { typo: 'teh', correction: 'the' },
+                { typo: 'TEH', correction: 'them' },
+            ]),
+        ).toMatch(/Entry 2: "teh" is listed twice/)
+    })
+
+    it('merges the starter list without touching what the user wrote, twice over', () => {
+        const mine = [{ typo: 'teh', correction: 'THE' }]
+        const once = withDefaultAutocorrect(mine)
+        const twice = withDefaultAutocorrect(once)
+
+        expect(once[0]).toEqual({ typo: 'teh', correction: 'THE' })
+        expect(once.length).toBeGreaterThan(mine.length)
+        expect(twice).toEqual(once)
+        expect(autocorrectError(once)).toBeNull()
     })
 })

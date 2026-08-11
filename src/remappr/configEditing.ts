@@ -11,6 +11,7 @@
 // lets demo mode (the mock) present the very same editors as a real device.
 import type { KeyboardService } from '../service'
 import type {
+    CanonAutocorrectEntry,
     CanonConditionalLayer,
     CanonHoldTapDef,
     CanonModMorph,
@@ -36,6 +37,10 @@ export interface RemapprConfigEditing {
     getConditionalLayers(): CanonConditionalLayer[]
     /** Stage the full conditional-layer list (the editor owns add / remove). */
     setConditionalLayers(list: CanonConditionalLayer[]): void
+    /** Autocorrect dictionary (§5.2-E), device-truth or the staged list once edited. */
+    getAutocorrect(): CanonAutocorrectEntry[]
+    /** Stage the full dictionary; an empty list clears the device's. */
+    setAutocorrect(entries: CanonAutocorrectEntry[]): void
     /** Whole-node config (§N4b role / §N4c forwardMode + cluster map), device-truth
      *  merged with staged edits. */
     getNode(): ConfigNode
@@ -66,6 +71,8 @@ export function supportsConfigEditing(
         typeof s.setModMorph === 'function' &&
         typeof s.getConditionalLayers === 'function' &&
         typeof s.setConditionalLayers === 'function' &&
+        typeof s.getAutocorrect === 'function' &&
+        typeof s.setAutocorrect === 'function' &&
         typeof s.getNode === 'function' &&
         typeof s.setNode === 'function' &&
         typeof s.getLinkLimits === 'function'

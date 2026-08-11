@@ -70,6 +70,7 @@ import {
     type NameRecord,
     type PosholdRecord,
 } from './blobWriter'
+import { encodeAutocorrectDictionary } from './autocorrect'
 import type { CanonicalKeyId } from '../../../catalog/types'
 import type {
     CanonHoldTapDef,
@@ -1494,6 +1495,24 @@ function encodeBlob(
         .map((b) => ({ position: b.position, ...lowerSemanticAction(b.action) }))
     if (actionBindings.length > 0)
         builder.actionBindingTable(numPositions, actionBindings)
+    // AUTOCORRECT (§5.2-E, TBL_AUTOCORRECT): the serialized dictionary trie. The
+    // section is emitted whenever it is PRESENT, empty entry list included —
+    // that empty table is the only way to tell a device to drop the dictionary
+    // it already holds. The encoder throws on anything the device would reject;
+    // report it and ship the rest of the blob rather than failing the compile,
+    // since a bad dictionary costs corrections, not a working keyboard.
+    if (config.autocorrect !== undefined) {
+        try {
+            builder.autocorrectTable(
+                encodeAutocorrectDictionary(config.autocorrect.entries),
+            )
+        } catch (e) {
+            diag.error(
+                `autocorrect dictionary not encodable: ${e instanceof Error ? e.message : String(e)}`,
+                ['autocorrect'],
+            )
+        }
+    }
     // NAMES (§24): real labels for the macros + composites this blob emits, so a
     // device round-trip (decode → edit → re-commit) keeps the names the app shows.
     // Macros are keyed by their table index; composites by sub_index (collected in

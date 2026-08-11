@@ -20,6 +20,7 @@ import { MODIFIERS, type Modifier } from '../../keycodes'
 import type {
     CanonAction,
     CanonActionBinding,
+    CanonAutocorrectEntry,
     CanonSemanticAction,
     CanonCombo,
     CanonConditionalLayer,
@@ -856,6 +857,14 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const actionT = table(TableId.ActionBinding)
     const actionBindings = actionT ? readActionBindings(bytes, actionT) : []
 
+    // ── AUTOCORRECT (optional, id 24, §5.2-E) → top-level autocorrect.entries ──
+    // Present-but-empty is meaningful (a cleared dictionary), so the section is
+    // kept whenever the TABLE exists, even with no entries in it.
+    const acT = table(TableId.Autocorrect)
+    const autocorrect = acT
+        ? { entries: readAutocorrect(bytes, acT, diag) }
+        : undefined
+
     // Reassemble the v2 node section from its decoded parts (§4b mouse, §4c
     // personality, §N4b role, §N4c forward-mode + cluster). An unknown personality
     // code, an unset role, and mode-B forwarding each leave their field undefined.
@@ -916,6 +925,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         ...(keyOverrides.length ? { keyOverrides } : {}),
         ...(leaderSequences.length ? { leaderSequences } : {}),
         ...(actionBindings.length ? { actionBindings } : {}),
+        ...(autocorrect ? { autocorrect } : {}),
         ...(node ? { node } : {}),
     }
 
@@ -1409,6 +1419,100 @@ function readActionBindings(
         })
     }
     return out
+}
+
+// TBL_AUTOCORRECT (§5.2-E): walk the serialized trie back into {typo, correction}
+// pairs — the inverse of encodeAutocorrectDictionary. Node layout is documented
+// in the firmware's include/remappr/autocorrect.h and in autocorrect.ts.
+//
+// The dictionary comes off a device, so it is untrusted: every read is bounds-
+// checked, and a node is refused unless it sits strictly AFTER the branch that
+// pointed at it. That is the same acyclicity rule the firmware's validator
+// enforces, and here it is also what bounds the recursion — a hostile blob can
+// waste a walk, but cannot loop forever.
+//
+// Path characters accumulate newest-first (the trie stores typos reversed), so a
+// match node's typo is the accumulated path read backwards.
+function readAutocorrect(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): CanonAutocorrectEntry[] {
+    const out: CanonAutocorrectEntry[] = []
+    // An empty table is legal — it is how a device is told to drop its
+    // dictionary — and decodes to an empty entry list, not to "no section".
+    if (t.end <= t.start) return out
+
+    const chr = (codes: number[]): string =>
+        codes.map((c) => String.fromCharCode(c)).join('')
+    let truncated = false
+
+    const walk = (off: number, path: number[]): void => {
+        if (truncated) return
+        if (off < 0 || t.start + off >= t.end) {
+            diag.error('autocorrect dictionary truncated')
+            truncated = true
+            return
+        }
+        const r = new ByteReader(bytes)
+        r.seek(t.start + off)
+
+        const need = (n: number): boolean => {
+            if (r.pos + n <= t.end) return true
+            diag.error('autocorrect dictionary truncated')
+            truncated = true
+            return false
+        }
+
+        if (!need(1)) return
+        const header = r.u8()
+
+        if ((header & 0x80) !== 0) {
+            if (!need(2)) return
+            r.u8() // backspaces — always the typo length, which the path gives us
+            const replLen = r.u8()
+            if (!need(replLen)) return
+            const repl: number[] = []
+            for (let i = 0; i < replLen; i++) repl.push(r.u8())
+            out.push({
+                typo: chr([...path].reverse()),
+                correction: chr(repl),
+            })
+        }
+
+        if ((header & 0x01) === 0) {
+            // CHAIN: a run of single-child links, then the next node inline.
+            const chars: number[] = []
+            for (;;) {
+                if (!need(1)) return
+                const ch = r.u8()
+                if (ch === 0) break
+                chars.push(ch)
+            }
+            walk(r.pos - t.start, [...path, ...chars])
+            return
+        }
+
+        // BRANCH: sorted {char, u16 offset} pairs, terminated by a NUL char.
+        for (;;) {
+            if (!need(1)) return
+            const ch = r.u8()
+            if (ch === 0) break
+            if (!need(2)) return
+            const child = r.u16()
+            if (child <= off) {
+                diag.error(
+                    `autocorrect dictionary branch at ${off} points backwards to ${child}`,
+                )
+                return
+            }
+            walk(child, [...path, ch])
+            if (truncated) return
+        }
+    }
+
+    walk(0, [])
+    return truncated ? [] : out
 }
 
 // Inverse of lowerSemanticAction (index.ts): the {kind, code, arg0, arg1} wire
