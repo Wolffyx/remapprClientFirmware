@@ -162,11 +162,27 @@ describe('qmk/actions — keycode codec', () => {
             [1],
             ['Base', 'Lower'],
         )
-        expect(action.label.primary).toContain('Lower')
+        expect(action.label.paramText).toContain('Lower')
+        // The action-type name stays in the header slot, not the key legend.
+        expect(action.label.primary).toBe('Momentary Layer')
+    })
+
+    it('binding code carries the symbolic QMK keycode', () => {
+        expect(buildQmkKeyAction(QMK_KIND.BASIC, [0x14]).label.bindingPrefix)
+            .toBe('KC_Q')
+        expect(buildQmkKeyAction(QMK_KIND.MOMENTARY, [3]).label.bindingPrefix)
+            .toBe('MO(3)')
+        expect(
+            buildQmkKeyAction(QMK_KIND.MOD_TAP, [0x02, 0x04]).label
+                .bindingPrefix,
+        ).toBe('MT(KC_LSFT, KC_A)')
+        // Keychron vendor range arrives as a BASIC keycode.
+        expect(buildQmkKeyAction(QMK_KIND.BASIC, [0x7e0c]).label.bindingPrefix)
+            .toBe('QK_KB_12')
     })
 
     it('label falls back to hex for unknown basic codes', () => {
         const a = buildQmkKeyAction(QMK_KIND.BASIC, [0xab])
-        expect(a.label.primary).toMatch(/0xab/i)
+        expect(a.label.paramText).toMatch(/0xab/i)
     })
 })

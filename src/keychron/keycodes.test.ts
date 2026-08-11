@@ -37,7 +37,8 @@ describe('decodeKeychronKeycode — composite icon legends', () => {
 
     it('non-icon keycodes keep their plain-text label', () => {
         const lopt = at(0x00)
-        expect(lopt?.label.primary).toBe('LOpt')
+        expect(lopt?.label.paramText).toBe('LOpt')
+        expect(lopt?.label.primary).toBe('Key Press')
         expect(lopt?.label.paramParts).toBeUndefined()
     })
 })

@@ -1,90 +1,10 @@
 // Pattern check: no GoF pattern (-) — rejected — pure keymap.c emitter; string template generation from neutral Keymap.
 // QMK keymap.c emitter — generates a `keymaps[][MATRIX_ROWS][MATRIX_COLS]`
-// table. Symbolic name table covers common HID basic keycodes; everything
-// else falls through to raw 0xNNNN literals.
+// table. Cells use the shared symbolic keycode emitter (qmkBindingCode);
+// keycodes outside its table fall through to raw 0xNNNN literals.
 
-import type { ExportedFile, KeyAction, Keymap } from '@firmware/types'
-import { encodeKeycode, QMK_KIND } from './actions'
-
-const QMK_BASIC_NAMES: Record<number, string> = {
-    0x00: 'KC_NO',
-    0x29: 'KC_ESC',
-    0x28: 'KC_ENT',
-    0x2a: 'KC_BSPC',
-    0x2b: 'KC_TAB',
-    0x2c: 'KC_SPC',
-    0x2d: 'KC_MINS',
-    0x2e: 'KC_EQL',
-    0x2f: 'KC_LBRC',
-    0x30: 'KC_RBRC',
-    0x31: 'KC_BSLS',
-    0x33: 'KC_SCLN',
-    0x34: 'KC_QUOT',
-    0x35: 'KC_GRV',
-    0x36: 'KC_COMM',
-    0x37: 'KC_DOT',
-    0x38: 'KC_SLSH',
-    0x39: 'KC_CAPS',
-    0x4c: 'KC_DEL',
-    0x4f: 'KC_RGHT',
-    0x50: 'KC_LEFT',
-    0x51: 'KC_DOWN',
-    0x52: 'KC_UP',
-}
-
-const QMK_MOD_NAMES: Record<number, string> = {
-    0x01: 'KC_LCTL',
-    0x02: 'KC_LSFT',
-    0x04: 'KC_LALT',
-    0x08: 'KC_LGUI',
-    0x10: 'KC_RCTL',
-    0x20: 'KC_RSFT',
-    0x40: 'KC_RALT',
-    0x80: 'KC_RGUI',
-}
-
-function basicName(code: number): string {
-    if (QMK_BASIC_NAMES[code]) return QMK_BASIC_NAMES[code]
-    if (code >= 0x04 && code <= 0x1d) {
-        return `KC_${String.fromCharCode('A'.charCodeAt(0) + (code - 0x04))}`
-    }
-    if (code >= 0x1e && code <= 0x26) {
-        return `KC_${(code - 0x1d).toString()}`
-    }
-    if (code === 0x27) return 'KC_0'
-    if (code >= 0x3a && code <= 0x45) {
-        return `KC_F${code - 0x39}`
-    }
-    return `0x${code.toString(16).padStart(4, '0').toUpperCase()}`
-}
-
-function modName(modBit: number): string {
-    return QMK_MOD_NAMES[modBit] ?? `0x${modBit.toString(16)}`
-}
-
-function symbolicName(action: KeyAction): string {
-    const p = action.params
-    switch (action.kind) {
-        case QMK_KIND.NONE:
-            return 'KC_NO'
-        case QMK_KIND.TRANS:
-            return 'KC_TRNS'
-        case QMK_KIND.BASIC:
-            return basicName(p[0] ?? 0)
-        case QMK_KIND.MOD_TAP:
-            return `MT(${modName(p[0] ?? 0)}, ${basicName(p[1] ?? 0)})`
-        case QMK_KIND.LAYER_TAP:
-            return `LT(${p[0] ?? 0}, ${basicName(p[1] ?? 0)})`
-        case QMK_KIND.MOMENTARY:
-            return `MO(${p[0] ?? 0})`
-        case QMK_KIND.TOGGLE_LAYER:
-            return `TG(${p[0] ?? 0})`
-        default: {
-            const kc = encodeKeycode(action)
-            return `0x${kc.toString(16).padStart(4, '0').toUpperCase()}`
-        }
-    }
-}
+import type { ExportedFile, Keymap } from '@firmware/types'
+import { qmkBindingCode } from './actions'
 
 export function emitKeymapC(keymap: Keymap, deviceName: string): string {
     const lines: string[] = []
@@ -96,7 +16,7 @@ export function emitKeymapC(keymap: Keymap, deviceName: string): string {
     lines.push(``)
     lines.push(`const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {`)
     keymap.layers.forEach((layer, idx) => {
-        const cells = layer.keys.map(symbolicName)
+        const cells = layer.keys.map((k) => qmkBindingCode(k.kind, k.params))
         const wrapped: string[] = []
         for (let i = 0; i < cells.length; i += 8) {
             wrapped.push('        ' + cells.slice(i, i + 8).join(', '))
