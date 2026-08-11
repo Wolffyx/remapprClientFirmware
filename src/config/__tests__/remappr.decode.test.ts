@@ -1134,3 +1134,74 @@ describe('decodeRemapprBlob node linkProfile (§8 N6 TBL_LINK_PROFILE)', () => {
         )
     })
 })
+
+describe('decodeRemapprBlob TBL_AUTOCORRECT (id 24, §5.2-E)', () => {
+    // pattern-check: skip — round-trip test data, no production logic
+    const withDict = (entries: string): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "AC", "target": "zmk" }, ${kb(2)},
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+        "autocorrect": { "entries": [${entries}] }
+    }`
+
+    it('round-trips a dictionary through encode → decode → re-encode', () => {
+        roundTrips(
+            withDict(
+                '{ "typo": "teh", "correction": "the" },' +
+                    '{ "typo": "thsi", "correction": "this" },' +
+                    '{ "typo": "recieve", "correction": "receive" }',
+            ),
+        )
+    })
+
+    it('recovers the entries themselves, not just stable bytes', () => {
+        const cfg = parseKeymap(
+            withDict(
+                '{ "typo": "teh", "correction": "the" },' +
+                    '{ "typo": "hte", "correction": "the" },' +
+                    '{ "typo": "youre", "correction": "you\'re" }',
+            ),
+        )
+        const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const decoded = decodeRemapprBlob(blob)
+
+        expect(decoded.code).toBe(DecodeCode.OK)
+        expect(
+            [...(decoded.config!.autocorrect?.entries ?? [])].sort((a, b) =>
+                a.typo.localeCompare(b.typo),
+            ),
+        ).toEqual([
+            { typo: 'hte', correction: 'the' },
+            { typo: 'teh', correction: 'the' },
+            { typo: 'youre', correction: "you're" },
+        ])
+    })
+
+    it('keeps an empty dictionary as a present, empty section', () => {
+        // An empty table is how a device is told to DROP its dictionary — losing
+        // the section on decode would silently turn a clear into "leave it".
+        const cfg = parseKeymap(withDict(''))
+        const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
+        const decoded = decodeRemapprBlob(blob)
+
+        expect(decoded.config!.autocorrect).toEqual({ entries: [] })
+        roundTrips(withDict(''))
+    })
+
+    it('reports a branch offset that points backwards instead of looping', () => {
+        // The branch's only child points at offset 0 — the branch node itself.
+        // The firmware validator rejects that for the same reason: it makes the
+        // trie cyclic, and a decoder that followed it would never terminate.
+        const bad = new BlobBuilder()
+            .layerTable(1, 2, 200, 5)
+            .behaviorTable([rec({ type: BehaviorType.Key, tap: 0x04 })])
+            .bindingTable([0, 0])
+            .autocorrectTable(Uint8Array.from([0x01, 0x68, 0x00, 0x00, 0x00]))
+            .finalize(1, 1, 1)
+        const decoded = decodeRemapprBlob(bad)
+
+        expect(
+            decoded.diagnostics.some((d) => /points backwards/.test(d.message)),
+        ).toBe(true)
+    })
+})

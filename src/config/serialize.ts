@@ -514,6 +514,11 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
         ...(km.actionBindings
             ? { actionBindings: structuredClone(km.actionBindings) }
             : {}),
+        // The dictionary round-trips verbatim; canonical already lowercased the
+        // typos, and re-capitalising them would change nothing but the diff.
+        ...(km.autocorrect
+            ? { autocorrect: structuredClone(km.autocorrect) }
+            : {}),
         // Whole-node sections round-trip verbatim (opaque data, no surface sugar).
         ...(km.node ? { node: structuredClone(km.node) } : {}),
         ...(km.firmware ? { firmware: structuredClone(km.firmware) } : {}),
