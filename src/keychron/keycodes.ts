@@ -24,18 +24,32 @@ interface KeychronKeycode {
     label: KeyLabel
 }
 
+// Header tag (action-type slot) for a Keychron keycode. `primary` is rendered
+// as the cap *header*, so the key's own text belongs in `paramText` — see the
+// KeyLabel slot contract in src/firmware/labels.ts.
+function headerFor(kind: string): string {
+    if (kind.startsWith('bt_') || kind === 'p2p4g' || kind === 'bat_lvl') {
+        return 'Wireless'
+    }
+    if (kind.endsWith('opt') || kind.endsWith('cmd')) return 'Key Press'
+    return 'System'
+}
+
 function kc(
     offset: number,
-    _kind: string,
-    primary: string,
+    kind: string,
+    text: string,
     description: string,
     secondary?: string,
 ): KeychronKeycode {
     const label: KeyLabel = {
-        primary,
+        primary: headerFor(kind),
+        paramText: text,
+        valueLong: description,
         description,
         ...(secondary ? { secondary } : {}),
-        bindingPrefix: 'KC',
+        // Binding-code display mode shows the wire token, not a family tag.
+        bindingPrefix: `QK_KB_${offset}`,
     }
     return { offset, label }
 }
@@ -105,9 +119,10 @@ export function decodeKeychronKeycode(keycode: number): KeyAction | null {
         kind: 'qmk:basic',
         params: [keycode],
         label: {
-            primary: `0x${keycode.toString(16).toUpperCase()}`,
+            primary: 'Keychron',
+            paramText: `0x${keycode.toString(16).toUpperCase()}`,
             description: 'Keychron custom keycode (unknown)',
-            bindingPrefix: 'KC',
+            bindingPrefix: `QK_KB_${keycode - KEYCHRON_QK_KB_BASE}`,
         },
     }
 }
