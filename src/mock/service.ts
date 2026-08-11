@@ -51,6 +51,7 @@ import {
     parseKeymap,
     serializeKeymap,
     LINK_KNOB_FIELDS,
+    type CanonAutocorrectEntry,
     type CanonConditionalLayer,
     type CanonHoldTapDef,
     type CanonModMorph,
@@ -814,6 +815,20 @@ export class MockKeyboardService
                 ifLayers: [...c.ifLayers],
                 thenLayer: c.thenLayer,
             })),
+        }
+        this.configEdited = true
+        this.markPending(true)
+    }
+
+    getAutocorrect(): CanonAutocorrectEntry[] {
+        return (this.cfg.autocorrect?.entries ?? []).map((e) => ({ ...e }))
+    }
+
+    setAutocorrect(entries: CanonAutocorrectEntry[]): void {
+        this.requireUnlocked()
+        this.cfg = {
+            ...this.cfg,
+            autocorrect: { entries: entries.map((e) => ({ ...e })) },
         }
         this.configEdited = true
         this.markPending(true)
