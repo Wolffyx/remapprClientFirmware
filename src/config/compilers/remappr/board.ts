@@ -17,7 +17,12 @@ import { type KeymapCompiler, registerCompiler, runCompile } from '../../compile
 import type { DiagnosticBag } from '../../diagnostics'
 import { resolveController } from '../../controller'
 import { matrixDims, resolveKeyMatrix } from '../../matrix'
-import { gpioSpec, type PinRole, resolveZmkPin } from '../../pinmaps'
+import {
+    gpioSpec,
+    type PinRole,
+    resolveStPin,
+    resolveZmkPin,
+} from '../../pinmaps'
 import type {
     CanonAction,
     CanonGeometry,
@@ -59,8 +64,13 @@ function visualRowCounts(keys: CanonGeometry[]): number[] {
 }
 
 /** Resolve one GPIO entry to a devicetree spec (inside `<...>`). A raw `&`-spec
- *  passes through verbatim; a friendly label resolves on a known controller board,
- *  else emits unchanged with a diagnostic. */
+ *  passes through verbatim; a friendly label resolves against the controller's
+ *  pin table, then — for ST parts, where the silkscreen name IS the mapping —
+ *  against the generic port-pin form; else it emits unchanged with a diagnostic.
+ *
+ *  The ST fallback is not board-specific on purpose: it is what makes a generated
+ *  STM32 shield buildable at all. Before it, `rows: ["PE11"]` emitted
+ *  `row-gpios = <PE11>` — not valid devicetree. */
 function resolveGpio(
     raw: string,
     role: PinRole,
@@ -70,7 +80,7 @@ function resolveGpio(
 ): string {
     const s = raw.trim()
     if (s.startsWith('&')) return s
-    const core = board ? resolveZmkPin(board, s) : null
+    const core = (board ? resolveZmkPin(board, s) : null) ?? resolveStPin(s)
     if (core) return gpioSpec(core, role)
     diag.warn(
         `unresolved GPIO label "${raw}" — emitting verbatim; set board.controller ` +

@@ -330,3 +330,61 @@ describe('remappr-board shield compiler', () => {
         expect(mod).toContain('board_root: .')
     })
 })
+
+// The bench board's own wiring, written the way a user writes it: ST silkscreen
+// labels, not raw devicetree specs.
+const STM_LABELS = parseKeymap(`{
+    "schemaVersion": 1, "kind": "remappr.keymap",
+    "meta": { "name": "U5 Label Pad", "target": "zmk" },
+    "keyboard": { "id": "u5a5_labels", "name": "U5 Label Pad", "keys": [
+        {"x":0,"y":0},{"x":1,"y":0},{"x":0,"y":1},{"x":1,"y":1}
+    ]},
+    "layers": [ { "name": "base", "bindings": ["A","B","C","D"] } ],
+    "board": { "matrix": { "diode": "row2col",
+        "rows": ["PE11", "PA3"], "cols": ["PF15", "pa2"] } }
+}`)
+
+describe('board-gen ST port-pin labels', () => {
+    const overlay = (cfg: typeof STM_LABELS): string =>
+        String(
+            getCompiler('remappr-board')!
+                .compile(cfg)
+                .files.find((f) => f.filename.endsWith('.overlay'))!.content,
+        )
+
+    it('resolves silkscreen labels to real gpio phandles', () => {
+        const dt = overlay(STM_LABELS)
+        expect(dt).toContain('<&gpioe 11')
+        expect(dt).toContain('<&gpioa 3')
+        expect(dt).toContain('<&gpiof 15')
+        // Case-insensitive: a lower-case label is the same pin.
+        expect(dt).toContain('<&gpioa 2')
+        // The bug this locks: the label emitted verbatim is not valid devicetree.
+        expect(dt).not.toContain('<PE11>')
+        expect(dt).not.toMatch(/<P[A-K]\d/)
+    })
+
+    it('resolves without a controller and raises no diagnostic', () => {
+        // Every Zephyr STM32 board labels its ports the same way, so this needs
+        // no per-board table — and must not warn as if it were unresolved.
+        const out = getCompiler('remappr-board')!.compile(STM_LABELS)
+        expect(
+            out.diagnostics.filter((d) => /unresolved GPIO/.test(d.message)),
+        ).toHaveLength(0)
+    })
+
+    it('leaves a label that is not a port-pin alone, with a warning', () => {
+        const odd = parseKeymap(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "Odd", "target": "zmk" },
+            "keyboard": { "id": "odd", "name": "Odd", "keys": [
+                {"x":0,"y":0},{"x":1,"y":0} ]},
+            "layers": [ { "name": "base", "bindings": ["A","B"] } ],
+            "board": { "matrix": { "rows": ["PZ3"], "cols": ["PA99"] } }
+        }`)
+        const out = getCompiler('remappr-board')!.compile(odd)
+        expect(
+            out.diagnostics.filter((d) => /unresolved GPIO/.test(d.message)),
+        ).toHaveLength(2)
+    })
+})
