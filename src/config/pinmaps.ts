@@ -144,6 +144,25 @@ export function resolveQmkPin(
     return table?.[up] ?? up
 }
 
+/** An ST port-pin silkscreen label ("PE11", "PA3") → its devicetree phandle+pin
+ *  core ("&gpioe 11"), or null when the label is not that shape.
+ *
+ *  Unlike the tables above this needs no per-board data: every Zephyr STM32 board
+ *  labels its GPIO controllers `gpio<port>` with the pin as the cell, so the
+ *  silkscreen name IS the mapping. Without it a generated STM32 shield emitted
+ *  the label verbatim — `row-gpios = <PE11>` — which is not valid devicetree, so
+ *  the board-gen output for every ST board failed to build.
+ *
+ *  Ports A..K, pins 0..15; anything else returns null so the caller still warns
+ *  rather than inventing a node that does not exist. */
+export function resolveStPin(label: string): string | null {
+    const m = /^P([A-K])(\d{1,2})$/.exec(norm(label))
+    if (!m) return null
+    const pin = Number(m[2])
+    if (pin > 15) return null
+    return `&gpio${m[1].toLowerCase()} ${pin}`
+}
+
 /** True when remappr has a ZMK pin table for this board. */
 export function hasZmkPinMap(board: string | undefined): boolean {
     return Boolean(board && ZMK_UP[board])
