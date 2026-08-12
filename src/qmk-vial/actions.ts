@@ -32,28 +32,40 @@ function buildVialLabel(
     params: number[],
     customNames?: string[],
 ): KeyLabel {
+    // `primary` = action-type tag (cap header); the value glyph goes in
+    // `paramText` / `paramParts` so it renders on the key face, not as a tag.
     switch (kind) {
         case VIAL_KIND.TAP_DANCE:
             return {
-                primary: `TD ${params[0] ?? 0}`,
+                primary: 'Tap-Dance',
+                paramText: `TD ${params[0] ?? 0}`,
+                bindingPrefix: `TD(${params[0] ?? 0})`,
                 description: `Tap-dance #${params[0] ?? 0}`,
             }
         case VIAL_KIND.MACRO:
             return {
-                primary: `M${params[0] ?? 0}`,
+                primary: 'Macro',
+                paramText: `M${params[0] ?? 0}`,
+                bindingPrefix: `MACRO${(params[0] ?? 0).toString().padStart(2, '0')}`,
                 description: `Dynamic macro #${params[0] ?? 0}`,
             }
         case VIAL_KIND.RESET:
             return {
-                primary: 'Reset',
+                primary: 'Bootloader',
+                paramText: 'Boot',
+                bindingPrefix: 'QK_BOOT',
                 description: 'Jump to bootloader',
                 paramParts: [{ icon: 'bootloader', text: 'Boot' }],
             }
         case VIAL_KIND.USER: {
             const idx = params[0] ?? 0
             const name = customNames?.[idx]
+            const text = name ?? `USER${idx.toString().padStart(2, '0')}`
             return {
-                primary: name ?? `USER${idx.toString().padStart(2, '0')}`,
+                primary: 'Custom',
+                paramText: text,
+                valueLong: text,
+                bindingPrefix: `USER${idx.toString().padStart(2, '0')}`,
                 description: name
                     ? `User keycode: ${name}`
                     : `Custom keycode #${idx}`,

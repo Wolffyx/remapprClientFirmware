@@ -4,6 +4,7 @@
 // exchanged over the wire, independently compiled, not copied firmware source.
 
 import { CATALOG } from '@firmware/catalog/entries'
+import type { CatalogEntry } from '@firmware/catalog/types'
 import type { KeycodeCodec } from '@firmware/codec'
 import type { ActionType, KeyAction, KeyLabel } from '@firmware/types'
 import { ProtocolError } from '@firmware/errors'
@@ -138,22 +139,163 @@ function layerName(layer: number, layerNames?: string[]): string {
     return `L${layer}`
 }
 
+// KeyLabel slot contract (see src/firmware/labels.ts): `primary` is the
+// action-type tag rendered in the cap *header*; the value glyph belongs in
+// `primaryUsage` / `paramText` / `paramParts` and renders as the key legend.
+// Keep them apart — a value left in `primary` shows up as a header tag on an
+// otherwise blank cap face.
+const KIND_DISPLAY_NAME: Record<string, string> = Object.fromEntries(
+    QMK_ACTION_TYPES.map((t) => [t.id, t.displayName]),
+)
+
+const kindName = (kind: string): string => KIND_DISPLAY_NAME[kind] ?? kind
+
+// HID Keyboard/Keypad usage page — QMK basic keycodes ARE page-7 usage ids, so
+// page-encode them ((page << 16) | id) the way the renderer's usage tables
+// expect instead of passing the raw 8-bit code (which resolved to page 0 and
+// rendered nothing).
+const HID_KEYBOARD_PAGE = 0x07
+
+// ---- Binding codes (KeyLabel.bindingPrefix) ------------------------------
+// The cap's "Binding code" display mode shows `bindingPrefix` — the token a
+// user would write in their keymap. For QMK that's the symbolic keycode
+// (KC_Q, MO(3), MT(KC_LSFT, KC_A)); the keymap.c emitter renders the same
+// tokens, so both read off these helpers.
+
+const QMK_BASIC_CODE_NAMES: Record<number, string> = {
+    0x00: 'KC_NO',
+    0x28: 'KC_ENT',
+    0x29: 'KC_ESC',
+    0x2a: 'KC_BSPC',
+    0x2b: 'KC_TAB',
+    0x2c: 'KC_SPC',
+    0x2d: 'KC_MINS',
+    0x2e: 'KC_EQL',
+    0x2f: 'KC_LBRC',
+    0x30: 'KC_RBRC',
+    0x31: 'KC_BSLS',
+    0x33: 'KC_SCLN',
+    0x34: 'KC_QUOT',
+    0x35: 'KC_GRV',
+    0x36: 'KC_COMM',
+    0x37: 'KC_DOT',
+    0x38: 'KC_SLSH',
+    0x39: 'KC_CAPS',
+    0x4c: 'KC_DEL',
+    0x4f: 'KC_RGHT',
+    0x50: 'KC_LEFT',
+    0x51: 'KC_DOWN',
+    0x52: 'KC_UP',
+}
+
+const QMK_MOD_CODE_NAMES: Record<number, string> = {
+    0x01: 'KC_LCTL',
+    0x02: 'KC_LSFT',
+    0x04: 'KC_LALT',
+    0x08: 'KC_LGUI',
+    0x10: 'KC_RCTL',
+    0x20: 'KC_RSFT',
+    0x40: 'KC_RALT',
+    0x80: 'KC_RGUI',
+}
+
+// Keychron vendor range — QK_KB_0 … QK_KB_31 arrive as BASIC keycodes.
+const QK_KB_BASE = 0x7e00
+const QK_KB_END = 0x7e1f
+
+export function qmkBasicCodeName(code: number): string {
+    const named = QMK_BASIC_CODE_NAMES[code]
+    if (named) return named
+    if (code >= 0x04 && code <= 0x1d) {
+        return `KC_${String.fromCharCode('A'.charCodeAt(0) + (code - 0x04))}`
+    }
+    if (code >= 0x1e && code <= 0x26) return `KC_${code - 0x1d}`
+    if (code === 0x27) return 'KC_0'
+    if (code >= 0x3a && code <= 0x45) return `KC_F${code - 0x39}`
+    if (code >= QK_KB_BASE && code <= QK_KB_END) {
+        return `QK_KB_${code - QK_KB_BASE}`
+    }
+    return `0x${code.toString(16).padStart(4, '0').toUpperCase()}`
+}
+
+export function qmkModCodeName(modBit: number): string {
+    return QMK_MOD_CODE_NAMES[modBit] ?? `0x${modBit.toString(16)}`
+}
+
+/** Symbolic QMK keycode for a kind + params, e.g. `MO(3)` / `KC_Q`. */
+export function qmkBindingCode(kind: string, params: number[]): string {
+    const p = params
+    switch (kind) {
+        case QMK_KIND.NONE:
+            return 'KC_NO'
+        case QMK_KIND.TRANS:
+            return 'KC_TRNS'
+        case QMK_KIND.BASIC:
+            return qmkBasicCodeName(p[0] ?? 0)
+        case QMK_KIND.MOD_TAP:
+            return `MT(${qmkModCodeName(p[0] ?? 0)}, ${qmkBasicCodeName(p[1] ?? 0)})`
+        case QMK_KIND.LAYER_TAP:
+            return `LT(${p[0] ?? 0}, ${qmkBasicCodeName(p[1] ?? 0)})`
+        case QMK_KIND.LAYER_MOD:
+            return `LM(${p[0] ?? 0}, ${qmkModCodeName(p[1] ?? 0)})`
+        case QMK_KIND.MOMENTARY:
+            return `MO(${p[0] ?? 0})`
+        case QMK_KIND.TOGGLE_LAYER:
+            return `TG(${p[0] ?? 0})`
+        case QMK_KIND.TO_LAYER:
+            return `TO(${p[0] ?? 0})`
+        case QMK_KIND.DEFAULT_LAYER:
+            return `DF(${p[0] ?? 0})`
+        case QMK_KIND.PERSISTENT_DEFAULT_LAYER:
+            return `PDF(${p[0] ?? 0})`
+        case QMK_KIND.ONE_SHOT_LAYER:
+            return `OSL(${p[0] ?? 0})`
+        case QMK_KIND.ONE_SHOT_MOD:
+            return `OSM(${qmkModCodeName(p[0] ?? 0)})`
+        case QMK_KIND.TAP_TOGGLE_LAYER:
+            return `TT(${p[0] ?? 0})`
+        case QMK_KIND.SWAP_HANDS_TAP:
+            return `SH_T(${qmkBasicCodeName(p[0] ?? 0)})`
+        default:
+            return kind
+    }
+}
+
 export function buildLabel(
+    kind: string,
+    params: number[],
+    layerNames?: string[],
+): KeyLabel {
+    return {
+        ...buildValueLabel(kind, params, layerNames),
+        bindingPrefix: qmkBindingCode(kind, params),
+    }
+}
+
+function buildValueLabel(
     kind: string,
     params: number[],
     layerNames?: string[],
 ): KeyLabel {
     switch (kind) {
         case QMK_KIND.NONE:
-            return { primary: 'No', description: 'KC_NO' }
+            return { primary: kindName(kind), description: 'KC_NO' }
         case QMK_KIND.TRANS:
-            return { primary: '▽', description: 'Transparent (KC_TRNS)' }
+            return {
+                primary: kindName(kind),
+                paramText: '▽',
+                description: 'Transparent (KC_TRNS)',
+            }
         case QMK_KIND.BASIC: {
             const code = params[0] ?? 0
-            const primary = basicKeyLabel(code)
+            const text = basicKeyLabel(code)
             return {
-                primary,
-                primaryUsage: code,
+                primary: kindName(kind),
+                ...(code > 0 && code <= 0xff
+                    ? { primaryUsage: (HID_KEYBOARD_PAGE << 16) | code }
+                    : {}),
+                paramText: text,
+                valueLong: text,
                 description: `Basic 0x${code.toString(16).padStart(2, '0')}`,
             }
         }
@@ -161,7 +303,9 @@ export function buildLabel(
             const mod = params[0] ?? 0
             const tap = params[1] ?? 0
             return {
-                primary: basicKeyLabel(tap),
+                primary: kindName(kind),
+                paramText: basicKeyLabel(tap),
+                valueLong: basicKeyLabel(tap),
                 secondary: modLabel(mod),
                 description: `MT(${modLabel(mod)}, ${basicKeyLabel(tap)})`,
             }
@@ -170,7 +314,9 @@ export function buildLabel(
             const layer = params[0] ?? 0
             const tap = params[1] ?? 0
             return {
-                primary: basicKeyLabel(tap),
+                primary: kindName(kind),
+                paramText: basicKeyLabel(tap),
+                valueLong: basicKeyLabel(tap),
                 secondary: layerName(layer, layerNames),
                 description: `LT(${layerName(layer, layerNames)}, ${basicKeyLabel(tap)})`,
             }
@@ -178,28 +324,36 @@ export function buildLabel(
         case QMK_KIND.MOMENTARY: {
             const layer = params[0] ?? 0
             return {
-                primary: `MO ${layerName(layer, layerNames)}`,
+                primary: kindName(kind),
+                paramText: layerName(layer, layerNames),
+                valueLong: layerName(layer, layerNames),
                 description: `MO(${layer})`,
             }
         }
         case QMK_KIND.TOGGLE_LAYER: {
             const layer = params[0] ?? 0
             return {
-                primary: `TG ${layerName(layer, layerNames)}`,
+                primary: kindName(kind),
+                paramText: layerName(layer, layerNames),
+                valueLong: layerName(layer, layerNames),
                 description: `TG(${layer})`,
             }
         }
         case QMK_KIND.DEFAULT_LAYER: {
             const layer = params[0] ?? 0
             return {
-                primary: `DF ${layerName(layer, layerNames)}`,
+                primary: kindName(kind),
+                paramText: layerName(layer, layerNames),
+                valueLong: layerName(layer, layerNames),
                 description: `DF(${layer})`,
             }
         }
         case QMK_KIND.PERSISTENT_DEFAULT_LAYER: {
             const layer = params[0] ?? 0
             return {
-                primary: `PDF ${layerName(layer, layerNames)}`,
+                primary: kindName(kind),
+                paramText: layerName(layer, layerNames),
+                valueLong: layerName(layer, layerNames),
                 description: `PDF(${layer})`,
             }
         }
@@ -207,7 +361,9 @@ export function buildLabel(
             const layer = params[0] ?? 0
             const mod = params[1] ?? 0
             return {
-                primary: `LM ${layerName(layer, layerNames)}`,
+                primary: kindName(kind),
+                paramText: layerName(layer, layerNames),
+                valueLong: layerName(layer, layerNames),
                 secondary: modLabel(mod),
                 description: `LM(${layer}, ${modLabel(mod)})`,
             }
@@ -215,21 +371,27 @@ export function buildLabel(
         case QMK_KIND.ONE_SHOT_LAYER: {
             const layer = params[0] ?? 0
             return {
-                primary: `OSL ${layerName(layer, layerNames)}`,
+                primary: kindName(kind),
+                paramText: layerName(layer, layerNames),
+                valueLong: layerName(layer, layerNames),
                 description: `OSL(${layer})`,
             }
         }
         case QMK_KIND.ONE_SHOT_MOD: {
             const mod = params[0] ?? 0
             return {
-                primary: `OSM ${modLabel(mod)}`,
+                primary: kindName(kind),
+                paramText: modLabel(mod),
+                valueLong: modLabel(mod),
                 description: `OSM(${modLabel(mod)})`,
             }
         }
         case QMK_KIND.SWAP_HANDS_TAP: {
             const tap = params[0] ?? 0
             return {
-                primary: basicKeyLabel(tap),
+                primary: kindName(kind),
+                paramText: basicKeyLabel(tap),
+                valueLong: basicKeyLabel(tap),
                 secondary: 'SH',
                 description: `SH_T(${basicKeyLabel(tap)})`,
             }
@@ -237,19 +399,62 @@ export function buildLabel(
         case QMK_KIND.TO_LAYER: {
             const layer = params[0] ?? 0
             return {
-                primary: `TO ${layerName(layer, layerNames)}`,
+                primary: kindName(kind),
+                paramText: layerName(layer, layerNames),
+                valueLong: layerName(layer, layerNames),
                 description: `TO(${layer})`,
             }
         }
         case QMK_KIND.TAP_TOGGLE_LAYER: {
             const layer = params[0] ?? 0
             return {
-                primary: `TT ${layerName(layer, layerNames)}`,
+                primary: kindName(kind),
+                paramText: layerName(layer, layerNames),
+                valueLong: layerName(layer, layerNames),
                 description: `TT(${layer})`,
             }
         }
         default:
-            return { primary: kind }
+            return { primary: kindName(kind) }
+    }
+}
+
+// Header tag for a catalog-resolved keycode, keyed off the canonical id's
+// domain — a wireless/system keycode routed through QMK_KIND.BASIC is not a
+// "Key Press" and should not be tagged as one.
+const DOMAIN_HEADER: Record<string, string> = {
+    key: 'Key Press',
+    mod: 'Key Press',
+    media: 'Media',
+    consumer: 'Media',
+    os: 'System',
+    system: 'System',
+    wireless: 'Wireless',
+    mouse: 'Mouse',
+    light: 'Lighting',
+    rgb: 'Lighting',
+    backlight: 'Lighting',
+    macro: 'Macro',
+    combo: 'Combo',
+}
+
+// Catalog entry → cap legend (`paramText`), keeping the action-type tag in the
+// header slot. Preserves any `paramParts` icon legend already on the label.
+function withCatalogLabel(label: KeyLabel, entry: CatalogEntry): KeyLabel {
+    // Keycodes outside the symbolic table fall back to a raw 0xNNNN literal —
+    // prefer the entry's QMK spelling (KC_*/QK_*) from external-names when it
+    // has one, so binding-code mode shows a real token.
+    const alias =
+        label.bindingPrefix?.startsWith('0x') === true
+            ? entry.aliases?.find((a) => /^(KC_|QK_)/.test(a))
+            : undefined
+    return {
+        ...label,
+        primary: DOMAIN_HEADER[entry.id.split('.')[0]] ?? label.primary,
+        ...(alias ? { bindingPrefix: alias } : {}),
+        paramText: entry.label,
+        valueLong: entry.name,
+        description: entry.name,
     }
 }
 
@@ -270,11 +475,7 @@ export function buildQmkKeyAction(
             action.canonicalId = decoded.canonicalId
             const entry = CATALOG_BY_ID.get(decoded.canonicalId)
             if (entry) {
-                action.label = {
-                    ...action.label,
-                    primary: entry.label,
-                    description: entry.name,
-                }
+                action.label = withCatalogLabel(action.label, entry)
             }
         }
     }
@@ -435,11 +636,7 @@ export function relabelQmkLayer(
                 return {
                     ...k,
                     canonicalId: decoded!.canonicalId,
-                    label: {
-                        ...label,
-                        primary: entry.label,
-                        description: entry.name,
-                    },
+                    label: withCatalogLabel(label, entry),
                 }
             }
         }
