@@ -21,6 +21,8 @@ import {
     getMiscProtocolVersionCmd,
     getProtocolVersionCmd,
     getSupportFeatureCmd,
+    getDefaultLayerCmd,
+    parseDefaultLayer,
     KEYCHRON_PAYLOAD_SIZE,
     KEYCHRON_USAGE,
     KEYCHRON_USAGE_PAGE,
@@ -42,6 +44,21 @@ import { getBoardById, type KeychronBoardPreset, matchBoard } from './boards'
 
 const PROBE_DEADLINE_MS = 1500
 const KEYCHRON_VID = 0x3434
+
+// Stand-in for a firmware that doesn't implement 0xA2 GET_SUPPORT_FEATURE.
+const EMPTY_FEATURES: FeatureFlags = {
+    defaultLayer: false,
+    bluetooth: false,
+    p24g: false,
+    analogMatrix: false,
+    stateNotify: false,
+    dynamicDebounce: false,
+    snapClick: false,
+    keychronRgb: false,
+    quickStart: false,
+    nkro: false,
+    raw: 0,
+}
 
 // VIA does not expose matrix dimensions over the protocol — clients
 // load them from the per-board keyboard.json. K5 Max default = 6×21.
@@ -90,7 +107,7 @@ async function probeKeychronSession(
             await client.close().catch(() => undefined)
             return null
         }
-        if (proto.protocolVersion < 0x02) {
+        if (proto.protocolVersion < 0x01) {
             await client.close().catch(() => undefined)
             return null
         }
@@ -106,11 +123,19 @@ async function probeKeychronSession(
             // Optional.
         }
 
-        const featResp = await client.send(
-            getSupportFeatureCmd(),
-            PROBE_DEADLINE_MS,
-        )
-        const feats = parseFeatureFlags(featResp)
+        // Pre-0xA2 firmwares (older wired K-series, protocol v1) don't answer
+        // the feature query. Treat that as "no advertised features" instead of
+        // failing the probe — the facades below detect capability by asking.
+        let feats = EMPTY_FEATURES
+        try {
+            const featResp = await client.send(
+                getSupportFeatureCmd(),
+                PROBE_DEADLINE_MS,
+            )
+            feats = parseFeatureFlags(featResp)
+        } catch {
+            // Optional.
+        }
 
         let misc: MiscFeatureFlags | null = null
         let miscNkro = false
@@ -279,7 +304,24 @@ export function createKeychronAdapter(
                 misc: session.misc,
             })
 
-            const layersFacade = session.feats.defaultLayer
+            // Same story as the RGB bit: some firmwares leave the
+            // DEFAULT_LAYER feature bit clear yet still answer 0xA3. Ask the
+            // board directly so the editor can auto-select the hardware layer
+            // (Mac/Win DIP position) the way Keychron Launcher does.
+            let defaultLayerAvailable = session.feats.defaultLayer
+            if (!defaultLayerAvailable) {
+                try {
+                    const resp = await session.client.send(
+                        getDefaultLayerCmd(),
+                        PROBE_DEADLINE_MS,
+                    )
+                    parseDefaultLayer(resp)
+                    defaultLayerAvailable = true
+                } catch {
+                    /* no default-layer query on this board */
+                }
+            }
+            const layersFacade = defaultLayerAvailable
                 ? createLayersFacade(session.client)
                 : null
 
@@ -293,8 +335,10 @@ export function createKeychronAdapter(
                     : undefined
 
             // State-notify pump: subscribe to unsolicited frames and fan
-            // them out to facades that care.
-            if (session.feats.stateNotify) {
+            // them out to facades that care. Boards with an empty 0xA2 word
+            // still push frames, so attach whenever a consumer exists rather
+            // than trusting the STATE_NOTIFY bit alone.
+            if (session.feats.stateNotify || wirelessFacade || layersFacade) {
                 session.client.subscribe((frame) => {
                     const n = parseNotification(frame)
                     wirelessFacade?.onNotification(n)
