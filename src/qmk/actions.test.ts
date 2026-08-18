@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
     buildQmkKeyAction,
+    decodeAsKeyAction,
     decodeKeycode,
     encodeKeycode,
     QMK_KIND,
@@ -179,6 +180,18 @@ describe('qmk/actions — keycode codec', () => {
         // Keychron vendor range arrives as a BASIC keycode.
         expect(buildQmkKeyAction(QMK_KIND.BASIC, [0x7e0c]).label.bindingPrefix)
             .toBe('QK_KB_12')
+    })
+
+    it('keeps the full 16-bit value for vendor codes', () => {
+        // Regression: masking to 8 bits collapsed Keychron QK_KB_2 (Left
+        // Command) onto KC_POST_FAIL and broke picker selection.
+        expect(decodeKeycode(0x7e02)).toEqual({
+            kind: QMK_KIND.BASIC,
+            params: [0x7e02],
+        })
+        expect(encodeKeycode(decodeAsKeyAction(0x7e02))).toBe(0x7e02)
+        expect(buildQmkKeyAction(QMK_KIND.BASIC, [0x7e02]).label.bindingPrefix)
+            .toBe('QK_KB_2')
     })
 
     it('label falls back to hex for unknown basic codes', () => {
