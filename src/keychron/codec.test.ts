@@ -1,6 +1,8 @@
 // Pattern check: no GoF pattern (-) — rejected — vitest unit tests asserting codec encode/decode round-trips for canonical entries; data-driven assertions.
 import { describe, expect, it } from 'vitest'
 
+import { decodeAsKeyAction } from '@firmware/qmk/actions'
+
 import { keychronCodec } from './codec'
 
 describe('KeychronCodec', () => {
@@ -59,6 +61,13 @@ describe('KeychronCodec', () => {
 
     it('returns null for unsupported canonical ids', () => {
         expect(keychronCodec.encode('wireless.nonsense.1')).toBeNull()
+    })
+
+    it('resolves a wire keycode read off the device to a canonical id', () => {
+        // Regression: the QMK decoder masked 0x7E02 down to 0x02, so the
+        // codec saw KC_POST_FAIL and Left Command showed as "POSTFail".
+        const action = decodeAsKeyAction(0x7e02, undefined, keychronCodec)
+        expect(action.canonicalId).toBe('os.mac.lcmd')
     })
 
     it('supports() agrees with encode() result', () => {

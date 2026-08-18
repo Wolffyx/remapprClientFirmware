@@ -186,6 +186,46 @@ const QMK_BASIC_CODE_NAMES: Record<number, string> = {
     0x50: 'KC_LEFT',
     0x51: 'KC_DOWN',
     0x52: 'KC_UP',
+    0x58: 'KC_KP_ENTER',
+    0x7a: 'KC_UNDO',
+    0x7b: 'KC_CUT',
+    0x7c: 'KC_COPY',
+    0x7d: 'KC_PASTE',
+    0x7e: 'KC_FIND',
+    // QMK's own re-use of the basic range (keycode.h): System Control,
+    // Consumer and desktop shortcuts. The catalog entries for these carry
+    // ZMK spellings only, so name them here or the cap header falls back to
+    // a raw 0xNN literal.
+    0xa5: 'KC_SYSTEM_POWER',
+    0xa6: 'KC_SYSTEM_SLEEP',
+    0xa7: 'KC_SYSTEM_WAKE',
+    0xa8: 'KC_AUDIO_MUTE',
+    0xa9: 'KC_AUDIO_VOL_UP',
+    0xaa: 'KC_AUDIO_VOL_DOWN',
+    0xab: 'KC_MEDIA_NEXT_TRACK',
+    0xac: 'KC_MEDIA_PREV_TRACK',
+    0xad: 'KC_MEDIA_STOP',
+    0xae: 'KC_MEDIA_PLAY_PAUSE',
+    0xaf: 'KC_MEDIA_SELECT',
+    0xb0: 'KC_MEDIA_EJECT',
+    0xb1: 'KC_MAIL',
+    0xb2: 'KC_CALCULATOR',
+    0xb3: 'KC_MY_COMPUTER',
+    0xb4: 'KC_WWW_SEARCH',
+    0xb5: 'KC_WWW_HOME',
+    0xb6: 'KC_WWW_BACK',
+    0xb7: 'KC_WWW_FORWARD',
+    0xb8: 'KC_WWW_STOP',
+    0xb9: 'KC_WWW_REFRESH',
+    0xba: 'KC_WWW_FAVORITES',
+    0xbb: 'KC_MEDIA_FAST_FORWARD',
+    0xbc: 'KC_MEDIA_REWIND',
+    0xbd: 'KC_BRIGHTNESS_UP',
+    0xbe: 'KC_BRIGHTNESS_DOWN',
+    0xbf: 'KC_CONTROL_PANEL',
+    0xc0: 'KC_ASSISTANT',
+    0xc1: 'KC_MISSION_CONTROL',
+    0xc2: 'KC_LAUNCHPAD',
 }
 
 const QMK_MOD_CODE_NAMES: Record<number, string> = {
@@ -607,8 +647,12 @@ export function decodeKeycode(kc: number): DecodedKeycode {
         }
         return { kind: QMK_KIND.SWAP_HANDS_TAP, params: [code & 0xff] }
     }
-    // Fallback: treat as raw basic; loses fidelity but never throws.
-    return { kind: QMK_KIND.BASIC, params: [code & 0xff] }
+    // Fallback: treat as raw basic, keeping the full 16-bit value. Masking to
+    // 8 bits used to collapse vendor codes onto unrelated basic keycodes —
+    // a Keychron QK_KB_2 (0x7E02, Left Command) rendered as KC_POST_FAIL.
+    // The codec (KeychronCodec et al.) resolves the canonical id from the
+    // full value, and encodeKeycode round-trips BASIC as 16-bit.
+    return { kind: QMK_KIND.BASIC, params: [code] }
 }
 
 export function decodeAsKeyAction(
