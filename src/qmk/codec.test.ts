@@ -17,8 +17,29 @@ describe('QmkCodec', () => {
         expect(qmkCodec.encode('mouse.cursor.up')?.value).toBe(0x00cd)
     })
 
-    it('encodes media.transport.next to 0xA8', () => {
-        expect(qmkCodec.encode('media.transport.next')?.value).toBe(0x00a8)
+    it('maps the QMK basic-range aliases (0xA5..0xC2)', () => {
+        // These are QMK's own re-use of the basic range, not HID page-7
+        // usages — a Keychron K5 puts KC_BRIGHTNESS_DOWN (0xBE) on Scr-,
+        // which previously decoded as HID "Keypad C".
+        const cases: Array<[string, number]> = [
+            ['sys_ctrl.system_power_down', 0x00a5],
+            ['media.mute', 0x00a8],
+            ['media.volume_increment', 0x00a9],
+            ['media.volume_decrement', 0x00aa],
+            ['media.transport.next', 0x00ab],
+            ['media.transport.play_pause', 0x00ae],
+            ['media.eject', 0x00b0],
+            ['os.launch.mail', 0x00b1],
+            ['media.transport.rewind', 0x00bc],
+            ['display.brightness.up', 0x00bd],
+            ['display.brightness.down', 0x00be],
+            ['os.mac.mission_control', 0x00c1],
+            ['os.mac.launchpad', 0x00c2],
+        ]
+        for (const [id, value] of cases) {
+            expect(qmkCodec.encode(id)?.value, `encode ${id}`).toBe(value)
+            expect(qmkCodec.decode(value)?.canonicalId, `decode ${id}`).toBe(id)
+        }
     })
 
     it('encodes audio.toggle to 0x7482', () => {
