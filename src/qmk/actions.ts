@@ -607,8 +607,12 @@ export function decodeKeycode(kc: number): DecodedKeycode {
         }
         return { kind: QMK_KIND.SWAP_HANDS_TAP, params: [code & 0xff] }
     }
-    // Fallback: treat as raw basic; loses fidelity but never throws.
-    return { kind: QMK_KIND.BASIC, params: [code & 0xff] }
+    // Fallback: treat as raw basic, keeping the full 16-bit value. Masking to
+    // 8 bits used to collapse vendor codes onto unrelated basic keycodes —
+    // a Keychron QK_KB_2 (0x7E02, Left Command) rendered as KC_POST_FAIL.
+    // The codec (KeychronCodec et al.) resolves the canonical id from the
+    // full value, and encodeKeycode round-trips BASIC as 16-bit.
+    return { kind: QMK_KIND.BASIC, params: [code] }
 }
 
 export function decodeAsKeyAction(
