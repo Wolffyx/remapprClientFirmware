@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { getCompiler, hasCompiler, parseKeymap } from '../index'
 import { buildRemapprBlob } from '../compilers/remappr/index'
 import { decodeRemapprBlob, DecodeCode } from '../compilers/remappr/decode'
-import { defaultConfig } from '../../remappr/configRead'
+import { defaultConfig } from '../../clients/remappr/configRead'
 
 // Read a little-endian u16 out of a blob.
 const u16 = (b: Uint8Array, off: number): number => b[off] | (b[off + 1] << 8)

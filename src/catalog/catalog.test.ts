@@ -1,11 +1,11 @@
 // Pattern check: no GoF pattern (-) — rejected — vitest tests verifying CATALOG entries are unique by id and bucketed via groupForId helper.
 import { describe, expect, it } from 'vitest'
 
-import { keychronCodec } from '../keychron/codec'
-import { mockCodec } from '../mock/codec'
-import { qmkCodec } from '../qmk/codec'
-import { vialCodec } from '../qmk-vial/codec'
-import { zmkCodec } from '../zmk/codec'
+import { keychronCodec } from '../clients/keychron/codec'
+import { mockCodec } from '../clients/mock/codec'
+import { qmkCodec } from '../clients/qmk/codec'
+import { vialCodec } from '../clients/qmk-vial/codec'
+import { zmkCodec } from '../clients/zmk/codec'
 import { CATALOG, HID_USAGE_BY_CANONICAL } from './entries'
 import { EXTERNAL_NAMES, EXTERNAL_NAMES_ALLOWLIST } from './external-names'
 import { CATALOG_PAGES, groupForId } from './pages'

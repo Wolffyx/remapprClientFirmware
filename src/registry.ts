@@ -26,6 +26,23 @@ export function getAdapters(): readonly FirmwareAdapter[] {
     return adapters
 }
 
+/**
+ * Run every registered adapter's optional `prepare` warmup. Call once after the
+ * clients have registered and before the first connect; a client that needs
+ * something from the host (a persisted identity, a cached table) does its own
+ * setup here, so the app never calls a named firmware's init function.
+ * A failing prepare is logged and skipped — it must not block other firmwares.
+ */
+export async function prepareAdapters(): Promise<void> {
+    await Promise.all(
+        adapters.map((a) =>
+            a.prepare?.().catch((err) => {
+                console.warn(`[firmware] ${a.id}: prepare failed`, err)
+            }),
+        ),
+    )
+}
+
 export async function pickAdapter(
     transport: Transport,
     hint?: ProbeHint,

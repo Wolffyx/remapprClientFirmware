@@ -9,7 +9,7 @@ import {
 } from '../index'
 
 const seed = readFileSync(
-    fileURLToPath(new URL('../../mock/seed.keymap.json', import.meta.url)),
+    fileURLToPath(new URL('../../clients/mock/seed.keymap.json', import.meta.url)),
     'utf8',
 )
 const config = parseKeymap(seed)

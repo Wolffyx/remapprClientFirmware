@@ -1,0 +1,367 @@
+// Pattern check: Adapter (Tier 1) — extended — backs src/firmware/adapter.ts FirmwareAdapter; translates ZMK GetBehaviorDetailsResponse → neutral ActionType.
+import type {
+    BehaviorBindingParametersSet,
+    BehaviorParameterValueDescription,
+    GetBehaviorDetailsResponse,
+} from '@zmkfirmware/zmk-studio-ts-client/behaviors'
+import type {
+    ActionSlot,
+    ActionSlotKind,
+    ActionType,
+    BehaviorClass,
+} from '@firmware/types'
+import { hidUsagePageAndIdFromUsage } from '@firmware/_app/lib/actions/hidUsages'
+import { MOUSE_COMMANDS } from '@firmware/mouseCommands'
+import {
+    displayNameToBinding,
+    KNOWN_BINDING_PREFIXES,
+    prettyBehaviorName,
+} from './displayNameToBinding'
+import { mouseCanonToZmk } from './mouseZmk'
+import {
+    ZMK_BEHAVIOR_LEGENDS,
+    zmkCommandLegend,
+    zmkTokenIcon,
+} from './paramLabel'
+
+const MODIFIER_DISPLAY_NAME = 'Modifier'
+
+function describeSlotKind(
+    behaviorDisplayName: string,
+    descriptions: BehaviorParameterValueDescription[],
+): ActionSlotKind {
+    if (behaviorDisplayName === MODIFIER_DISPLAY_NAME) return 'modifier'
+    if (descriptions.some((d) => d.hidUsage)) return 'hid'
+    if (descriptions.some((d) => d.layerId)) return 'layer'
+    if (descriptions.some((d) => d.range)) return 'number'
+    if (descriptions.some((d) => d.constant !== undefined)) return 'enum'
+    return 'enum'
+}
+
+function buildSlot(
+    label: string,
+    behaviorDisplayName: string,
+    descriptions: BehaviorParameterValueDescription[],
+): ActionSlot | undefined {
+    if (!descriptions || descriptions.length === 0) return undefined
+    const onlyNil =
+        descriptions.length === 1 &&
+        descriptions[0].nil !== undefined &&
+        descriptions[0].constant === undefined
+    if (onlyNil) return undefined
+
+    const kind = describeSlotKind(behaviorDisplayName, descriptions)
+    // First non-empty name — a merged column may lead with a nameless nil
+    // (e.g. &bt's no-arg set) before the descriptor that actually names it.
+    const namedLabel = descriptions
+        .map((d) => d.name?.toString().trim())
+        .find((n) => n && n.length > 0)
+    const slot: ActionSlot = {
+        label: namedLabel && namedLabel.length > 0 ? namedLabel : label,
+        kind,
+    }
+
+    const range = descriptions.find((d) => d.range)?.range
+    if (range) slot.range = { min: range.min, max: range.max }
+
+    // Command icon by value label first (token-named on the mock / fixtures,
+    // whose constants may differ from a live device) then by (behavior &prefix,
+    // constant) — the robust path for ZMK's friendly hardware value names.
+    const prefix = displayNameToBinding(behaviorDisplayName)
+    const enumValues = descriptions
+        .filter((d) => d.constant !== undefined)
+        .map((d) => {
+            const icon =
+                zmkTokenIcon(d.name) ??
+                zmkCommandLegend(prefix, d.constant)?.icon
+            return icon
+                ? { value: d.constant as number, label: d.name, icon }
+                : { value: d.constant as number, label: d.name }
+        })
+    if (enumValues.length > 0) slot.values = enumValues
+
+    return slot
+}
+
+// A param slot is "real" when it carries at least one non-nil description.
+function hasRealParams(
+    descriptions?: BehaviorParameterValueDescription[],
+): boolean {
+    if (!descriptions || descriptions.length === 0) return false
+    const onlyNil =
+        descriptions.length === 1 &&
+        descriptions[0].nil !== undefined &&
+        descriptions[0].constant === undefined
+    return !onlyNil
+}
+
+// Flatten a param column across every metadata set, de-duped so each constant
+// / range / hid / layer appears once. ZMK splits a behavior into one set per
+// valid (param1, param2) shape — e.g. &bt has a no-arg set plus a BT_SEL set
+// whose param2 is the profile index — and only the union exposes them all.
+function mergeDescriptions(
+    sets: BehaviorBindingParametersSet[],
+    pick: (
+        s: BehaviorBindingParametersSet,
+    ) => BehaviorParameterValueDescription[] | undefined,
+): BehaviorParameterValueDescription[] {
+    const out: BehaviorParameterValueDescription[] = []
+    const seen = new Set<string>()
+    for (const set of sets) {
+        for (const d of pick(set) ?? []) {
+            const key =
+                d.constant !== undefined
+                    ? `c:${d.constant}`
+                    : `k:${d.name ?? ''}:${
+                          d.range
+                              ? `r${d.range.min}-${d.range.max}`
+                              : d.hidUsage
+                                ? 'hid'
+                                : d.layerId
+                                  ? 'layer'
+                                  : d.nil
+                                    ? 'nil'
+                                    : '?'
+                      }`
+            if (seen.has(key)) continue
+            seen.add(key)
+            out.push(d)
+        }
+    }
+    return out
+}
+
+// param1 command values whose set also defines a param2, when at least one
+// other set has none — i.e. the trailing slot is conditional on the command.
+// Returns undefined when param2 always (or never) applies.
+function conditionalParam1Values(
+    sets: BehaviorBindingParametersSet[],
+): number[] | undefined {
+    const enablers: number[] = []
+    let anyWithoutParam2 = false
+    for (const set of sets) {
+        if (hasRealParams(set.param2)) {
+            for (const d of set.param1 ?? []) {
+                if (d.constant !== undefined) enablers.push(d.constant)
+            }
+        } else {
+            anyWithoutParam2 = true
+        }
+    }
+    if (!anyWithoutParam2 || enablers.length === 0) return undefined
+    return Array.from(new Set(enablers))
+}
+
+export function behaviorToActionType(
+    behavior: GetBehaviorDetailsResponse,
+): ActionType {
+    const sets = behavior.metadata ?? []
+    const slots: ActionSlot[] = []
+    const p1 = buildSlot(
+        'param1',
+        behavior.displayName,
+        mergeDescriptions(sets, (s) => s.param1),
+    )
+    if (p1) slots.push(p1)
+    const p2 = buildSlot(
+        'param2',
+        behavior.displayName,
+        mergeDescriptions(sets, (s) => s.param2),
+    )
+    if (p2) slots.push(p2)
+
+    if (slots.length === 2 && slots[0].kind === 'enum') {
+        // Command-style behavior (e.g. &bt), not a hold-tap. Gate the trailing
+        // slot on the commands that actually take it and label by role.
+        const enabledFor = conditionalParam1Values(sets)
+        // &bt's profile is a 0-based index but reads naturally as 1..N; surface
+        // it one-based (the raw index is still what we store / send). Keyed on
+        // the behavior identity, not the range, so other numeric params are
+        // unaffected. displayName 'Bluetooth' is &bt (see displayNameToBinding).
+        const oneBasedProfile =
+            behavior.displayName === 'Bluetooth' && slots[1].kind === 'number'
+        slots[0] = { ...slots[0], label: 'Command' }
+        slots[1] = {
+            ...slots[1],
+            label:
+                slots[1].label && slots[1].label !== 'param2'
+                    ? slots[1].label
+                    : 'Value',
+            ...(enabledFor ? { enabledFor } : {}),
+            ...(oneBasedProfile ? { oneBased: true } : {}),
+        }
+    } else if (slots.length === 2) {
+        slots[0] = { ...slots[0], label: 'Hold' }
+        slots[1] = { ...slots[1], label: 'Tap' }
+    }
+    const icon = ZMK_BEHAVIOR_LEGENDS[displayNameToBinding(behavior.displayName)]
+        ?.icon
+    // Zero metadata SETS ≠ "no params": a plain user macro reports one set with
+    // empty param columns (bindable with 0,0), while a parameterized macro whose
+    // device-side metadata derivation failed reports NO sets — and the device
+    // then rejects every binding attempt with INVALID_PARAMETERS. Flag those so
+    // the UI offers no broken assign path (same class as &mmv / &msc).
+    const unsettable = sets.length === 0
+    // Classified here, from ZMK's own display-name → binding rules. The app
+    // reads ActionType.behaviorClass and never learns them.
+    const behaviorClass = classifyZmkBehavior(behavior.displayName, slots.length)
+    return {
+        id: String(behavior.id),
+        displayName: prettyBehaviorName(behavior.displayName),
+        ...(icon ? { icon } : {}),
+        slots,
+        ...(behaviorClass !== 'other' ? { behaviorClass } : {}),
+        ...(unsettable ? { settable: false } : {}),
+    }
+}
+
+const SYSTEM_BINDINGS: ReadonlySet<string> = new Set(KNOWN_BINDING_PREFIXES)
+
+/**
+ * Which picker group a live ZMK behavior belongs to. ZMK reports user-defined
+ * `&macro_*` behaviors through the same GetBehaviorDetails channel as system
+ * ones, so they are told apart by ZMK's own naming rules — which is exactly why
+ * this lives in the client and not in the app:
+ *
+ *   1. explicit `&macro_` / `&combo_` prefix wins;
+ *   2. a behavior with parameter slots is a user-defined hold-tap / mod-morph /
+ *      inc-dec-kp shape, not a zero-arg macro tile;
+ *   3. anything left whose binding isn't a known system prefix is a slug
+ *      fallback — a user-defined behavior, dominated in practice by macros.
+ *
+ * Combos are keymap config rather than behaviors, so they never arrive here;
+ * `'combo'` only fires when a user names a behavior `&combo_*` themselves.
+ */
+function classifyZmkBehavior(
+    displayName: string,
+    slotCount: number,
+): BehaviorClass {
+    const binding = displayNameToBinding(displayName)
+    if (binding.startsWith('&macro_')) return 'macro'
+    if (binding.startsWith('&combo_')) return 'combo'
+    if (slotCount > 0) return 'other'
+    if (binding && !SYSTEM_BINDINGS.has(binding)) return 'macro'
+    return 'other'
+}
+
+export function behaviorsToActionTypes(
+    behaviors: Record<number, GetBehaviorDetailsResponse>,
+): ActionType[] {
+    const types = Object.values(behaviors).map(behaviorToActionType)
+    // Fold the ZMK mouse behaviors (&mkp / &mmv / &msc) + any /mouse/i macro into
+    // one composite "Mouse" type. The raw behaviors stay in the list (label /
+    // fallback); the picker hides them (subsumed by the composite's behaviorRefs).
+    const mouse = synthesizeMouseActionType(behaviors)
+    return mouse ? [...types, mouse] : types
+}
+
+// The ZMK mouse bindings the unified Mouse dropdown folds into one behavior.
+const MOUSE_BINDINGS = new Set<string>(['&mkp', '&mmv', '&msc'])
+
+/**
+ * Synthesize the composite "Mouse" ActionType from the live behaviors: one enum
+ * "Command" slot whose values each carry a {@link BehaviorRef} dispatching to the
+ * real &mkp / &mmv / &msc behavior (button mask or packed move/scroll delta), plus
+ * any `/mouse/i` user macro folded in as a command. Returns undefined when the
+ * device exposes none of these — so a non-mouse keyboard gets no Mouse entry.
+ *
+ * Behavior ids are per-firmware, so they're resolved here from displayName, never
+ * hardcoded. Picking a value emits its behaviorRef verbatim (KeyActionPicker), which
+ * is why the raw &mkp / &mmv / &msc types are hidden from the dropdown.
+ */
+export function synthesizeMouseActionType(
+    behaviors: Record<number, GetBehaviorDetailsResponse>,
+): ActionType | undefined {
+    // Resolve each mouse binding's runtime id + whether it's settable, plus any
+    // /mouse/i macro. "Settable" = the behavior exposes a real param slot, so the
+    // Studio protocol can bind it — ZMK's &mmv / &msc carry no param metadata and
+    // the firmware rejects setting them (ProtocolError), so their direction
+    // commands are omitted here (per-firmware capability); the raw behaviors are
+    // still subsumed (hidden) below so they don't reappear as broken raw options.
+    const idFor = new Map<string, number>()
+    const settable = new Set<string>()
+    const macros: { id: number; name: string }[] = []
+    for (const b of Object.values(behaviors)) {
+        const binding = displayNameToBinding(b.displayName)
+        if (MOUSE_BINDINGS.has(binding)) {
+            if (idFor.has(binding)) continue
+            idFor.set(binding, b.id)
+            if (behaviorToActionType(b).slots.length > 0) settable.add(binding)
+        } else if (
+            !KNOWN_BINDING_PREFIXES.includes(binding) &&
+            /mouse/i.test(b.displayName) &&
+            // Parameterized macros report zero metadata sets and the device
+            // rejects binding them — don't fold a broken command in.
+            (b.metadata ?? []).length > 0
+        ) {
+            macros.push({ id: b.id, name: prettyBehaviorName(b.displayName) })
+        }
+    }
+    if (idFor.size === 0 && macros.length === 0) return undefined
+
+    const values: NonNullable<ActionSlot['values']> = []
+    for (const c of MOUSE_COMMANDS) {
+        const enc = mouseCanonToZmk(c.canon)
+        if (!enc) continue
+        const id = idFor.get(enc.binding)
+        // Skip absent behaviors and unsettable ones (&mmv / &msc without metadata).
+        if (id === undefined || !settable.has(enc.binding)) continue
+        values.push({
+            value: values.length,
+            label: c.label,
+            ...(c.icon ? { icon: c.icon } : {}),
+            behaviorRef: { kind: String(id), params: [enc.param] },
+        })
+    }
+    for (const m of macros) {
+        values.push({
+            value: values.length,
+            label: m.name,
+            behaviorRef: { kind: String(m.id), params: [] },
+        })
+    }
+    if (values.length === 0) return undefined
+
+    // Hide every mouse behavior we represent — folded-in (button / macro commands)
+    // and suppressed (unsettable &mmv / &msc) alike.
+    const subsumes = [
+        ...[...idFor.values()].map(String),
+        ...macros.map((m) => String(m.id)),
+    ]
+    return {
+        id: 'mouse',
+        displayName: 'Mouse',
+        icon: 'mouse-button',
+        slots: [{ label: 'Command', kind: 'enum', values }],
+        subsumes,
+    }
+}
+
+export function validateSlotValue(
+    layerIds: number[],
+    value: number | undefined,
+    descriptions?: BehaviorParameterValueDescription[],
+): boolean {
+    if (value === undefined) {
+        return (
+            descriptions === undefined ||
+            descriptions.length === 0 ||
+            !!descriptions[0].nil
+        )
+    }
+    const matching = descriptions?.find((v) => {
+        if (v.constant !== undefined) return v.constant === value
+        if (v.range) return value >= v.range.min && value <= v.range.max
+        if (v.hidUsage) {
+            const [page, id] = hidUsagePageAndIdFromUsage(value)
+            return page !== 0 && id !== 0
+        }
+        if (v.layerId) return layerIds.includes(value)
+        if (v.nil) return value === 0
+        return false
+    })
+    return (
+        !!matching ||
+        (value === 0 && (!descriptions || descriptions.length === 0))
+    )
+}

@@ -50,6 +50,15 @@ export type {
     WirelessTransport,
 } from './service'
 
+// Firmware-neutral config-blob editing facade. An adapter opts in by
+// implementing ConfigEditingApi; the app probes with supportsConfigEditing()
+// and gates its config editors on that — never on a firmware name.
+export {
+    supportsConfigEditing,
+    type ConfigEditingApi,
+    type LinkLimitKnob,
+} from './configEditing'
+
 export type {
     BleDiscovery,
     Discovery,
@@ -58,6 +67,17 @@ export type {
     Probe,
     ProbeHint,
 } from './adapter'
+
+// Firmware-neutral sideload facade. An adapter declares the sources it accepts
+// and parses them itself; the app renders one affordance per declared format and
+// never imports a per-firmware parser.
+export type {
+    SideloadApi,
+    SideloadFormat,
+    SideloadKind,
+    SideloadResult,
+    SideloadStatus,
+} from './sideload'
 
 export type { Transport } from './transport'
 export { parseVidPidFromLabel, readTransportIds } from './transport'
@@ -95,4 +115,4 @@ export {
     connectMock,
     connectMockWithConfig,
     MOCK_TRANSPORT_LABEL,
-} from './mock/adapter'
+} from './clients/mock/adapter'
