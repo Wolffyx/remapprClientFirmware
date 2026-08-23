@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseKeymap } from '../index'
 import { capabilityWarnings, configRequiredFeatures } from '../featureWarnings'
-import { LimitsFeature } from '../../remappr/protocol'
+import { LimitsFeature } from '../../clients/remappr/protocol'
 import type { ConfigKeymap } from '../types'
 
 const kb = (n: number): string =>

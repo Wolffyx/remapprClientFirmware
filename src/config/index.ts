@@ -193,6 +193,9 @@ export {
     resolveAllowedTargets,
     supportsLighting,
     supportsOutput,
+    supportsRuntimeLighting,
+    targetCovers,
+    targetLabel,
 } from './capabilities'
 
 export {

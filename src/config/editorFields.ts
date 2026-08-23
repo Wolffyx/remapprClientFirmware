@@ -27,7 +27,8 @@ import {
     TYPO_ALPHABET as AUTOCORRECT_TYPO_ALPHABET,
 } from './compilers/remappr/autocorrect'
 import type { FeatureName } from './featureWarnings'
-import { LimitsFeature, LinkProfileKnob, type LinkLimitKnob } from '../remappr/protocol'
+import { LimitsFeature, LinkProfileKnob } from '../clients/remappr/protocol'
+import type { LinkLimitKnob } from '../configEditing'
 
 /* ── timing defaults (§7.4) ──────────────────────────────────────────────── */
 

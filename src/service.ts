@@ -6,11 +6,12 @@ import type {
     Limits,
     RoleEvent,
     UnicodeModeState,
-} from './remappr/protocol'
+} from './clients/remappr/protocol'
 import type {
     ActionType,
     AdapterNotification,
     AltRepeatKeyEntry,
+    BehaviorRef,
     ComboEntry,
     DeviceInfo,
     DynamicEntryCounts,
@@ -24,6 +25,9 @@ import type {
     MacroAction,
     TapDanceEntry,
 } from './types'
+
+import type { SideloadApi } from './sideload'
+import type { ConfigKeymap } from './config'
 
 // pattern-check: skip optional behavior-flags field added to existing Capabilities DTO — feature gate per firmware
 export interface FirmwareBehaviorFlags {
@@ -72,6 +76,22 @@ export interface Capabilities {
      *  relayed-write path is HW-proof-pending. The UI gates editing affordances
      *  on this — never on a firmware name. */
     readOnly?: boolean
+    /** This is a demo / simulated device, not real hardware: it was never
+     *  discovered on a bus, so anything keyed to a physical device (preview
+     *  snapshots, pinning a compile target, a real switch matrix) must skip it.
+     *  Set only by simulated adapters; the UI gates on this, never on a firmware
+     *  name. */
+    demo?: boolean
+    /** Extra guidance shown on the "unlock to continue" screen for firmwares
+     *  whose unlock has a prerequisite the user must set up themselves (ZMK
+     *  needs a studio-unlock binding in the keymap). Omitted when unlocking is
+     *  self-explanatory — the app renders whatever it is given and knows no
+     *  firmware's docs. */
+    unlockHint?: {
+        message: string
+        docsUrl?: string
+        docsLabel?: string
+    }
     /** The adapter supports whole-profile backup + restore-to-device purely
      *  through the neutral `getKeymap`/`setKeys`/`commit` (+ layer ops) path, so
      *  the renderer's profile backup/restore feature can safely drive it. Set
@@ -123,11 +143,17 @@ export interface MacroApi {
     setMacro?(idx: number, actions: MacroAction[]): Promise<void>
 
     /** Real per-index macro names (e.g. §24 config-blob DT names); index =
-     *  pool position. Only the Remappr adapter implements this; the keycode
-     *  picker keys off its presence to list macros as named tiles in the
-     *  Macros tab. View-only firmwares whose macros aren't key-assignable
-     *  (ZMK, QMK/Vial) omit it. */
+     *  pool position. Only firmwares whose macro pool is key-assignable
+     *  implement this; the keycode picker keys off its presence to list macros
+     *  as named tiles in the Macros tab. View-only firmwares whose macros aren't
+     *  key-assignable (ZMK, QMK/Vial) omit it. */
     listNames?(): readonly string[]
+
+    /** The binding a picker click should emit for the macro at `index` — the
+     *  firmware's own behavior kind plus whatever params it needs. Implemented
+     *  alongside {@link listNames} so the app can build assignable macro tiles
+     *  without knowing any firmware's behavior-kind constants. */
+    macroRef?(index: number): BehaviorRef
 }
 
 // Pattern check: Facade (Tier 1) — extended — mirrors EncoderApi/MacroApi/RgbApi:
@@ -142,6 +168,23 @@ export interface KeyTestApi {
 
     /** Optional one-shot poll for firmwares with no push channel. */
     readMatrix?(): Promise<Set<number>>
+}
+
+// Pattern check: Facade (Tier 1) — extended — joins EncoderApi / MacroApi /
+// SideloadApi as an optional adapter-owned member, so the app gates on presence
+// instead of on a firmware name.
+export interface ConfigBridgeApi {
+    /** Raise a runtime keymap edit back into the config (the source of truth the
+     *  download/compile path reads), MERGING into the previous config so
+     *  config-only features the runtime cannot model — lighting, macros — are
+     *  preserved at positions the user did not touch.
+     *
+     *  Only a firmware whose runtime is a lossy projection of a config it also
+     *  owns can do this. Adapters that edit the device directly omit it. */
+    raiseKeymap(
+        layers: readonly Pick<Layer, 'name' | 'keys'>[],
+        prevConfig: ConfigKeymap,
+    ): ConfigKeymap
 }
 
 // Pattern check: Facade (Tier 1) — applied — Keychron-style wireless surface (BT/2.4G/battery/LPM) grouped behind one optional service member; renderer reads service.wireless once instead of N capability flags.
@@ -444,7 +487,7 @@ export interface RadioPipeTable {
 
 /** Re-exported so a consumer imports the whole cluster surface (facade + its
  *  wire DTOs) from one entry point. */
-export type { ClusterDiag, ClusterPeer, RoleEvent } from './remappr/protocol'
+export type { ClusterDiag, ClusterPeer, RoleEvent } from './clients/remappr/protocol'
 
 export interface ClusterApi {
     /** Snapshot this node's cluster role plus each node-bus peer's advertised
@@ -462,7 +505,7 @@ export interface ClusterApi {
 
 /** Re-exported alongside ClusterDiag so a consumer imports the unicode surface
  *  (facade + its wire DTO) from one entry point. */
-export type { UnicodeModeState } from './remappr/protocol'
+export type { UnicodeModeState } from './clients/remappr/protocol'
 
 export interface UnicodeApi {
     /** Read the selected host input method plus the methods this node can type
@@ -557,8 +600,20 @@ export interface KeyboardService {
 
     /** Optional: swap to a sideloaded/registry-fetched VIA-style keyboard def.
      *  Throws on matrix-mismatch or pendingChanges. Adapters that don't expose
-     *  this capability omit it. */
+     *  this capability omit it. Prefer driving this through the neutral
+     *  {@link sideload} facade — the app must not own a firmware's file format. */
     applyLayout?(def: import('./kle/parser').ParsedKeyboardDef): Promise<void>
+
+    /** Optional: ingest firmware-specific sources (a VIA board definition, a ZMK
+     *  `.keymap` file, …) behind a neutral surface. The adapter declares which
+     *  formats it takes and does the parsing itself, so the app renders a button
+     *  per format and never imports a per-firmware parser. */
+    readonly sideload?: SideloadApi
+
+    /** Optional: raise runtime keymap edits back into the owning config. Present
+     *  only on firmwares whose runtime projects from a config the adapter also
+     *  holds. */
+    readonly configBridge?: ConfigBridgeApi
 
     commit(): Promise<void>
 
