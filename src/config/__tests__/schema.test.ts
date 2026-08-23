@@ -12,7 +12,7 @@ import {
 } from '../index'
 
 const seedPath = fileURLToPath(
-    new URL('../../mock/seed.keymap.json', import.meta.url),
+    new URL('../../clients/mock/seed.keymap.json', import.meta.url),
 )
 const seed = readFileSync(seedPath, 'utf8')
 

@@ -8,12 +8,12 @@
 // External / third-party firmwares need no change here: implement FirmwareAdapter
 // + KeymapCompiler in your own module and call registerAdapter() / registerCompiler()
 // at boot.
-import './zmk'
-import './qmk'
-import './qmk-vial'
-import './keychron'
-import './mock'
-import './remappr'
+import './clients/zmk'
+import './clients/qmk'
+import './clients/qmk-vial'
+import './clients/keychron'
+import './clients/mock'
+import './clients/remappr'
 import './config'
 
 /**

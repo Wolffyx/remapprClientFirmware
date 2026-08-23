@@ -11,7 +11,7 @@
 // instead of silently dropping the field on push (the dlen-gated-tail failure
 // mode). Pure + dependency-light — the UI wiring lives in the app (Phase 5).
 
-import { LimitsFeature } from '../remappr/protocol'
+import { LimitsFeature } from '../clients/remappr/protocol'
 import type { ConfigKeymap } from './types'
 
 /** A LimitsFeature bit name (the optional firmware features a config can need). */

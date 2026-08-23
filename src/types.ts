@@ -90,6 +90,10 @@ export interface Keymap {
     layouts: PhysicalLayout[]
 }
 
+/** Picker grouping for an {@link ActionType}: a user-defined macro, a combo, or
+ *  an ordinary system behavior. */
+export type BehaviorClass = 'macro' | 'combo' | 'other'
+
 export interface ActionType {
     id: string
     displayName: string
@@ -104,6 +108,12 @@ export interface ActionType {
      *  ones suppressed without a command because this firmware can't set them
      *  (e.g. ZMK &mmv / &msc expose no param metadata). */
     subsumes?: string[]
+    /** How the editor should group this behavior in the key picker. Only the
+     *  adapter knows its own naming conventions (which display names mean a user
+     *  macro, which mean a combo), so it classifies and the app just reads the
+     *  answer — the app must never re-derive this from a firmware's naming.
+     *  Absent means `'other'`: an ordinary system behavior. */
+    behaviorClass?: BehaviorClass
     /** False when the firmware cannot bind this behavior over its protocol —
      *  e.g. a ZMK parameterized macro (macro-one/two-param) whose device-side
      *  metadata derivation yields zero sets: the device then rejects EVERY

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { CanonConditionalLayer } from '../types'
 import type { CanonHoldTapDef, CanonModMorph } from '../types'
-import { LimitsFeature } from '../../remappr/protocol'
+import { LimitsFeature } from '../../clients/remappr/protocol'
 
 import {
     ALL_MODIFIERS,
