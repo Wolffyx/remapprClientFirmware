@@ -561,6 +561,15 @@ export interface KeyboardService {
 
     setKeys(updates: KeyUpdate[]): Promise<void>
 
+    /** Whether this firmware can bind `action` over its protocol, judged locally
+     *  from what the device already told us — no round trip. Lets bulk writers
+     *  (profile restore) skip a doomed `setKey` instead of aborting on its error.
+     *
+     *  Absent = "assume yes": callers must still handle a rejected write. An
+     *  implementation must never be stricter than the device, or it would silently
+     *  drop bindings the keyboard would have accepted. */
+    canSetAction?(action: KeyAction): boolean
+
     encoders?: EncoderApi
     dynamic?: DynamicEntriesApi
     macros?: MacroApi
