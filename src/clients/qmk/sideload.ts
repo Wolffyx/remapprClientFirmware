@@ -33,7 +33,14 @@ const LAYOUT_JSON: SideloadFormat = {
         'Import a VIA/QMK keyboard definition to set this board’s physical layout and RGB effect list.',
 }
 
-const FORMATS: readonly SideloadFormat[] = [LAYOUT_JSON]
+export interface QmkSideloadOptions {
+    /** The file format offered. Defaults to the VIA/QMK layout JSON. */
+    format?: SideloadFormat
+    /** Offer the online VIA/QMK registry lookup (`resolveAuto`). Default true.
+     *  Off for Vial: its board describes itself, and a registry def must never
+     *  silently replace the on-device one. */
+    registry?: boolean
+}
 
 /** Neutral result for a parsed board def. Lighting comes from the board's own
  *  `menus`, so a def with none simply yields a null catalog. */
@@ -75,7 +82,11 @@ function toStatus(s: LookupStatus): SideloadStatus {
     }
 }
 
-export function createQmkSideload(service: KeyboardService): SideloadApi {
+export function createQmkSideload(
+    service: KeyboardService,
+    opts: QmkSideloadOptions = {},
+): SideloadApi {
+    const format = opts.format ?? LAYOUT_JSON
     const key = (): string | null => cacheKey(service.deviceInfo)
 
     /** Push a def onto the device and remember it for the next connect. */
@@ -88,11 +99,11 @@ export function createQmkSideload(service: KeyboardService): SideloadApi {
         return toResult(def, true)
     }
 
-    return {
-        formats: FORMATS,
+    const api: SideloadApi = {
+        formats: [format],
 
         async importFile(formatId, text) {
-            if (formatId !== LAYOUT_JSON.id)
+            if (formatId !== format.id)
                 throw new Error(`Unknown sideload format: ${formatId}`)
             return apply(parseSideloadJson(text))
         },
@@ -114,7 +125,11 @@ export function createQmkSideload(service: KeyboardService): SideloadApi {
             await service.applyLayout(def)
             return toResult(def, true)
         },
+    }
+    if (opts.registry === false) return api
 
+    return {
+        ...api,
         async resolveAuto(onStatus) {
             const { vid, pid, name } = service.deviceInfo
             if (vid === undefined || pid === undefined) return null

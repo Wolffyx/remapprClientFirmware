@@ -20,6 +20,8 @@ import type {
     KeyboardService,
     MacroApi,
 } from '@firmware/service'
+import type { SideloadApi, SideloadFormat } from '@firmware/sideload'
+import { createQmkSideload } from '@firmware/clients/qmk/sideload'
 import type {
     ActionType,
     AdapterNotification,
@@ -95,6 +97,31 @@ const VIAL_CAPABILITIES_BASE: Omit<Capabilities, 'maxLayers'> = {
 type LockStateHandler = (state: LockState) => void
 type PendingChangesHandler = (pending: boolean) => void
 type NotificationHandler = (n: AdapterNotification) => void
+
+/** A Vial board describes itself, so this is an override, not a requirement:
+ *  for when the on-device definition cannot be read, or the user wants a
+ *  corrected layout. Same JSON shape the Vial GUI loads. */
+const VIAL_JSON: SideloadFormat = {
+    id: 'vial-layout-json',
+    kind: 'layout',
+    accept: '.json,application/json',
+    label: 'Load vial.json',
+    description:
+        'Import a vial.json keyboard definition to override the layout this board reports.',
+}
+
+function layoutFromDef(def: ParsedKeyboardDef): PhysicalLayout {
+    return {
+        id: 0,
+        name: def.name || 'Default',
+        keys: def.layoutKeys,
+        encoders: def.encoderSlots.length ? def.encoderSlots : undefined,
+    }
+}
+
+function customNamesOf(def: ParsedKeyboardDef): string[] {
+    return def.customKeycodes.map((k) => k.shortName || k.name)
+}
 type ClosedHandler = (reason?: unknown) => void
 
 export interface VialServiceConfig {
@@ -184,16 +211,17 @@ async function loadDeviceProfile(
 
 // pattern-check: skip — wires sub-bundles required by service.ts Facade refactor
 export class VialKeyboardService implements KeyboardService {
-    public readonly capabilities: Capabilities
+    public capabilities: Capabilities
     public readonly deviceInfo: DeviceInfo
-    public readonly encoders?: EncoderApi
+    public readonly encoders: EncoderApi
     public readonly dynamic?: DynamicEntriesApi
     public readonly macros?: MacroApi
+    public readonly sideload: SideloadApi
     public readonly codec = vialCodec
 
     private readonly client: HidClient
-    private readonly def: ParsedKeyboardDef
-    private readonly physicalLayout: PhysicalLayout
+    private def: ParsedKeyboardDef
+    private physicalLayout: PhysicalLayout
     private readonly vialProtocol: number
     private readonly keyboardId: bigint
     private layers: Layer[]
@@ -208,7 +236,7 @@ export class VialKeyboardService implements KeyboardService {
     private readonly closedListeners = new Set<ClosedHandler>()
 
     // Pattern check: Adapter (Tier 1) — extended — same VialKeyboardService class; expanded ctor wires DeviceProfile + customNames into capabilities and labels.
-    private readonly customNames: string[]
+    private customNames: string[]
     private readonly profile: VialDeviceProfile
 
     private constructor(
@@ -224,22 +252,14 @@ export class VialKeyboardService implements KeyboardService {
         this.keyboardId = cfg.keyboardId
         this.layers = layers
         this.layerNames = cfg.layerNames ?? layers.map((l) => l.name)
-        this.customNames = cfg.def.customKeycodes.map(
-            (k) => k.shortName || k.name,
-        )
+        this.customNames = customNamesOf(cfg.def)
         this.profile = profile
-        this.physicalLayout = {
-            id: 0,
-            name: cfg.def.name || 'Default',
-            keys: cfg.def.layoutKeys,
-            encoders: cfg.def.encoderSlots.length
-                ? cfg.def.encoderSlots
-                : undefined,
-        }
+        this.physicalLayout = layoutFromDef(cfg.def)
         this.capabilities = {
             ...VIAL_CAPABILITIES_BASE,
             maxLayers: cfg.layerCount,
             encoders: cfg.def.encoderIndices.length || undefined,
+            layoutSideloadable: true,
             dynamicEntries:
                 profile.dynamicCounts.tapDance +
                     profile.dynamicCounts.combo +
@@ -256,12 +276,17 @@ export class VialKeyboardService implements KeyboardService {
                     : undefined,
         }
         this.lockState = lock
-        if (this.capabilities.encoders) {
-            this.encoders = {
-                setEncoder: (layerId, encoderIdx, direction, action) =>
-                    this.setEncoder(layerId, encoderIdx, direction, action),
-            }
+        // Always present: the Vial protocol has encoder commands on every
+        // board, and a sideloaded definition can add encoders after connect.
+        // setEncoder rejects an index the current definition does not know.
+        this.encoders = {
+            setEncoder: (layerId, encoderIdx, direction, action) =>
+                this.setEncoder(layerId, encoderIdx, direction, action),
         }
+        this.sideload = createQmkSideload(this, {
+            format: VIAL_JSON,
+            registry: false,
+        })
         if (this.capabilities.dynamicEntries) {
             this.dynamic = {
                 getCounts: () => this.getDynamicEntryCounts(),
@@ -289,9 +314,7 @@ export class VialKeyboardService implements KeyboardService {
         const layerNames =
             cfg.layerNames ??
             Array.from({ length: cfg.layerCount }, (_, i) => `Layer ${i}`)
-        const customNames = cfg.def.customKeycodes.map(
-            (k) => k.shortName || k.name,
-        )
+        const customNames = customNamesOf(cfg.def)
         const layers = await loadLayers(
             cfg.client,
             cfg.def,
@@ -523,6 +546,39 @@ export class VialKeyboardService implements KeyboardService {
             )
         }
         return this.getKeymap()
+    }
+
+    // Swap to a sideloaded definition. Reads the keymap (and encoders) under
+    // the new matrix before touching state, so a failed read leaves the
+    // current layout intact. No pending-changes guard: Vial writes are durable
+    // the moment they are acknowledged, so there is nothing to lose.
+    async applyLayout(def: ParsedKeyboardDef): Promise<void> {
+        if (this.closed) {
+            throw new UnsupportedError('applyLayout: connection closed')
+        }
+        const customNames = customNamesOf(def)
+        const layers = await loadLayers(
+            this.client,
+            def,
+            this.capabilities.maxLayers ?? this.layers.length,
+            this.layerNames,
+            customNames,
+        )
+        this.def = def
+        this.customNames = customNames
+        this.physicalLayout = layoutFromDef(def)
+        this.layers = layers
+        this.capabilities = {
+            ...this.capabilities,
+            encoders: def.encoderIndices.length || undefined,
+        }
+        for (const cb of this.notificationListeners) {
+            try {
+                cb({ topic: 'layout-changed', payload: null })
+            } catch {
+                /* ignore */
+            }
+        }
     }
 
     async commit(): Promise<void> {

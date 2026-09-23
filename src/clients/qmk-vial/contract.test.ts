@@ -308,3 +308,48 @@ describe('qmk-vial — identification vs loading (#187)', () => {
         warn.mockRestore()
     })
 })
+
+describe('qmk-vial — vial.json sideload (#189)', () => {
+    async function connectFake(label?: string) {
+        const adapter = createVialAdapter()
+        const t = createFakeVialTransport({ label })
+        const svc = await adapter.connect(t, new AbortController().signal)
+        return svc
+    }
+
+    it('offers a vial.json format and no registry lookup', async () => {
+        const svc = await connectFake()
+        expect(svc.sideload?.formats.map((f) => f.id)).toEqual([
+            'vial-layout-json',
+        ])
+        expect(svc.sideload?.resolveAuto).toBeUndefined()
+        expect(svc.capabilities.layoutSideloadable).toBe(true)
+        await svc.disconnect()
+    })
+
+    it('importFile swaps the layout and reads encoders under the new def', async () => {
+        const svc = await connectFake()
+        const seen: string[] = []
+        svc.subscribe((n) => seen.push(n.topic))
+        const override = JSON.stringify({
+            name: 'Override',
+            matrix: { rows: FAKE_ROWS, cols: FAKE_COLS },
+            layouts: {
+                keymap: [['0,0', { x: 1 }, '0,0\n\n\n\n\n\n\n\n\ne']],
+            },
+            customKeycodes: [],
+        })
+        const result = await svc.sideload!.importFile(
+            'vial-layout-json',
+            override,
+        )
+        expect(result.keymapChanged).toBe(true)
+        const km = await svc.getKeymap()
+        expect(km.layouts[0].name).toBe('Override')
+        expect(km.layouts[0].encoders?.length).toBe(1)
+        expect(km.layers[0].encoders?.length).toBe(1)
+        expect(svc.capabilities.encoders).toBe(1)
+        expect(seen).toContain('layout-changed')
+        await svc.disconnect()
+    })
+})
