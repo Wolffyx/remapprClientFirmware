@@ -46,8 +46,12 @@ import {
     relabelLayer,
 } from './actions'
 import { mockCodec } from './codec'
+import type { ParsedKeyboardDef } from '@firmware/kle/parser'
+import { parseSideloadJson } from '@firmware/clients/qmk/layoutSideload'
+import type { SideloadApi, SideloadFormat } from '@firmware/sideload'
 import { MOCK_CORNE_LAYOUT, MOCK_LAYOUTS } from './layout'
 import {
+    configFromBoardDef,
     configToPhysicalLayout,
     lowerConfigToMock,
     raiseMockToConfig,
@@ -83,6 +87,18 @@ const MOCK_DYNAMIC_COUNTS: DynamicEntryCounts = {
 
 const MOCK_MACRO_COUNT = 3
 const MOCK_MACRO_BUFFER = 256
+/** The demo takes the same board definitions a real QMK/Vial board does, so
+ *  the upload flow can be tried without hardware. Session-only, like every
+ *  other demo edit. */
+const MOCK_LAYOUT_JSON: SideloadFormat = {
+    id: 'layout-json',
+    kind: 'layout',
+    accept: '.json,application/json',
+    label: 'Load layout JSON',
+    description:
+        'Try a VIA or Vial keyboard definition (e.g. vial.json) as the demo board. Bindings carry over by position.',
+}
+
 const MOCK_CAPABILITIES: Capabilities = {
     lock: true,
     rename: true,
@@ -161,7 +177,7 @@ interface MockServiceOptions {
 }
 
 export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
-    public readonly capabilities: Capabilities
+    public capabilities: Capabilities
     // The demo's runtime keymap is a lossy projection of the config it was built
     // from, so edits are raised back into that config (merging, so lighting /
     // macros the runtime can't model survive).
@@ -171,6 +187,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
     }
     public readonly deviceInfo: DeviceInfo
     public readonly codec = mockCodec
+    public readonly sideload: SideloadApi
     public readonly encoders: EncoderApi
     public readonly dynamic: DynamicEntriesApi
     public readonly macros: MacroApi
@@ -219,7 +236,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
     private layers: Layer[] = []
     private layouts: PhysicalLayout[]
     /** Source config the runtime is seeded from (static demo or a builder board). */
-    private readonly seedCfg: ConfigKeymap
+    private seedCfg: ConfigKeymap
     /** Live config the config-blob editors read/write (§7.4 defaults + custom def
      *  pools + tri-layers). Copy-on-write off `seedCfg` (never mutated in place, so
      *  the shared demo seed is safe); discardChanges resets it. */
@@ -228,7 +245,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
      *  the edited config instead of the pristine seed source. */
     private configEdited = false
     /** Per-layer key count — derived from the seed geometry, not a fixed Corne. */
-    private readonly keyCount: number
+    private keyCount: number
     private activeLayoutId = 0
     private lockState: LockState
     private pendingChanges = false
@@ -276,11 +293,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
         this.seedCfg = opts.seedConfig ?? SEED_CONFIG
         this.cfg = this.seedCfg
         this.keyCount = this.seedCfg.keyboard.keys.length
-        this.perKeyColors = Array.from({ length: this.keyCount }, (_, i) => ({
-            h: Math.round(((i * 255) / this.keyCount) % 256),
-            s: 220,
-            v: 200,
-        }))
+        this.perKeyColors = this.rainbow()
         this.layouts = opts.seedConfig
             ? [configToPhysicalLayout(opts.seedConfig)]
             : MOCK_LAYOUTS.map((l) => ({ ...l }))
@@ -300,6 +313,17 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
             encoders: this.encoderCount() || undefined,
         }
         this.seedDefaultLayers()
+        this.sideload = {
+            formats: [MOCK_LAYOUT_JSON],
+            importFile: async (formatId, text) => {
+                if (formatId !== MOCK_LAYOUT_JSON.id) {
+                    throw new Error(`Unknown sideload format: ${formatId}`)
+                }
+                const def = parseSideloadJson(text)
+                await this.applyLayout(def)
+                return { name: def.name, keymapChanged: true }
+            },
+        }
         // pattern-check: skip — inline closures over private state for sub-bundle stubs
         this.encoders = {
             setEncoder: async (layerId, encoderIdx, direction, action) => {
@@ -566,6 +590,43 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                 ...(l.encoders ? { encoders: l.encoders } : {}),
             }
         })
+    }
+
+    /** One LED per key, hues spread across the board. */
+    private rainbow(): HsvColor[] {
+        return Array.from({ length: this.keyCount }, (_, i) => ({
+            h: Math.round(((i * 255) / this.keyCount) % 256),
+            s: 220,
+            v: 200,
+        }))
+    }
+
+    /**
+     * Become the board a VIA/Vial definition describes: the current keymap
+     * (edits included) is raised into the config, re-homed onto the def's
+     * geometry, and the runtime is re-seeded from that. The new board is the
+     * baseline Discard/Reset return to, and what the config source serves.
+     */
+    async applyLayout(def: ParsedKeyboardDef): Promise<void> {
+        this.requireUnlocked()
+        const next = configFromBoardDef(
+            def,
+            raiseMockToConfig(this.layers, this.cfg),
+        )
+        this.seedCfg = next
+        this.cfg = next
+        this.configEdited = false
+        this.keyCount = next.keyboard.keys.length
+        this.perKeyColors = this.rainbow()
+        this.layouts = [configToPhysicalLayout(next)]
+        this.activeLayoutId = 0
+        this.capabilities = {
+            ...this.capabilities,
+            encoders: this.encoderCount() || undefined,
+        }
+        this.seedDefaultLayers()
+        this.markPending(false)
+        this.emitNotification('layout-changed', null)
     }
 
     private encoderCount(): number {

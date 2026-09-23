@@ -14,9 +14,11 @@
 // This bridge is mock-specific by design; real adapters get their own per-
 // firmware ActionType-slot converters later.
 
+import type { ParsedKeyboardDef } from '@firmware/kle/parser'
 import type {
     CanonAction,
     CanonEncoderBinding,
+    CanonGeometry,
     CanonHoldTarget,
     CanonKeyPress,
     ConfigKeymap,
@@ -366,5 +368,73 @@ export function configToPhysicalLayout(config: ConfigKeymap): PhysicalLayout {
         name: config.meta.name || 'Custom',
         keys,
         ...(encoders?.length ? { encoders } : {}),
+    }
+}
+
+/* ── sideload: board definition → config ───────────────────────────────── */
+
+/**
+ * Re-home a config onto a VIA/Vial board definition (the demo's "Load layout
+ * JSON"): geometry, matrix and encoder slots come from the def; every layer
+ * keeps its bindings by position, padded with transparent for keys and knobs
+ * the old board did not have (and truncated where it had more). Everything
+ * else — combos, macros, lighting, defaults — carries over untouched.
+ */
+export function configFromBoardDef(
+    def: ParsedKeyboardDef,
+    current: ConfigKeymap,
+): ConfigKeymap {
+    const cu = (v: number): number => v / 100
+    const keys: CanonGeometry[] = def.layoutKeys.map((k, i) => {
+        const { row, col } = def.rowColMap[i]
+        return {
+            x: cu(k.x),
+            y: cu(k.y),
+            w: cu(k.w),
+            h: cu(k.h),
+            r: cu(k.r ?? 0),
+            ...(k.rx !== undefined ? { rx: cu(k.rx) } : {}),
+            ...(k.ry !== undefined ? { ry: cu(k.ry) } : {}),
+            matrix: [row, col],
+        }
+    })
+    const encoders = def.encoderSlots.map((e) => ({ x: cu(e.x), y: cu(e.y) }))
+    const transparent = (): CanonAction => ({ type: 'transparent' })
+
+    const layers = current.layers.map((layer) => {
+        const { encoders: prevEncoders, ...rest } = layer
+        return {
+            ...rest,
+            bindings: keys.map((_, i) => layer.bindings[i] ?? transparent()),
+            ...(encoders.length
+                ? {
+                      encoders: encoders.map(
+                          (_, i) =>
+                              prevEncoders?.[i] ?? {
+                                  cw: transparent(),
+                                  ccw: transparent(),
+                              },
+                      ),
+                  }
+                : {}),
+        }
+    })
+
+    const { encoders: _prevSlots, ...keyboard } = current.keyboard
+    return {
+        ...current,
+        meta: { ...current.meta, name: def.name },
+        keyboard: {
+            ...keyboard,
+            name: def.name,
+            keys,
+            ...(encoders.length ? { encoders } : {}),
+            matrix: {
+                ...current.keyboard.matrix,
+                rows: def.rows,
+                cols: def.cols,
+            },
+        },
+        layers,
     }
 }
