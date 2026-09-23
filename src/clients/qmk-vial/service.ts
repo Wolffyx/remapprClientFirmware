@@ -435,7 +435,14 @@ export class VialKeyboardService implements KeyboardService {
                     this.layerNames,
                     this.customNames,
                 ),
-                encoders: l.encoders,
+                encoders: l.encoders?.map((e) => {
+                    const [cw, ccw] = relabelVialLayer(
+                        [e.cw, e.ccw],
+                        this.layerNames,
+                        this.customNames,
+                    )
+                    return { cw, ccw }
+                }),
             })),
             availableLayers: 0,
             activeLayoutId: this.physicalLayout.id,
