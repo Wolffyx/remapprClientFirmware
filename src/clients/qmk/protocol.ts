@@ -24,6 +24,10 @@ export const VIA_ID = {
     DYNAMIC_KEYMAP_GET_LAYER_COUNT: 0x11,
     DYNAMIC_KEYMAP_GET_BUFFER: 0x12,
     DYNAMIC_KEYMAP_SET_BUFFER: 0x13,
+    // Only on firmware built with ENCODER_MAP_ENABLE; otherwise the board
+    // answers id_unhandled (0xFF).
+    DYNAMIC_KEYMAP_GET_ENCODER: 0x14,
+    DYNAMIC_KEYMAP_SET_ENCODER: 0x15,
 } as const
 
 // VIA custom-channel ids (per the public VIA protocol spec, via_channel_id).
@@ -170,6 +174,46 @@ export function parseSetKeycodeEcho(resp: Uint8Array): KeycodeResponse {
         col: resp[3] & 0xff,
         keycode: readU16BE(resp, 4),
     }
+}
+
+// Encoder map. `clockwise` is the firmware's own flag
+// (dynamic_keymap_{get,set}_encoder); the keycode sits after
+// [id, layer, idx, clockwise].
+export function getEncoderCmd(
+    layer: number,
+    idx: number,
+    clockwise: boolean,
+): Uint8Array {
+    return makeFrame(VIA_ID.DYNAMIC_KEYMAP_GET_ENCODER, [
+        layer & 0xff,
+        idx & 0xff,
+        clockwise ? 1 : 0,
+    ])
+}
+
+/** Throws ProtocolError when the board answered id_unhandled (no encoder map). */
+export function parseEncoderKeycode(resp: Uint8Array): number {
+    expectId(resp, VIA_ID.DYNAMIC_KEYMAP_GET_ENCODER, 'get-encoder')
+    return readU16BE(resp, 4)
+}
+
+export function setEncoderCmd(
+    layer: number,
+    idx: number,
+    clockwise: boolean,
+    keycode: number,
+): Uint8Array {
+    const out = makeFrame(VIA_ID.DYNAMIC_KEYMAP_SET_ENCODER, [
+        layer & 0xff,
+        idx & 0xff,
+        clockwise ? 1 : 0,
+    ])
+    writeU16BE(out, 4, keycode & 0xffff)
+    return out
+}
+
+export function parseSetEncoderEcho(resp: Uint8Array): void {
+    expectId(resp, VIA_ID.DYNAMIC_KEYMAP_SET_ENCODER, 'set-encoder')
 }
 
 export function resetKeymapCmd(): Uint8Array {
