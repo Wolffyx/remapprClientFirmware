@@ -83,8 +83,6 @@ const MOCK_DYNAMIC_COUNTS: DynamicEntryCounts = {
 
 const MOCK_MACRO_COUNT = 3
 const MOCK_MACRO_BUFFER = 256
-const MOCK_ENCODER_COUNT = 2
-
 const MOCK_CAPABILITIES: Capabilities = {
     lock: true,
     rename: true,
@@ -98,7 +96,6 @@ const MOCK_CAPABILITIES: Capabilities = {
     // keyed to real hardware (preview capture, pinning a compile target).
     demo: true,
     maxLayers: 8,
-    encoders: MOCK_ENCODER_COUNT,
     dynamicEntries: MOCK_DYNAMIC_COUNTS,
     macros: { count: MOCK_MACRO_COUNT, bufferSize: MOCK_MACRO_BUFFER },
     behaviors: {
@@ -164,7 +161,7 @@ interface MockServiceOptions {
 }
 
 export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
-    public readonly capabilities: Capabilities = MOCK_CAPABILITIES
+    public readonly capabilities: Capabilities
     // The demo's runtime keymap is a lossy projection of the config it was built
     // from, so edits are raised back into that config (merging, so lighting /
     // macros the runtime can't model survive).
@@ -296,6 +293,12 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
             serialNumber: opts.deviceInfo?.serialNumber ?? 'MOCK-0001',
         }
         this.lockState = opts.initiallyLocked ? 'locked' : 'unlocked'
+        // Knobs come from the board, like keys: the seed config's
+        // keyboard.encoders (1 on the demo Corne), not a fixed number.
+        this.capabilities = {
+            ...MOCK_CAPABILITIES,
+            encoders: this.encoderCount() || undefined,
+        }
         this.seedDefaultLayers()
         // pattern-check: skip — inline closures over private state for sub-bundle stubs
         this.encoders = {
@@ -304,7 +307,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                 const li = this.layerIndexById(layerId)
                 if (li < 0)
                     throw new ProtocolError(`Unknown layer id: ${layerId}`)
-                if (encoderIdx < 0 || encoderIdx >= MOCK_ENCODER_COUNT) {
+                if (encoderIdx < 0 || encoderIdx >= this.encoderCount()) {
                     throw new ProtocolError(
                         `Encoder index out of range: ${encoderIdx}`,
                     )
@@ -503,7 +506,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
             [],
             this.layerNames(),
         )
-        return Array.from({ length: MOCK_ENCODER_COUNT }, () => ({
+        return Array.from({ length: this.encoderCount() }, () => ({
             cw: xparent,
             ccw: xparent,
         }))
@@ -556,8 +559,17 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                     `Seed layer "${l.name}" has ${l.keys.length} keys, expected ${this.keyCount}`,
                 )
             }
-            return { id: this.nextLayerId++, name: l.name, keys: l.keys }
+            return {
+                id: this.nextLayerId++,
+                name: l.name,
+                keys: l.keys,
+                ...(l.encoders ? { encoders: l.encoders } : {}),
+            }
         })
+    }
+
+    private encoderCount(): number {
+        return this.seedCfg.keyboard.encoders?.length ?? 0
     }
 
     private layerNames(): string[] {
@@ -631,6 +643,13 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                 id: l.id,
                 name: l.name,
                 keys: relabelLayer(l.keys, this.layerNames()),
+                encoders: l.encoders?.map((e) => {
+                    const [cw, ccw] = relabelLayer(
+                        [e.cw, e.ccw],
+                        this.layerNames(),
+                    )
+                    return { cw, ccw }
+                }),
             })),
             availableLayers:
                 (this.capabilities.maxLayers ?? 8) - this.layers.length,

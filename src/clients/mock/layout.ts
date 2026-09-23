@@ -65,6 +65,9 @@ export const MOCK_CORNE_LAYOUT: PhysicalLayout = {
     id: 0,
     name: 'Corne (Mock)',
     keys: [...buildCorneLeft(), ...buildCorneRight()],
+    // The seed config's one knob (keyboard.encoders[0]), centred in the split
+    // gap on the top row. The renderer draws it as a 1u CCW|CW pair.
+    encoders: [{ x: LEFT_W + (SPLIT - U) / 2, y: 0 }],
 }
 
 export const MOCK_LAYOUTS: PhysicalLayout[] = [MOCK_CORNE_LAYOUT]

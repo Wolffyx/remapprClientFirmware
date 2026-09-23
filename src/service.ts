@@ -191,7 +191,7 @@ export interface ConfigBridgeApi {
      *  Only a firmware whose runtime is a lossy projection of a config it also
      *  owns can do this. Adapters that edit the device directly omit it. */
     raiseKeymap(
-        layers: readonly Pick<Layer, 'name' | 'keys'>[],
+        layers: readonly Pick<Layer, 'name' | 'keys' | 'encoders'>[],
         prevConfig: ConfigKeymap,
     ): ConfigKeymap
 }

@@ -16,13 +16,19 @@
 
 import type {
     CanonAction,
+    CanonEncoderBinding,
     CanonHoldTarget,
     CanonKeyPress,
     ConfigKeymap,
     Modifier,
 } from '@firmware/config'
 import { DiagnosticBag, type Diagnostic } from '@firmware/config'
-import type { KeyAction, Layer, PhysicalLayout } from '@firmware/types'
+import type {
+    EncoderAction,
+    KeyAction,
+    Layer,
+    PhysicalLayout,
+} from '@firmware/types'
 import {
     buildMockKeyAction,
     HID_KP,
@@ -72,8 +78,10 @@ const isNonRepresentable = (a: CanonAction | undefined): boolean =>
 /* ── lower: config → runtime ───────────────────────────────────────────── */
 
 export interface LowerResult {
-    /** Runtime layers (name + KeyActions), index-aligned with config.layers. */
-    layers: { name: string; keys: KeyAction[] }[]
+    /** Runtime layers (name + KeyActions), index-aligned with config.layers.
+     *  `encoders` is index-aligned with `config.keyboard.encoders` (absent when
+     *  the board declares none). */
+    layers: { name: string; keys: KeyAction[]; encoders?: EncoderAction[] }[]
     diagnostics: Diagnostic[]
 }
 
@@ -170,12 +178,34 @@ export function lowerConfigToMock(config: ConfigKeymap): LowerResult {
         }
     }
 
-    const layers = config.layers.map((layer, li) => ({
-        name: layer.name,
-        keys: layer.bindings.map((b, bi) =>
-            lowerAction(b, ['layers', li, 'bindings', bi]),
-        ),
-    }))
+    // One runtime knob per declared slot; a layer that binds fewer is padded
+    // with transparent, so every layer has the same encoder count.
+    const encoderCount = config.keyboard.encoders?.length ?? 0
+    const lowerEncoders = (
+        bound: CanonEncoderBinding[] | undefined,
+        li: number,
+    ): EncoderAction[] | undefined => {
+        if (encoderCount === 0) return undefined
+        return Array.from({ length: encoderCount }, (_, ei) => {
+            const b = bound?.[ei]
+            const path = ['layers', li, 'encoders', ei]
+            return {
+                cw: b ? lowerAction(b.cw, [...path, 'cw']) : transparent(),
+                ccw: b ? lowerAction(b.ccw, [...path, 'ccw']) : transparent(),
+            }
+        })
+    }
+
+    const layers = config.layers.map((layer, li) => {
+        const encoders = lowerEncoders(layer.encoders, li)
+        return {
+            name: layer.name,
+            keys: layer.bindings.map((b, bi) =>
+                lowerAction(b, ['layers', li, 'bindings', bi]),
+            ),
+            ...(encoders ? { encoders } : {}),
+        }
+    })
 
     return { layers, diagnostics: [...diag.all] }
 }
@@ -233,6 +263,23 @@ function raiseAction(ka: KeyAction, layerNames: string[]): CanonAction | null {
     }
 }
 
+/** Structural equality ignoring `_`-prefixed authoring metadata. */
+function sameAction(a: CanonAction, b: CanonAction): boolean {
+    const strip = (v: unknown): unknown => {
+        if (Array.isArray(v)) return v.map(strip)
+        if (v && typeof v === 'object') {
+            return Object.fromEntries(
+                Object.entries(v as Record<string, unknown>)
+                    .filter(([k]) => !k.startsWith('_'))
+                    .sort(([x], [y]) => (x < y ? -1 : 1))
+                    .map(([k, x]) => [k, strip(x)]),
+            )
+        }
+        return v
+    }
+    return JSON.stringify(strip(a)) === JSON.stringify(strip(b))
+}
+
 /**
  * Raise runtime layers back into the config, merging onto `prevConfig`: a
  * representable runtime binding wins; a `transparent` over a rich, non-
@@ -241,30 +288,49 @@ function raiseAction(ka: KeyAction, layerNames: string[]): CanonAction | null {
  * data (combos, macros, tap-dances, geometry, per-layer encoders) is preserved.
  */
 export function raiseMockToConfig(
-    runtimeLayers: readonly Pick<Layer, 'name' | 'keys'>[],
+    runtimeLayers: readonly Pick<Layer, 'name' | 'keys' | 'encoders'>[],
     prevConfig: ConfigKeymap,
 ): ConfigKeymap {
     const layerNames = runtimeLayers.map((l) => l.name)
 
+    // A representable runtime binding wins; an unrecognized kind, or a
+    // transparent over a rich prior, keeps the prior.
+    const merge = (ka: KeyAction, prev: CanonAction | undefined): CanonAction => {
+        const raised = raiseAction(ka, layerNames)
+        if (raised === null) return prev ?? { type: 'transparent' }
+        if (raised.type === 'transparent' && isNonRepresentable(prev)) {
+            return prev as CanonAction
+        }
+        // Unchanged → keep the prior as authored (its `_`-prefixed source
+        // metadata, e.g. the "Volume Down" shorthand, survives re-serialize).
+        if (prev && sameAction(raised, prev)) return prev
+        return raised
+    }
+
     const layers = runtimeLayers.map((rl, li) => {
         const prevLayer = prevConfig.layers[li]
-        const bindings = rl.keys.map((ka, bi) => {
-            const raised = raiseAction(ka, layerNames)
-            const prev = prevLayer?.bindings[bi]
-            // Unrecognized kind, or transparent over a rich prior → keep prior.
-            if (raised === null) return prev ?? { type: 'transparent' }
-            if (raised.type === 'transparent' && isNonRepresentable(prev)) {
-                return prev as CanonAction
-            }
-            return raised
-        })
+        const bindings = rl.keys.map((ka, bi) =>
+            merge(ka, prevLayer?.bindings[bi]),
+        )
+        // Knob edits raise the same way; with no runtime knobs, keep the
+        // config's (a layer the runtime never loaded encoders for).
+        const encoders: CanonEncoderBinding[] | undefined = rl.encoders
+            ? rl.encoders.map((e, ei) => {
+                  const prev = prevLayer?.encoders?.[ei]
+                  return {
+                      ...(prev?.press ? { press: prev.press } : {}),
+                      cw: merge(e.cw, prev?.cw),
+                      ccw: merge(e.ccw, prev?.ccw),
+                  }
+              })
+            : prevLayer?.encoders
         return {
             name: rl.name,
             ...(prevLayer?.description
                 ? { description: prevLayer.description }
                 : {}),
             bindings,
-            ...(prevLayer?.encoders ? { encoders: prevLayer.encoders } : {}),
+            ...(encoders ? { encoders } : {}),
         }
     })
 
@@ -291,5 +357,14 @@ export function configToPhysicalLayout(config: ConfigKeymap): PhysicalLayout {
         ...(k.rx !== undefined ? { rx: Math.round(k.rx * U) } : {}),
         ...(k.ry !== undefined ? { ry: Math.round(k.ry * U) } : {}),
     }))
-    return { id: 0, name: config.meta.name || 'Custom', keys }
+    const encoders = config.keyboard.encoders?.map((e) => ({
+        x: Math.round(e.x * U),
+        y: Math.round(e.y * U),
+    }))
+    return {
+        id: 0,
+        name: config.meta.name || 'Custom',
+        keys,
+        ...(encoders?.length ? { encoders } : {}),
+    }
 }
