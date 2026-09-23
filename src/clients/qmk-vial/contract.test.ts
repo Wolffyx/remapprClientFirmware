@@ -1,5 +1,6 @@
 // Pattern check: no GoF pattern (-) — rejected — fake Vial responder over paired streams driving the shared FirmwareAdapter contract suite, no abstraction warranted.
 import { compress as lzmaCompress } from 'lzma1'
+import { describe, expect, it, vi } from 'vitest'
 
 import { runContractSuite } from '@firmware/__tests__/contract'
 import type { Transport } from '@firmware'
@@ -55,6 +56,14 @@ interface FakeState {
     defBytes: Uint8Array
     locked: boolean
     unlockInProgress: boolean
+    /** Count of GET_SIZE / GET_DEFINITION requests seen. */
+    defReads: number
+}
+
+interface FakeOptions {
+    /** Replace the on-device (LZMA) definition bytes, e.g. with garbage. */
+    defBytes?: Uint8Array
+    label?: string
 }
 
 function frame(): Uint8Array {
@@ -84,6 +93,7 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
                 return out
             }
             case VIAL_CMD.GET_SIZE: {
+                state.defReads++
                 const size = state.defBytes.length
                 out[0] = size & 0xff
                 out[1] = (size >> 8) & 0xff
@@ -92,6 +102,7 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
                 return out
             }
             case VIAL_CMD.GET_DEFINITION: {
+                state.defReads++
                 const block =
                     (req[2] |
                         (req[3] << 8) |
@@ -198,15 +209,20 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
     }
 }
 
-function createFakeVialTransport(): Transport {
+function createFakeVialTransport(
+    opts: FakeOptions = {},
+    stateOut?: (state: FakeState) => void,
+): Transport {
     const inbound = new TransformStream<Uint8Array, Uint8Array>()
     const outbound = new TransformStream<Uint8Array, Uint8Array>()
     const state: FakeState = {
         keymap: defaultKeymap(),
-        defBytes: makeDefBytes(),
+        defBytes: opts.defBytes ?? makeDefBytes(),
         locked: true,
         unlockInProgress: false,
+        defReads: 0,
     }
+    stateOut?.(state)
     const writer = inbound.writable.getWriter()
     const reader = outbound.readable.getReader()
 
@@ -231,7 +247,7 @@ function createFakeVialTransport(): Transport {
     })()
 
     return {
-        label: 'fake-vial',
+        label: opts.label ?? 'fake-vial',
         abortController: new AbortController(),
         readable: inbound.readable,
         writable: outbound.writable,
@@ -261,8 +277,34 @@ const adapter = createVialAdapter()
 
 runContractSuite('qmk-vial', {
     makeAdapter: () => adapter,
-    makeMatchingTransport: createFakeVialTransport,
+    makeMatchingTransport: () => createFakeVialTransport(),
     makeMismatchingTransport: createMismatchTransport,
     transportKind: 'hid',
     autoUnlock: true,
+})
+
+describe('qmk-vial — identification vs loading (#187)', () => {
+    it('canHandle identifies the board without reading its definition', async () => {
+        let state: FakeState | undefined
+        const t = createFakeVialTransport({}, (s) => (state = s))
+        const probe = await createVialAdapter().canHandle(t, {
+            transportKind: 'hid',
+        })
+        expect(probe.ok).toBe(true)
+        expect(state!.defReads).toBe(0)
+    })
+
+    it('a broken definition is still a Vial board, and connect fails loudly', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const adapter = createVialAdapter()
+        // Implausible size (0) → the definition fetch throws.
+        const t = createFakeVialTransport({ defBytes: new Uint8Array(0) })
+        const probe = await adapter.canHandle(t, { transportKind: 'hid' })
+        expect(probe.ok).toBe(true)
+        await expect(
+            adapter.connect(t, new AbortController().signal),
+        ).rejects.toThrow(/Vial keyboard detected/)
+        expect(warn).toHaveBeenCalled()
+        warn.mockRestore()
+    })
 })
