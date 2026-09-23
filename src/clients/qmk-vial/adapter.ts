@@ -37,6 +37,9 @@ const DEF_FETCH_DEADLINE_MS = 5000
 
 const VIAL_DISCOVERY: Discovery = {
     hid: { usagePage: VIA_USAGE_PAGE, usage: VIA_USAGE },
+    // Vial is a VIA superset: every Vial board also passes the VIA probe, so
+    // Vial must be asked first or it is silently connected as plain VIA.
+    priority: 10,
 }
 
 interface ProbedSession {
