@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import { runContractSuite } from '@firmware/__tests__/contract'
 import type { Transport } from '@firmware'
 
+import keycultSource from '@firmware/kle/fixtures/aftermarket-keycult-tkl.vial.json?raw'
+
 import { createQmkAdapter } from './adapter'
 import { VIA_ID, VIA_KBV, VIA_PAYLOAD_SIZE, writeU16BE } from './protocol'
 
@@ -236,6 +238,30 @@ describe('qmk-via — encoder map (#188)', () => {
         expect(svc.capabilities.encoders).toBeUndefined()
         const km = await svc.getKeymap()
         expect(km.layers[0].encoders).toBeUndefined()
+        await svc.disconnect()
+    })
+})
+
+describe('qmk-via — real vial.json upload (Keycult TKL)', () => {
+    it('a Vial board in VIA mode gets its layout and knob back from the file', async () => {
+        const encoders: FakeEncoders = {
+            enabled: true,
+            map: new Map([
+                ['0:0:1', 0xa9], // cw  = KC_VOLU
+                ['0:0:0', 0xaa], // ccw = KC_VOLD
+            ]),
+        }
+        const svc = await adapter.connect(
+            createFakeViaTransport(encoders),
+            new AbortController().signal,
+        )
+        await svc.sideload!.importFile('via-layout-json', keycultSource)
+        const km = await svc.getKeymap()
+        expect(km.layouts[0].keys).toHaveLength(87)
+        expect(svc.capabilities.encoders).toBe(1)
+        const knob = km.layers[0].encoders![0]
+        expect(knob.cw.canonicalId).toBe('media.volume_increment')
+        expect(knob.ccw.canonicalId).toBe('media.volume_decrement')
         await svc.disconnect()
     })
 })

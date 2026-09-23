@@ -11,6 +11,8 @@ import {
     writeU16BE,
 } from '@firmware/clients/qmk/protocol'
 
+import keycultSource from '@firmware/kle/fixtures/aftermarket-keycult-tkl.vial.json?raw'
+
 import { createVialAdapter } from './adapter'
 import { DYNAMIC_OP, VIAL_CMD, VIAL_PREFIX } from './protocol'
 
@@ -456,6 +458,27 @@ describe('qmk-vial — encoder direction', () => {
         await svc.encoders!.setEncoder(km.layers[0].id, 0, 0, kcD) // 0 = cw
         expect(state!.encoders.get('0:0:1')).toBe(0x07)
         expect(state!.encoders.get('0:0:0')).toBe(0x05)
+        await svc.disconnect()
+    })
+})
+
+describe('qmk-vial — real vial.json upload (Keycult TKL)', () => {
+    it('loads 87 keys and the knob, reading its actions from the board', async () => {
+        const t = createFakeVialTransport({}, (st) => {
+            st.encoders.set('0:0:0', 0xaa) // ccw = KC_VOLD
+            st.encoders.set('0:0:1', 0xa9) // cw  = KC_VOLU
+        })
+        const svc = await createVialAdapter().connect(
+            t,
+            new AbortController().signal,
+        )
+        await svc.sideload!.importFile('vial-layout-json', keycultSource)
+        const km = await svc.getKeymap()
+        expect(km.layouts[0].keys).toHaveLength(87)
+        expect(km.layouts[0].encoders).toEqual([{ x: 1850, y: 0 }])
+        const knob = km.layers[0].encoders![0]
+        expect(knob.cw.canonicalId).toBe('media.volume_increment')
+        expect(knob.ccw.canonicalId).toBe('media.volume_decrement')
         await svc.disconnect()
     })
 })
