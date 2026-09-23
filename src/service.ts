@@ -109,6 +109,8 @@ export interface ConnectNotice {
 
 // Pattern check: Facade (Tier 1) — applied — group related optional methods into 3 cohesive feature facades for renderer single-guard reads
 export interface EncoderApi {
+    /** `direction`: 0 = clockwise, 1 = counter-clockwise (matches
+     *  EncoderAction.cw / .ccw). Clients map this to their wire flag. */
     setEncoder(
         layerId: number,
         encoderIdx: number,

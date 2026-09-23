@@ -120,21 +120,24 @@ export interface EncoderPair {
     ccw: number
 }
 
+// vial_get_encoder answers dynamic_keymap_get_encoder(layer, idx, clockwise)
+// for clockwise = 0 then 1: counter-clockwise comes FIRST on the wire.
 export function parseEncoder(resp: Uint8Array): EncoderPair {
     if (resp.length < 4) throw new ProtocolError('Vial encoder: short response')
-    return { cw: readU16BE(resp, 0), ccw: readU16BE(resp, 2) }
+    return { ccw: readU16BE(resp, 0), cw: readU16BE(resp, 2) }
 }
 
+/** `clockwise` is the firmware's own flag (dynamic_keymap_set_encoder). */
 export function setEncoderCmd(
     layer: number,
     idx: number,
-    direction: 0 | 1,
+    clockwise: boolean,
     keycode: number,
 ): Uint8Array {
     const out = makeVialFrame(VIAL_CMD.SET_ENCODER, [
         layer & 0xff,
         idx & 0xff,
-        direction & 0xff,
+        clockwise ? 1 : 0,
     ])
     writeU16BE(out, 5, keycode & 0xffff)
     return out

@@ -169,7 +169,13 @@ async function loadLayers(
         })
         const encoders: EncoderAction[] = []
         for (const idx of def.encoderIndices) {
-            const e = await readEncoder(client, l, idx, layerNames)
+            const e = await readEncoder(
+                client,
+                l,
+                idx,
+                layerNames,
+                customNames,
+            )
             encoders.push(e)
         }
         layers.push({

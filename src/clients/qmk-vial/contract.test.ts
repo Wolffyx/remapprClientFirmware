@@ -29,10 +29,19 @@ function makeDefJson(): string {
     })
 }
 
-function makeDefBytes(): Uint8Array {
-    const text = makeDefJson()
+function makeDefBytes(text: string = makeDefJson()): Uint8Array {
     const enc = new TextEncoder().encode(text)
     return lzmaCompress(enc)
+}
+
+/** One key plus one encoder (KLE label 'e' in slot 9 → parser labels[4]). */
+function makeEncoderDefJson(): string {
+    return JSON.stringify({
+        name: 'Fake Vial Knob',
+        matrix: { rows: FAKE_ROWS, cols: FAKE_COLS },
+        layouts: { keymap: [['0,0', { x: 1 }, '0,0\n\n\n\n\n\n\n\n\ne']] },
+        customKeycodes: [],
+    })
 }
 
 function defaultKeymap(): number[][][] {
@@ -58,6 +67,8 @@ interface FakeState {
     unlockInProgress: boolean
     /** Count of GET_SIZE / GET_DEFINITION requests seen. */
     defReads: number
+    /** Encoder map as the firmware stores it: `${layer}:${idx}:${clockwise}`. */
+    encoders: Map<string, number>
 }
 
 interface FakeOptions {
@@ -117,6 +128,22 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
                 if (start < state.defBytes.length) {
                     out.set(state.defBytes.subarray(start, end), 0)
                 }
+                return out
+            }
+            // Mirrors vial.c: counter-clockwise (clockwise=0) first.
+            case VIAL_CMD.GET_ENCODER: {
+                const r = frame()
+                const ccw = state.encoders.get(`${req[2]}:${req[3]}:0`) ?? 0
+                const cw = state.encoders.get(`${req[2]}:${req[3]}:1`) ?? 0
+                writeU16BE(r, 0, ccw)
+                writeU16BE(r, 2, cw)
+                return r
+            }
+            case VIAL_CMD.SET_ENCODER: {
+                state.encoders.set(
+                    `${req[2]}:${req[3]}:${req[4]}`,
+                    ((req[5] << 8) | req[6]) & 0xffff,
+                )
                 return out
             }
             case VIAL_CMD.GET_UNLOCK_STATUS: {
@@ -221,6 +248,7 @@ function createFakeVialTransport(
         locked: true,
         unlockInProgress: false,
         defReads: 0,
+        encoders: new Map(),
     }
     stateOut?.(state)
     const writer = inbound.writable.getWriter()
@@ -400,6 +428,34 @@ describe('qmk-vial — vial.json sideload (#189)', () => {
         expect(km.layers[0].encoders?.length).toBe(1)
         expect(svc.capabilities.encoders).toBe(1)
         expect(seen).toContain('layout-changed')
+        await svc.disconnect()
+    })
+})
+
+describe('qmk-vial — encoder direction', () => {
+    it('reads counter-clockwise first, and writes clockwise with the firmware flag set', async () => {
+        let state: FakeState | undefined
+        const t = createFakeVialTransport(
+            { defBytes: makeDefBytes(makeEncoderDefJson()) },
+            (st) => {
+                state = st
+                st.encoders.set('0:0:0', 0x05) // ccw = KC_B
+                st.encoders.set('0:0:1', 0x06) // cw  = KC_C
+            },
+        )
+        const svc = await createVialAdapter().connect(
+            t,
+            new AbortController().signal,
+        )
+        const km = await svc.getKeymap()
+        const enc = km.layers[0].encoders![0]
+        expect(enc.ccw.params).toEqual([0x05])
+        expect(enc.cw.params).toEqual([0x06])
+
+        const kcD = svc.buildKeyAction(enc.cw.kind, [0x07])
+        await svc.encoders!.setEncoder(km.layers[0].id, 0, 0, kcD) // 0 = cw
+        expect(state!.encoders.get('0:0:1')).toBe(0x07)
+        expect(state!.encoders.get('0:0:0')).toBe(0x05)
         await svc.disconnect()
     })
 })
