@@ -35,6 +35,7 @@ export type {
     ClusterDiag,
     ClusterPeer,
     DynamicEntriesApi,
+    ConnectNotice,
     EncoderApi,
     HsvColor,
     IndicatorConfig,

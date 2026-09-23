@@ -100,6 +100,13 @@ export interface Capabilities {
     profileRestore?: boolean
 }
 
+/** A one-shot, user-facing note about the connection that just opened. */
+export interface ConnectNotice {
+    readonly level: 'info' | 'warning'
+    readonly title: string
+    readonly description?: string
+}
+
 // Pattern check: Facade (Tier 1) — applied — group related optional methods into 3 cohesive feature facades for renderer single-guard reads
 export interface EncoderApi {
     setEncoder(
@@ -618,6 +625,11 @@ export interface KeyboardService {
      *  formats it takes and does the parsing itself, so the app renders a button
      *  per format and never imports a per-firmware parser. */
     readonly sideload?: SideloadApi
+
+    /** Optional: things the user should know about how this connection was
+     *  made — e.g. the client had to fall back to a reduced mode. The app shows
+     *  each once, right after connect. Absent or empty = nothing to say. */
+    readonly connectNotices?: readonly ConnectNotice[]
 
     /** Optional: raise runtime keymap edits back into the owning config. Present
      *  only on firmwares whose runtime projects from a config the adapter also

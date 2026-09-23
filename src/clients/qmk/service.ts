@@ -6,6 +6,7 @@ import type { KeycodeCodec } from '@firmware/codec'
 import type {
     AdvancedApi,
     Capabilities,
+    ConnectNotice,
     KeyboardService,
     LayersApi,
     RgbApi,
@@ -101,6 +102,8 @@ export interface QmkServiceConfig {
      *  + rowColMap (split/staggered/rotated geometry). When absent, the service
      *  falls back to a synthetic rows×cols grid. */
     def?: ParsedKeyboardDef
+    /** Passed through to {@link KeyboardService.connectNotices}. */
+    connectNotices?: readonly ConnectNotice[]
 }
 
 function makeGridLayout(rows: number, cols: number): PhysicalLayout {
@@ -236,6 +239,7 @@ export class QmkKeyboardService implements KeyboardService {
     public readonly layerControl?: LayersApi
     public readonly sideload: SideloadApi
     public readonly codec: KeycodeCodec
+    public readonly connectNotices?: readonly ConnectNotice[]
 
     protected readonly client: HidClient
     private layout: PhysicalLayout
@@ -275,6 +279,7 @@ export class QmkKeyboardService implements KeyboardService {
         this.advanced = cfg.advanced
         this.layerControl = cfg.layerControl
         this.codec = cfg.codec ?? qmkCodec
+        this.connectNotices = cfg.connectNotices
         // VIA/QMK board-definition ingest (file, cache, registry). Built here
         // so the app drives it through the neutral facade and never imports
         // this client's parsers.

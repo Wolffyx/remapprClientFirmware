@@ -15,6 +15,7 @@ import {
 } from '@firmware/clients/qmk/protocol'
 import type {
     Capabilities,
+    ConnectNotice,
     DynamicEntriesApi,
     EncoderApi,
     KeyboardService,
@@ -132,6 +133,8 @@ export interface VialServiceConfig {
     vialProtocol: number
     keyboardId: bigint
     layerNames?: string[]
+    /** Passed through to {@link KeyboardService.connectNotices}. */
+    connectNotices?: readonly ConnectNotice[]
 }
 
 function bufferOffsetFor(
@@ -218,6 +221,7 @@ export class VialKeyboardService implements KeyboardService {
     public readonly macros?: MacroApi
     public readonly sideload: SideloadApi
     public readonly codec = vialCodec
+    public readonly connectNotices?: readonly ConnectNotice[]
 
     private readonly client: HidClient
     private def: ParsedKeyboardDef
@@ -253,6 +257,7 @@ export class VialKeyboardService implements KeyboardService {
         this.layers = layers
         this.layerNames = cfg.layerNames ?? layers.map((l) => l.name)
         this.customNames = customNamesOf(cfg.def)
+        this.connectNotices = cfg.connectNotices
         this.profile = profile
         this.physicalLayout = layoutFromDef(cfg.def)
         this.capabilities = {

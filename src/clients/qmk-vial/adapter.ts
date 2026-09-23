@@ -31,6 +31,12 @@ import {
     SUPPORTED_VIAL_PROTOCOLS,
 } from './protocol'
 import { VialKeyboardService } from './service'
+import {
+    QMK_DEFAULT_COLS,
+    QMK_DEFAULT_ROWS,
+} from '@firmware/clients/qmk/adapter'
+import { cacheKey, loadCached } from '@firmware/clients/qmk/layoutSideload'
+import { QmkKeyboardService } from '@firmware/clients/qmk/service'
 
 const PROBE_DEADLINE_MS = 1500
 
@@ -142,6 +148,72 @@ async function loadVial(
     return { ...id, deviceInfo, def, layerCount }
 }
 
+/**
+ * The board identified as Vial but its own definition could not be read.
+ * Never a silent downgrade: prefer the vial.json the user loaded for this
+ * board before (full Vial service), else talk plain VIA over the same session
+ * — the keymap still works — and tell the user how to get the layout back.
+ */
+async function connectWithoutDeviceDef(
+    transport: Transport,
+    id: IdentifiedVial,
+    reason: string,
+): Promise<KeyboardService> {
+    const { client, vialProtocol, keyboardId } = id
+    const ids = readTransportIds(transport)
+    const layerCount = await readVialLayerCount(client)
+    const baseInfo = {
+        serialNumber: keyboardId.toString(16),
+        vid: ids.vid,
+        pid: ids.pid,
+    }
+
+    const key = cacheKey({ ...baseInfo, name: '', firmware: 'qmk-vial' })
+    const saved = key ? loadCached(key) : null
+    if (saved) {
+        return VialKeyboardService.create({
+            deviceInfo: {
+                ...baseInfo,
+                name: saved.name || transport.label || 'Vial keyboard',
+                firmware: 'qmk-vial',
+                firmwareVersion: `vial-${vialProtocol}`,
+            },
+            client,
+            def: saved,
+            layerCount,
+            vialProtocol,
+            keyboardId,
+            connectNotices: [
+                {
+                    level: 'warning',
+                    title: 'Using your saved vial.json',
+                    description: `The board's own definition could not be read (${reason}), so the layout you loaded earlier is used instead.`,
+                },
+            ],
+        })
+    }
+
+    return QmkKeyboardService.create({
+        deviceInfo: {
+            ...baseInfo,
+            name: transport.label || 'Vial keyboard',
+            firmware: 'qmk-via',
+            firmwareVersion: `vial-${vialProtocol}`,
+        },
+        client,
+        rows: QMK_DEFAULT_ROWS,
+        cols: QMK_DEFAULT_COLS,
+        layerCount,
+        connectNotices: [
+            {
+                level: 'warning',
+                title: 'Connected in VIA mode',
+                description: `This Vial board's definition could not be read (${reason}). Keys can still be remapped, but the layout, encoders, macros and tap dance are unavailable. Load the board's vial.json to restore the layout.`,
+            },
+        ],
+    })
+}
+
 export function createVialAdapter(): FirmwareAdapter {
     return {
         id: 'qmk-vial',
@@ -205,10 +277,19 @@ export function createVialAdapter(): FirmwareAdapter {
                 session = await loadVial(transport, id)
             } catch (err) {
                 console.warn('[qmk-vial] definition load failed', err)
-                abortClient()
-                throw new TransportError(
-                    `Vial keyboard detected, but its definition could not be read: ${errorMessage(err)}`,
-                )
+                try {
+                    return await connectWithoutDeviceDef(
+                        transport,
+                        id,
+                        errorMessage(err),
+                    )
+                } catch (fallbackErr) {
+                    console.warn('[qmk-vial] fallback failed', fallbackErr)
+                    abortClient()
+                    throw new TransportError(
+                        `Vial keyboard detected, but its definition could not be read: ${errorMessage(err)}`,
+                    )
+                }
             }
             return VialKeyboardService.create({
                 deviceInfo: session.deviceInfo,

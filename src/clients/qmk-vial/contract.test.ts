@@ -294,18 +294,68 @@ describe('qmk-vial — identification vs loading (#187)', () => {
         expect(state!.defReads).toBe(0)
     })
 
-    it('a broken definition is still a Vial board, and connect fails loudly', async () => {
+    it('a broken definition is still a Vial board, and falls back to VIA mode with a notice', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
         const adapter = createVialAdapter()
         // Implausible size (0) → the definition fetch throws.
         const t = createFakeVialTransport({ defBytes: new Uint8Array(0) })
         const probe = await adapter.canHandle(t, { transportKind: 'hid' })
         expect(probe.ok).toBe(true)
-        await expect(
-            adapter.connect(t, new AbortController().signal),
-        ).rejects.toThrow(/Vial keyboard detected/)
+        const svc = await adapter.connect(t, new AbortController().signal)
+        expect(svc.deviceInfo.firmware).toBe('qmk-via')
+        expect(svc.connectNotices?.[0]).toMatchObject({
+            level: 'warning',
+            title: 'Connected in VIA mode',
+        })
+        expect(svc.connectNotices?.[0].description).toMatch(/implausible size/)
         expect(warn).toHaveBeenCalled()
         warn.mockRestore()
+        await svc.disconnect()
+    })
+
+    it('prefers the saved vial.json for this board over VIA mode', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const store = new Map<string, string>()
+        vi.stubGlobal('window', {
+            localStorage: {
+                getItem: (k: string) => store.get(k) ?? null,
+                setItem: (k: string, v: string) => void store.set(k, v),
+                removeItem: (k: string) => void store.delete(k),
+            },
+        })
+        try {
+            store.set(
+                'qmk-via-layout:v1:4b50:0001',
+                JSON.stringify({ v: 1, raw: JSON.parse(makeDefJson()) }),
+            )
+            const t = createFakeVialTransport({
+                defBytes: new Uint8Array(0),
+                label: 'fake-vial · 4b50:0001',
+            })
+            const svc = await createVialAdapter().connect(
+                t,
+                new AbortController().signal,
+            )
+            expect(svc.deviceInfo.firmware).toBe('qmk-vial')
+            expect(svc.deviceInfo.name).toBe('Fake Vial')
+            expect(svc.connectNotices?.[0].title).toBe(
+                'Using your saved vial.json',
+            )
+            await svc.disconnect()
+        } finally {
+            vi.unstubAllGlobals()
+            warn.mockRestore()
+        }
+    })
+
+    it('a healthy board connects as Vial with no notices', async () => {
+        const svc = await createVialAdapter().connect(
+            createFakeVialTransport(),
+            new AbortController().signal,
+        )
+        expect(svc.deviceInfo.firmware).toBe('qmk-vial')
+        expect(svc.connectNotices ?? []).toHaveLength(0)
+        await svc.disconnect()
     })
 })
 
