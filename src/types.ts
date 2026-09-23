@@ -71,6 +71,7 @@ export interface PhysicalLayoutKey {
     ry?: number
 }
 
+/** A knob's position, in centi-units (1u = 100) like PhysicalLayoutKey. */
 export interface EncoderSlot {
     x: number
     y: number
