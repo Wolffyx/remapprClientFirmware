@@ -22,6 +22,7 @@ import type {
     CanonHoldTarget,
     CanonKeyPress,
     ConfigKeymap,
+    LightingAction,
     Modifier,
 } from '@firmware/config'
 import { DiagnosticBag, type Diagnostic } from '@firmware/config'
@@ -39,6 +40,7 @@ import {
     MOCK_KIND_LAYER_TAP,
     MOCK_KIND_LAYER_TOGGLE,
     MOCK_KIND_MOD_TAP,
+    MOCK_KIND_RGB,
     MOCK_KIND_TRANSPARENT,
 } from './actions'
 import { mockCodec } from './codec'
@@ -56,6 +58,24 @@ const MOD_HID: Record<Modifier, number> = {
 }
 const HID_TO_MOD = new Map<number, Modifier>(
     (Object.entries(MOD_HID) as [Modifier, number][]).map(([m, id]) => [id, m]),
+)
+
+/** Underglow verbs the demo's RGB command enum carries (ZMK &rgb_ug numbering,
+ *  see RGB_COMMANDS in ./actions). Other lighting stays config-only. */
+const UNDERGLOW_CMD: Partial<Record<LightingAction, number>> = {
+    toggle: 0,
+    hue_up: 3,
+    hue_down: 4,
+    saturation_up: 5,
+    saturation_down: 6,
+    brightness_up: 7,
+    brightness_down: 8,
+    effect_next: 11,
+}
+const UNDERGLOW_ACTION = new Map<number, LightingAction>(
+    (Object.entries(UNDERGLOW_CMD) as [LightingAction, number][]).map(
+        ([a, c]) => [c, a],
+    ),
 )
 
 /** Config action types the runtime cannot represent — preserved across a raise. */
@@ -169,6 +189,20 @@ export function lowerConfigToMock(config: ConfigKeymap): LowerResult {
                 )
                 return transparent()
             }
+            case 'lighting': {
+                const cmd =
+                    a.target === 'underglow'
+                        ? UNDERGLOW_CMD[a.action]
+                        : undefined
+                if (cmd !== undefined) {
+                    return buildMockKeyAction(MOCK_KIND_RGB, [cmd], names)
+                }
+                diag.warn(
+                    `lighting "${a.target} ${a.action}" is not representable in the demo runtime; shown as transparent (preserved in config)`,
+                    path,
+                )
+                return transparent()
+            }
             case 'transparent':
                 return transparent()
             default:
@@ -259,6 +293,12 @@ function raiseAction(ka: KeyAction, layerNames: string[]): CanonAction | null {
             return layer === undefined
                 ? { type: 'transparent' }
                 : { type: 'layer', mode: 'toggle', layer }
+        }
+        case MOCK_KIND_RGB: {
+            const action = UNDERGLOW_ACTION.get(ka.params[0] ?? -1)
+            return action
+                ? { type: 'lighting', target: 'underglow', action }
+                : null
         }
         default:
             return null

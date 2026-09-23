@@ -1,7 +1,11 @@
 // pattern-check: skip — round-trip tests for mock encoders/dynamic/macros bundles
 import { describe, expect, it } from 'vitest'
 import { MockKeyboardService } from './service'
-import { buildMockKeyAction, MOCK_KIND_KEYPRESS } from './actions'
+import {
+    buildMockKeyAction,
+    MOCK_KIND_KEYPRESS,
+    MOCK_KIND_RGB,
+} from './actions'
 
 function freshMock(): MockKeyboardService {
     const svc = new MockKeyboardService()
@@ -67,6 +71,37 @@ describe('mock encoders bundle', () => {
         )
         expect(cfg.layers[2].encoders?.[0].cw).toMatchObject({
             type: 'lighting',
+        })
+    })
+})
+
+describe('mock underglow bindings', () => {
+    it('lowers the raise knob (underglow brightness) to RGB commands with an icon', async () => {
+        const svc = freshMock()
+        const km = await svc.getKeymap()
+        const knob = km.layers[2].encoders![0]
+        expect(knob.cw.kind).toBe(MOCK_KIND_RGB)
+        expect(knob.cw.params).toEqual([7]) // RGB_BRI
+        expect(knob.ccw.params).toEqual([8]) // RGB_BRD
+        expect(knob.cw.label.paramParts?.some((p) => p.icon)).toBe(true)
+    })
+
+    it('raises an RGB command back to a lighting action', async () => {
+        const svc = freshMock()
+        await svc.unlock()
+        const km = await svc.getKeymap()
+        const hueUp = buildMockKeyAction(MOCK_KIND_RGB, [3], [])
+        await svc.encoders.setEncoder(km.layers[2].id, 0, 0, hueUp)
+        const edited = await svc.getKeymap()
+        const cfg = svc.configBridge.raiseKeymap(edited.layers, svc['cfg'])
+        expect(cfg.layers[2].encoders?.[0].cw).toEqual({
+            type: 'lighting',
+            target: 'underglow',
+            action: 'hue_up',
+        })
+        expect(cfg.layers[2].encoders?.[0].ccw).toMatchObject({
+            type: 'lighting',
+            action: 'brightness_down',
         })
     })
 })
