@@ -21,7 +21,9 @@ import type {
     KeyOverrideEntry,
     KeyUpdate,
     Layer,
+    LockKind,
     LockState,
+    UnlockOptions,
     MacroAction,
     TapDanceEntry,
 } from './types'
@@ -38,7 +40,8 @@ export interface FirmwareBehaviorFlags {
 }
 
 export interface Capabilities {
-    lock: boolean
+    /** What the firmware's lock protects — see LockKind. */
+    lock: LockKind
     rename: boolean
     notifications: boolean
     reorderLayers: boolean
@@ -100,8 +103,17 @@ export interface Capabilities {
     profileRestore?: boolean
 }
 
+/** A one-shot, user-facing note about the connection that just opened. */
+export interface ConnectNotice {
+    readonly level: 'info' | 'warning'
+    readonly title: string
+    readonly description?: string
+}
+
 // Pattern check: Facade (Tier 1) — applied — group related optional methods into 3 cohesive feature facades for renderer single-guard reads
 export interface EncoderApi {
+    /** `direction`: 0 = clockwise, 1 = counter-clockwise (matches
+     *  EncoderAction.cw / .ccw). Clients map this to their wire flag. */
     setEncoder(
         layerId: number,
         encoderIdx: number,
@@ -182,7 +194,7 @@ export interface ConfigBridgeApi {
      *  Only a firmware whose runtime is a lossy projection of a config it also
      *  owns can do this. Adapters that edit the device directly omit it. */
     raiseKeymap(
-        layers: readonly Pick<Layer, 'name' | 'keys'>[],
+        layers: readonly Pick<Layer, 'name' | 'keys' | 'encoders'>[],
         prevConfig: ConfigKeymap,
     ): ConfigKeymap
 }
@@ -307,9 +319,10 @@ export interface RgbEffectState {
 export interface RgbApi {
     getLedCount(): Promise<number>
 
-    getIndicators(): Promise<IndicatorConfig>
+    /** OS-lock indicators. Firmware without indicator control omits both. */
+    getIndicators?(): Promise<IndicatorConfig>
 
-    setIndicators(cfg: IndicatorConfig): Promise<void>
+    setIndicators?(cfg: IndicatorConfig): Promise<void>
 
     save(): Promise<void>
 
@@ -332,13 +345,21 @@ export interface RgbApi {
 
     setPerKeyType?(type: number): Promise<void>
 
+    /** Read back per-key colours. Omitted when the firmware can only write
+     *  them. */
     getPerKeyColors?(startLed: number, count: number): Promise<HsvColor[]>
 
     setPerKeyColors?(startLed: number, colors: HsvColor[]): Promise<void>
 
+    /** Per-key colours live in the keyboard's RAM only: they are gone after a
+     *  power cycle, and save() does not keep them. */
+    perKeyVolatile?: boolean
+
     /** Map physical-layout key index → LED index for per-key colour I/O. Identity
      *  when the firmware's LED order matches layout order; firmware-specific
-     *  otherwise. `keyCount` is the number of layout keys. */
+     *  otherwise. `keyCount` is the number of layout keys. A key without an
+     *  LED maps to an index outside 0…ledCount−1, and writes to it are
+     *  ignored. */
     getLedIndexMap?(keyCount: number): Promise<number[]>
 
     getMixedRegions?(): Promise<Uint8Array>
@@ -487,7 +508,11 @@ export interface RadioPipeTable {
 
 /** Re-exported so a consumer imports the whole cluster surface (facade + its
  *  wire DTOs) from one entry point. */
-export type { ClusterDiag, ClusterPeer, RoleEvent } from './clients/remappr/protocol'
+export type {
+    ClusterDiag,
+    ClusterPeer,
+    RoleEvent,
+} from './clients/remappr/protocol'
 
 export interface ClusterApi {
     /** Snapshot this node's cluster role plus each node-bus peer's advertised
@@ -535,7 +560,10 @@ export interface KeyboardService {
 
     getLockState(): Promise<LockState>
 
-    unlock(): Promise<void>
+    /** Unlock the device. For 'actions' locks this drives an interactive flow
+     *  (the user holds keys) and reports progress; for 'editor' locks the device
+     *  unlocks itself and state arrives via onLockStateChanged. */
+    unlock(opts?: UnlockOptions): Promise<void>
 
     onLockStateChanged(cb: (state: LockState) => void): () => void
 
@@ -560,6 +588,15 @@ export interface KeyboardService {
     setKey(layerId: number, position: number, action: KeyAction): Promise<void>
 
     setKeys(updates: KeyUpdate[]): Promise<void>
+
+    /** Whether this firmware can bind `action` over its protocol, judged locally
+     *  from what the device already told us — no round trip. Lets bulk writers
+     *  (profile restore) skip a doomed `setKey` instead of aborting on its error.
+     *
+     *  Absent = "assume yes": callers must still handle a rejected write. An
+     *  implementation must never be stricter than the device, or it would silently
+     *  drop bindings the keyboard would have accepted. */
+    canSetAction?(action: KeyAction): boolean
 
     encoders?: EncoderApi
     dynamic?: DynamicEntriesApi
@@ -609,6 +646,11 @@ export interface KeyboardService {
      *  formats it takes and does the parsing itself, so the app renders a button
      *  per format and never imports a per-firmware parser. */
     readonly sideload?: SideloadApi
+
+    /** Optional: things the user should know about how this connection was
+     *  made — e.g. the client had to fall back to a reduced mode. The app shows
+     *  each once, right after connect. Absent or empty = nothing to say. */
+    readonly connectNotices?: readonly ConnectNotice[]
 
     /** Optional: raise runtime keymap edits back into the owning config. Present
      *  only on firmwares whose runtime projects from a config the adapter also

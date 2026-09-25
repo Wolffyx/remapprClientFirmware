@@ -1,6 +1,7 @@
 // Pattern check: no GoF pattern (-) — rejected — unit tests for KLE parser.
 import { describe, it, expect } from 'vitest'
 
+import keycultSource from './fixtures/aftermarket-keycult-tkl.vial.json?raw'
 import { parseKeyboardDef, validateDef } from './parser'
 
 describe('parseKeyboardDef', () => {
@@ -88,5 +89,36 @@ describe('parseKeyboardDef', () => {
         ).toThrowErrorMatchingInlineSnapshot(
             `[ProtocolError: Keyboard def: missing matrix.rows/cols]`,
         )
+    })
+})
+
+// A real Vial definition (Aftermarket Keycult TKL, Wolffyx/remappr#187-190):
+// 6×17 matrix, 87 keys, one knob written as the two-key Vial form —
+// "0,0…e" (counter-clockwise) and "0,1…e" (clockwise).
+
+describe('parseKeyboardDef — real vial.json (Keycult TKL)', () => {
+    const parsed = parseKeyboardDef(validateDef(JSON.parse(keycultSource)))
+
+    it('reads the matrix and all 87 keys', () => {
+        expect(parsed.rows).toBe(6)
+        expect(parsed.cols).toBe(17)
+        expect(parsed.layoutKeys).toHaveLength(87)
+        expect(parsed.rowColMap).toContainEqual({ row: 0, col: 16 })
+        // The TKL skips matrix column 10 on the F-row.
+        expect(parsed.rowColMap).not.toContainEqual({ row: 0, col: 10 })
+    })
+
+    it('turns the two-key encoder into ONE knob at the first key', () => {
+        expect(parsed.encoderIndices).toEqual([0])
+        // After F12 cluster: 0,16 at 17.25u + 1u + 0.25u gap → 18.5u.
+        expect(parsed.encoderSlots).toEqual([{ x: 1850, y: 0 }])
+        // Neither encoder key leaks into the key list as matrix (0,0)/(0,1).
+        expect(
+            parsed.rowColMap.filter((rc) => rc.row === 0 && rc.col <= 1),
+        ).toHaveLength(2)
+    })
+
+    it('keeps key geometry (6.25u space bar)', () => {
+        expect(parsed.layoutKeys.some((k) => k.w === 625)).toBe(true)
     })
 })

@@ -2,7 +2,7 @@
 // Pattern check: Adapter (Tier 1) — extended — extends src/firmware/qmk/service.ts QmkKeyboardService; HidClient-backed Vial implementation of KeyboardService with on-device matrix, encoder, and lock support.
 import { filterCatalogByCodec } from '@firmware/catalog/filter'
 import type { KeyCatalog } from '@firmware/catalog/types'
-import { ProtocolError, UnsupportedError } from '@firmware/errors'
+import { LockedError, ProtocolError, UnsupportedError } from '@firmware/errors'
 import type { HidClient } from '@firmware/clients/qmk/hidClient'
 import {
     fetchKeymapBuffer,
@@ -15,11 +15,15 @@ import {
 } from '@firmware/clients/qmk/protocol'
 import type {
     Capabilities,
+    ConnectNotice,
     DynamicEntriesApi,
     EncoderApi,
     KeyboardService,
     MacroApi,
+    RgbApi,
 } from '@firmware/service'
+import type { SideloadApi, SideloadFormat } from '@firmware/sideload'
+import { createQmkSideload } from '@firmware/clients/qmk/sideload'
 import type {
     ActionType,
     AdapterNotification,
@@ -31,6 +35,7 @@ import type {
     KeyUpdate,
     Layer,
     LockState,
+    UnlockOptions,
     MacroAction,
     PhysicalLayout,
 } from '@firmware/types'
@@ -62,7 +67,11 @@ import {
     type TapDanceEntry,
 } from './dynamic'
 import { readEncoder, writeEncoder } from './encoder'
-import { type ParsedKeyboardDef, type VialCustomKeycode } from './keyboardDef'
+import {
+    fetchAndParseKeyboardDef,
+    type ParsedKeyboardDef,
+    type VialCustomKeycode,
+} from './keyboardDef'
 import {
     getMacroBufferSize,
     getMacroCount,
@@ -73,9 +82,10 @@ import {
     writeMacroBuffer,
 } from './macros'
 import { lockDevice, readUnlockStatus, runUnlockFlow } from './unlock'
+import { createVialRgbFacade, probeVialRgb, type VialRgbInfo } from './vialrgb'
 
 const VIAL_CAPABILITIES_BASE: Omit<Capabilities, 'maxLayers'> = {
-    lock: true,
+    lock: 'actions',
     rename: false,
     notifications: false,
     reorderLayers: false,
@@ -95,6 +105,49 @@ const VIAL_CAPABILITIES_BASE: Omit<Capabilities, 'maxLayers'> = {
 type LockStateHandler = (state: LockState) => void
 type PendingChangesHandler = (pending: boolean) => void
 type NotificationHandler = (n: AdapterNotification) => void
+
+/** A Vial board describes itself, so this is an override, not a requirement:
+ *  for when the on-device definition cannot be read, or the user wants a
+ *  corrected layout. Same JSON shape the Vial GUI loads. */
+const VIAL_JSON: SideloadFormat = {
+    id: 'vial-layout-json',
+    kind: 'layout',
+    accept: '.json,application/json',
+    label: 'Load vial.json',
+    description:
+        'Import a vial.json keyboard definition to override the layout this board reports.',
+}
+
+function layoutFromDef(def: ParsedKeyboardDef): PhysicalLayout {
+    return {
+        id: 0,
+        name: def.name || 'Default',
+        keys: def.layoutKeys,
+        encoders: def.encoderSlots.length ? def.encoderSlots : undefined,
+    }
+}
+
+/** VialRGB, when the board's definition declares it (as the Vial GUI decides)
+ *  and the board answers the probe. Lighting is optional: a failed probe
+ *  connects without it. */
+async function loadVialRgb(
+    client: HidClient,
+    def: ParsedKeyboardDef,
+): Promise<VialRgbInfo | null> {
+    if (def.raw.lighting !== 'vialrgb') return null
+    try {
+        const info = await probeVialRgb(client)
+        if (!info) console.warn('[qmk-vial] vialrgb declared but not answered')
+        return info
+    } catch (err) {
+        console.warn('[qmk-vial] vialrgb probe failed', err)
+        return null
+    }
+}
+
+function customNamesOf(def: ParsedKeyboardDef): string[] {
+    return def.customKeycodes.map((k) => k.shortName || k.name)
+}
 type ClosedHandler = (reason?: unknown) => void
 
 export interface VialServiceConfig {
@@ -105,6 +158,8 @@ export interface VialServiceConfig {
     vialProtocol: number
     keyboardId: bigint
     layerNames?: string[]
+    /** Passed through to {@link KeyboardService.connectNotices}. */
+    connectNotices?: readonly ConnectNotice[]
 }
 
 function bufferOffsetFor(
@@ -139,7 +194,13 @@ async function loadLayers(
         })
         const encoders: EncoderAction[] = []
         for (const idx of def.encoderIndices) {
-            const e = await readEncoder(client, l, idx, layerNames)
+            const e = await readEncoder(
+                client,
+                l,
+                idx,
+                layerNames,
+                customNames,
+            )
             encoders.push(e)
         }
         layers.push({
@@ -184,16 +245,19 @@ async function loadDeviceProfile(
 
 // pattern-check: skip — wires sub-bundles required by service.ts Facade refactor
 export class VialKeyboardService implements KeyboardService {
-    public readonly capabilities: Capabilities
+    public capabilities: Capabilities
     public readonly deviceInfo: DeviceInfo
-    public readonly encoders?: EncoderApi
+    public readonly encoders: EncoderApi
     public readonly dynamic?: DynamicEntriesApi
     public readonly macros?: MacroApi
+    public readonly rgb?: RgbApi
+    public readonly sideload: SideloadApi
     public readonly codec = vialCodec
+    public readonly connectNotices?: readonly ConnectNotice[]
 
     private readonly client: HidClient
-    private readonly def: ParsedKeyboardDef
-    private readonly physicalLayout: PhysicalLayout
+    private def: ParsedKeyboardDef
+    private physicalLayout: PhysicalLayout
     private readonly vialProtocol: number
     private readonly keyboardId: bigint
     private layers: Layer[]
@@ -208,7 +272,7 @@ export class VialKeyboardService implements KeyboardService {
     private readonly closedListeners = new Set<ClosedHandler>()
 
     // Pattern check: Adapter (Tier 1) — extended — same VialKeyboardService class; expanded ctor wires DeviceProfile + customNames into capabilities and labels.
-    private readonly customNames: string[]
+    private customNames: string[]
     private readonly profile: VialDeviceProfile
 
     private constructor(
@@ -216,6 +280,7 @@ export class VialKeyboardService implements KeyboardService {
         layers: Layer[],
         lock: LockState,
         profile: VialDeviceProfile,
+        rgbInfo: VialRgbInfo | null,
     ) {
         this.deviceInfo = cfg.deviceInfo
         this.client = cfg.client
@@ -224,22 +289,15 @@ export class VialKeyboardService implements KeyboardService {
         this.keyboardId = cfg.keyboardId
         this.layers = layers
         this.layerNames = cfg.layerNames ?? layers.map((l) => l.name)
-        this.customNames = cfg.def.customKeycodes.map(
-            (k) => k.shortName || k.name,
-        )
+        this.customNames = customNamesOf(cfg.def)
+        this.connectNotices = cfg.connectNotices
         this.profile = profile
-        this.physicalLayout = {
-            id: 0,
-            name: cfg.def.name || 'Default',
-            keys: cfg.def.layoutKeys,
-            encoders: cfg.def.encoderSlots.length
-                ? cfg.def.encoderSlots
-                : undefined,
-        }
+        this.physicalLayout = layoutFromDef(cfg.def)
         this.capabilities = {
             ...VIAL_CAPABILITIES_BASE,
             maxLayers: cfg.layerCount,
             encoders: cfg.def.encoderIndices.length || undefined,
+            layoutSideloadable: true,
             dynamicEntries:
                 profile.dynamicCounts.tapDance +
                     profile.dynamicCounts.combo +
@@ -256,12 +314,18 @@ export class VialKeyboardService implements KeyboardService {
                     : undefined,
         }
         this.lockState = lock
-        if (this.capabilities.encoders) {
-            this.encoders = {
-                setEncoder: (layerId, encoderIdx, direction, action) =>
-                    this.setEncoder(layerId, encoderIdx, direction, action),
-            }
+        // Always present: the Vial protocol has encoder commands on every
+        // board, and a sideloaded definition can add encoders after connect.
+        // setEncoder rejects an index the current definition does not know.
+        this.encoders = {
+            setEncoder: (layerId, encoderIdx, direction, action) =>
+                this.setEncoder(layerId, encoderIdx, direction, action),
         }
+        this.sideload = createQmkSideload(this, {
+            format: VIAL_JSON,
+            registry: false,
+            deviceDef: () => fetchAndParseKeyboardDef(this.client),
+        })
         if (this.capabilities.dynamicEntries) {
             this.dynamic = {
                 getCounts: () => this.getDynamicEntryCounts(),
@@ -282,6 +346,15 @@ export class VialKeyboardService implements KeyboardService {
                 setMacro: (idx, actions) => this.setMacro(idx, actions),
             }
         }
+        if (rgbInfo) {
+            // Keys are read through the current definition, which a sideload
+            // can swap after connect.
+            this.rgb = createVialRgbFacade(
+                cfg.client,
+                rgbInfo,
+                () => this.def.rowColMap,
+            )
+        }
         cfg.client.onClosed((reason) => this.handleClientClosed(reason))
     }
 
@@ -289,9 +362,7 @@ export class VialKeyboardService implements KeyboardService {
         const layerNames =
             cfg.layerNames ??
             Array.from({ length: cfg.layerCount }, (_, i) => `Layer ${i}`)
-        const customNames = cfg.def.customKeycodes.map(
-            (k) => k.shortName || k.name,
-        )
+        const customNames = customNamesOf(cfg.def)
         const layers = await loadLayers(
             cfg.client,
             cfg.def,
@@ -302,7 +373,14 @@ export class VialKeyboardService implements KeyboardService {
         const profile = await loadDeviceProfile(cfg.client)
         const initialLock = await readUnlockStatus(cfg.client)
         const lockState: LockState = initialLock.locked ? 'locked' : 'unlocked'
-        return new VialKeyboardService(cfg, layers, lockState, profile)
+        const rgbInfo = await loadVialRgb(cfg.client, cfg.def)
+        return new VialKeyboardService(
+            cfg,
+            layers,
+            lockState,
+            profile,
+            rgbInfo,
+        )
     }
 
     private handleClientClosed(reason?: unknown): void {
@@ -342,6 +420,41 @@ export class VialKeyboardService implements KeyboardService {
         return this.def.rowColMap[position]
     }
 
+    // pattern-check: skip guard helpers for Vial's action lock — vial.c silently skips these writes while locked
+    /** QK_BOOT as this board encodes it: Vial protocol 6 moved to QMK's v6
+     *  keycodes (0x7C00); older builds used QMK's RESET (0x5C00). */
+    private get bootKeycode(): number {
+        return this.vialProtocol >= 6 ? 0x7c00 : 0x5c00
+    }
+
+    /** vial.c refuses these operations while locked — and silently: it skips
+     *  the write and still replies. Check first, so the caller gets
+     *  LockedError (and can unlock and retry) instead of a write that
+     *  "succeeded" without landing. */
+    private requireUnlocked(what: string): void {
+        if (this.lockState === 'unlocked') return
+        throw new LockedError(`${what} needs the keyboard unlocked`)
+    }
+
+    /** The one guarded keycode: vial_keycode_firewall turns QK_BOOT into
+     *  KC_NO while locked. */
+    private guardKeycode(action: KeyAction): void {
+        if (encodeVialKeycode(action) === this.bootKeycode) {
+            this.requireUnlocked('Assigning the bootloader key')
+        }
+    }
+
+    /** The unlock combo's matrix positions as physical-layout key indexes. */
+    private layoutIndexes(keys: { row: number; col: number }[]): number[] {
+        return keys
+            .map(({ row, col }) =>
+                this.def.rowColMap.findIndex(
+                    (rc) => rc.row === row && rc.col === col,
+                ),
+            )
+            .filter((i) => i >= 0)
+    }
+
     async getLockState(): Promise<LockState> {
         if (this.closed) return 'not-applicable'
         const status = await readUnlockStatus(this.client)
@@ -354,10 +467,17 @@ export class VialKeyboardService implements KeyboardService {
         return next
     }
 
-    async unlock(): Promise<void> {
+    async unlock(opts: UnlockOptions = {}): Promise<void> {
         this.setLockState('unlocking')
         try {
-            await runUnlockFlow(this.client)
+            await runUnlockFlow(this.client, {
+                signal: opts.signal,
+                onProgress: ({ keys, progress }) =>
+                    opts.onProgress?.({
+                        keys: this.layoutIndexes(keys),
+                        progress,
+                    }),
+            })
             this.setLockState('unlocked')
         } catch (err) {
             this.setLockState('locked')
@@ -401,7 +521,14 @@ export class VialKeyboardService implements KeyboardService {
                     this.layerNames,
                     this.customNames,
                 ),
-                encoders: l.encoders,
+                encoders: l.encoders?.map((e) => {
+                    const [cw, ccw] = relabelVialLayer(
+                        [e.cw, e.ccw],
+                        this.layerNames,
+                        this.customNames,
+                    )
+                    return { cw, ccw }
+                }),
             })),
             availableLayers: 0,
             activeLayoutId: this.physicalLayout.id,
@@ -426,6 +553,7 @@ export class VialKeyboardService implements KeyboardService {
     ): Promise<void> {
         if (this.closed) throw new UnsupportedError('setKey: connection closed')
         ensureEncodable(action)
+        this.guardKeycode(action)
         const idx = this.layerIndexById(layerId)
         if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
         const { row, col } = this.positionToCoord(position)
@@ -454,6 +582,8 @@ export class VialKeyboardService implements KeyboardService {
     }
 
     async setKeys(updates: KeyUpdate[]): Promise<void> {
+        // All-or-nothing on the lock: refuse before writing any key.
+        for (const u of updates) this.guardKeycode(u.action)
         for (const u of updates) {
             await this.setKey(u.layerId, u.position, u.action)
         }
@@ -467,6 +597,7 @@ export class VialKeyboardService implements KeyboardService {
     ): Promise<void> {
         if (this.closed) throw new UnsupportedError('setEncoder: closed')
         ensureEncodable(action)
+        this.guardKeycode(action)
         const idx = this.layerIndexById(layerId)
         if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
         const slot = this.def.encoderIndices.indexOf(encoderIdx)
@@ -523,6 +654,39 @@ export class VialKeyboardService implements KeyboardService {
             )
         }
         return this.getKeymap()
+    }
+
+    // Swap to a sideloaded definition. Reads the keymap (and encoders) under
+    // the new matrix before touching state, so a failed read leaves the
+    // current layout intact. No pending-changes guard: Vial writes are durable
+    // the moment they are acknowledged, so there is nothing to lose.
+    async applyLayout(def: ParsedKeyboardDef): Promise<void> {
+        if (this.closed) {
+            throw new UnsupportedError('applyLayout: connection closed')
+        }
+        const customNames = customNamesOf(def)
+        const layers = await loadLayers(
+            this.client,
+            def,
+            this.capabilities.maxLayers ?? this.layers.length,
+            this.layerNames,
+            customNames,
+        )
+        this.def = def
+        this.customNames = customNames
+        this.physicalLayout = layoutFromDef(def)
+        this.layers = layers
+        this.capabilities = {
+            ...this.capabilities,
+            encoders: def.encoderIndices.length || undefined,
+        }
+        for (const cb of this.notificationListeners) {
+            try {
+                cb({ topic: 'layout-changed', payload: null })
+            } catch {
+                /* ignore */
+            }
+        }
     }
 
     async commit(): Promise<void> {
@@ -688,6 +852,7 @@ export class VialKeyboardService implements KeyboardService {
     }
 
     async setMacroBytes(idx: number, bytes: Uint8Array): Promise<void> {
+        this.requireUnlocked('Saving macros')
         await writeMacro(this.client, idx, bytes)
         this.setPending(true)
     }
@@ -699,6 +864,7 @@ export class VialKeyboardService implements KeyboardService {
 
     async setMacro(idx: number, actions: MacroAction[]): Promise<void> {
         const bytes = encodeMacro(actions)
+        this.requireUnlocked('Saving macros')
         await writeMacro(this.client, idx, bytes)
         this.setPending(true)
     }
@@ -710,6 +876,7 @@ export class VialKeyboardService implements KeyboardService {
     }
 
     async setMacroBuffer(buffer: Uint8Array): Promise<void> {
+        this.requireUnlocked('Saving macros')
         await writeMacroBuffer(this.client, buffer)
         this.setPending(true)
     }

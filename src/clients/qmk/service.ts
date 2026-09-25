@@ -6,6 +6,8 @@ import type { KeycodeCodec } from '@firmware/codec'
 import type {
     AdvancedApi,
     Capabilities,
+    ConnectNotice,
+    EncoderApi,
     KeyboardService,
     LayersApi,
     RgbApi,
@@ -15,6 +17,7 @@ import type {
     ActionType,
     AdapterNotification,
     DeviceInfo,
+    EncoderAction,
     ExportedFile,
     KeyAction,
     Keymap,
@@ -40,18 +43,22 @@ import { exportKeymap } from './export'
 import type { HidClient } from './hidClient'
 import {
     fetchKeymapBuffer,
+    getEncoderCmd,
     getKeycodeCmd,
     getLayerCountCmd,
+    parseEncoderKeycode,
     parseKeycode,
     parseLayerCount,
+    parseSetEncoderEcho,
     parseSetKeycodeEcho,
     readU16BE,
     resetKeymapCmd,
+    setEncoderCmd,
     setKeycodeCmd,
 } from './protocol'
 
 export const QMK_CAPABILITIES_BASE: Omit<Capabilities, 'maxLayers'> = {
-    lock: false,
+    lock: 'none',
     rename: false,
     notifications: false,
     reorderLayers: false,
@@ -101,6 +108,8 @@ export interface QmkServiceConfig {
      *  + rowColMap (split/staggered/rotated geometry). When absent, the service
      *  falls back to a synthetic rows×cols grid. */
     def?: ParsedKeyboardDef
+    /** Passed through to {@link KeyboardService.connectNotices}. */
+    connectNotices?: readonly ConnectNotice[]
 }
 
 function makeGridLayout(rows: number, cols: number): PhysicalLayout {
@@ -227,8 +236,45 @@ async function loadKeymapBulk(
     return layers
 }
 
+/** Does the firmware have an encoder map (ENCODER_MAP_ENABLE)? Boards without
+ *  one answer id_unhandled. One round trip, done once per connect. */
+async function supportsEncoderMap(client: HidClient): Promise<boolean> {
+    try {
+        parseEncoderKeycode(await client.send(getEncoderCmd(0, 0, true)))
+        return true
+    } catch {
+        return false
+    }
+}
+
+/** Fill `Layer.encoders` for the encoders a definition declares. The protocol
+ *  cannot report how many encoders a board has — only a def can. */
+async function readLayerEncoders(
+    client: HidClient,
+    layers: Layer[],
+    encoderIndices: number[],
+    decode: (kc: number) => KeyAction,
+): Promise<Layer[]> {
+    if (encoderIndices.length === 0) return layers
+    const out: Layer[] = []
+    for (let l = 0; l < layers.length; l++) {
+        const encoders: EncoderAction[] = []
+        for (const idx of encoderIndices) {
+            const cw = parseEncoderKeycode(
+                await client.send(getEncoderCmd(l, idx, true)),
+            )
+            const ccw = parseEncoderKeycode(
+                await client.send(getEncoderCmd(l, idx, false)),
+            )
+            encoders.push({ cw: decode(cw), ccw: decode(ccw) })
+        }
+        out.push({ ...layers[l], encoders })
+    }
+    return out
+}
+
 export class QmkKeyboardService implements KeyboardService {
-    public readonly capabilities: Capabilities
+    public capabilities: Capabilities
     public readonly deviceInfo: DeviceInfo
     public readonly wireless?: WirelessApi
     public readonly rgb?: RgbApi
@@ -236,8 +282,12 @@ export class QmkKeyboardService implements KeyboardService {
     public readonly layerControl?: LayersApi
     public readonly sideload: SideloadApi
     public readonly codec: KeycodeCodec
+    public readonly connectNotices?: readonly ConnectNotice[]
+    public readonly encoders?: EncoderApi
 
     protected readonly client: HidClient
+    private def?: ParsedKeyboardDef
+    private readonly encoderMap: boolean
     private layout: PhysicalLayout
     private rowColMap: { row: number; col: number }[]
     private layers: Layer[]
@@ -251,10 +301,16 @@ export class QmkKeyboardService implements KeyboardService {
 
     protected readonly cfg: QmkServiceConfig
 
-    protected constructor(cfg: QmkServiceConfig, layers: Layer[]) {
+    protected constructor(
+        cfg: QmkServiceConfig,
+        layers: Layer[],
+        encoderMap = false,
+    ) {
         this.cfg = cfg
         this.deviceInfo = cfg.deviceInfo
         this.client = cfg.client
+        this.def = cfg.def
+        this.encoderMap = encoderMap
         if (cfg.def) {
             this.layout = layoutFromDef(cfg.def)
             this.rowColMap = cfg.def.rowColMap
@@ -268,13 +324,24 @@ export class QmkKeyboardService implements KeyboardService {
             ...QMK_CAPABILITIES_BASE,
             maxLayers: cfg.layerCount,
             layoutSideloadable: true,
+            encoders: this.encoderCount(),
             ...(cfg.capabilitiesOverride ?? {}),
+        }
+        // Present whenever the firmware has an encoder map, even before a def
+        // names the encoders: the save-mode wrapper is built once at connect,
+        // and a def sideloaded later can add them.
+        if (encoderMap) {
+            this.encoders = {
+                setEncoder: (layerId, encoderIdx, direction, action) =>
+                    this.setEncoder(layerId, encoderIdx, direction, action),
+            }
         }
         this.wireless = cfg.wireless
         this.rgb = cfg.rgb
         this.advanced = cfg.advanced
         this.layerControl = cfg.layerControl
         this.codec = cfg.codec ?? qmkCodec
+        this.connectNotices = cfg.connectNotices
         // VIA/QMK board-definition ingest (file, cache, registry). Built here
         // so the app drives it through the neutral facade and never imports
         // this client's parsers.
@@ -289,15 +356,50 @@ export class QmkKeyboardService implements KeyboardService {
         const matrix = cfg.def
             ? { rows: cfg.def.rows, cols: cfg.def.cols }
             : { rows: cfg.rows, cols: cfg.cols }
-        const layers = await loadInitialKeymap(
+        const codec = cfg.codec ?? qmkCodec
+        const encoderMap = await supportsEncoderMap(cfg.client)
+        let layers = await loadInitialKeymap(
             cfg.client,
             map,
             cfg.layerCount,
             cfg.decodeOverride,
-            cfg.codec ?? qmkCodec,
+            codec,
             matrix,
         )
-        return new QmkKeyboardService(cfg, layers)
+        if (encoderMap && cfg.def) {
+            layers = await readLayerEncoders(
+                cfg.client,
+                layers,
+                cfg.def.encoderIndices,
+                (kc) =>
+                    cfg.decodeOverride?.(kc) ??
+                    decodeAsKeyAction(kc, undefined, codec),
+            )
+        }
+        return new QmkKeyboardService(cfg, layers, encoderMap)
+    }
+
+    private encoderCount(): number | undefined {
+        if (!this.encoderMap) return undefined
+        return this.def?.encoderIndices.length || undefined
+    }
+
+    private decodeKeycode(kc: number): KeyAction {
+        return (
+            this.cfg.decodeOverride?.(kc) ??
+            decodeAsKeyAction(kc, undefined, this.codec)
+        )
+    }
+
+    /** Re-read encoders for the current def (no-op without an encoder map). */
+    private async withEncoders(layers: Layer[]): Promise<Layer[]> {
+        if (!this.encoderMap || !this.def) return layers
+        return readLayerEncoders(
+            this.client,
+            layers,
+            this.def.encoderIndices,
+            (kc) => this.decodeKeycode(kc),
+        )
     }
 
     private handleClientClosed(reason?: unknown): void {
@@ -367,6 +469,14 @@ export class QmkKeyboardService implements KeyboardService {
                 id: l.id,
                 name: l.name,
                 keys: relabelQmkLayer(l.keys, this.layerNames, this.codec),
+                encoders: l.encoders?.map((e) => {
+                    const [cw, ccw] = relabelQmkLayer(
+                        [e.cw, e.ccw],
+                        this.layerNames,
+                        this.codec,
+                    )
+                    return { cw, ccw }
+                }),
             })),
             availableLayers: 0,
             activeLayoutId: this.layout.id,
@@ -414,6 +524,42 @@ export class QmkKeyboardService implements KeyboardService {
         // echo-verified), so nothing pends. Raising the flag here would strand
         // the UI in "unsaved" (Save/Discard are hidden for automatic) and block
         // applyLayout behind its pending-changes guard.
+    }
+
+    async setEncoder(
+        layerId: number,
+        encoderIdx: number,
+        direction: 0 | 1,
+        action: KeyAction,
+    ): Promise<void> {
+        if (this.closed) {
+            throw new UnsupportedError('setEncoder: connection closed')
+        }
+        const idx = this.layerIndexById(layerId)
+        if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
+        const slot = this.def?.encoderIndices.indexOf(encoderIdx) ?? -1
+        if (slot < 0) {
+            throw new ProtocolError(`Unknown encoder index: ${encoderIdx}`)
+        }
+        const kc = encodeKeycode(action)
+        // EncoderApi direction 0 = clockwise.
+        const resp = await this.client.send(
+            setEncoderCmd(idx, encoderIdx, direction === 0, kc),
+        )
+        parseSetEncoderEcho(resp)
+        const next = buildQmkKeyAction(
+            action.kind,
+            action.params,
+            this.layerNames,
+        )
+        const layer = this.layers[idx]
+        const encs = (layer.encoders ?? []).slice()
+        const current = encs[slot] ?? { cw: next, ccw: next }
+        encs[slot] =
+            direction === 0
+                ? { cw: next, ccw: current.ccw }
+                : { cw: current.cw, ccw: next }
+        this.layers[idx] = { ...layer, encoders: encs }
     }
 
     async setKeys(updates: KeyUpdate[]): Promise<void> {
@@ -469,7 +615,7 @@ export class QmkKeyboardService implements KeyboardService {
         }
         // Read layers under the NEW rowColMap before mutating service state.
         // If the device read fails partway, no state is touched.
-        const nextLayers = await loadInitialKeymap(
+        let nextLayers = await loadInitialKeymap(
             this.client,
             def.rowColMap,
             this.capabilities.maxLayers ?? this.layers.length,
@@ -477,9 +623,22 @@ export class QmkKeyboardService implements KeyboardService {
             this.codec,
             { rows: def.rows, cols: def.cols },
         )
+        if (this.encoderMap) {
+            nextLayers = await readLayerEncoders(
+                this.client,
+                nextLayers,
+                def.encoderIndices,
+                (kc) => this.decodeKeycode(kc),
+            )
+        }
+        this.def = def
         this.rowColMap = def.rowColMap
         this.layout = layoutFromDef(def)
         this.layers = nextLayers
+        this.capabilities = {
+            ...this.capabilities,
+            encoders: this.encoderCount(),
+        }
         for (const cb of this.notificationListeners) {
             try {
                 cb({ topic: 'layout-changed', payload: null })
@@ -503,16 +662,20 @@ export class QmkKeyboardService implements KeyboardService {
 
     async resetSettings(): Promise<void> {
         await this.client.send(resetKeymapCmd())
-        const matrix = this.cfg.def
-            ? { rows: this.cfg.def.rows, cols: this.cfg.def.cols }
+        // The current def, not the connect-time one: a sideloaded layout may
+        // have changed the matrix since.
+        const matrix = this.def
+            ? { rows: this.def.rows, cols: this.def.cols }
             : { rows: this.cfg.rows, cols: this.cfg.cols }
-        this.layers = await loadInitialKeymap(
-            this.client,
-            this.rowColMap,
-            this.capabilities.maxLayers ?? this.layers.length,
-            this.cfg.decodeOverride,
-            this.codec,
-            matrix,
+        this.layers = await this.withEncoders(
+            await loadInitialKeymap(
+                this.client,
+                this.rowColMap,
+                this.capabilities.maxLayers ?? this.layers.length,
+                this.cfg.decodeOverride,
+                this.codec,
+                matrix,
+            ),
         )
         this.setPending(false)
     }

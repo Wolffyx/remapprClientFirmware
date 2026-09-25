@@ -19,12 +19,15 @@ export type {
     KeyUpdate,
     Keymap,
     Layer,
+    LockKind,
     LockState,
     MacroAction,
     PhysicalLayout,
     PhysicalLayoutKey,
     TapDanceEntry,
     TransportKind,
+    UnlockOptions,
+    UnlockProgress,
 } from './types'
 
 export { isUnlocked } from './types'
@@ -35,6 +38,7 @@ export type {
     ClusterDiag,
     ClusterPeer,
     DynamicEntriesApi,
+    ConnectNotice,
     EncoderApi,
     HsvColor,
     IndicatorConfig,
@@ -116,3 +120,4 @@ export {
     connectMockWithConfig,
     MOCK_TRANSPORT_LABEL,
 } from './clients/mock/adapter'
+export type { MockServiceOptions } from './clients/mock/service'

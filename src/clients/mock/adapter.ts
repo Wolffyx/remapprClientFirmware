@@ -5,7 +5,7 @@ import type { KeyboardService } from '@firmware/service'
 import type { Transport } from '@firmware/transport'
 import type { ConfigKeymap } from '@firmware/config'
 
-import { MockKeyboardService } from './service'
+import { MockKeyboardService, type MockServiceOptions } from './service'
 
 export const MOCK_TRANSPORT_LABEL = 'mock://demo'
 
@@ -68,7 +68,12 @@ export function createMockTransport(): Transport {
  * a ready KeyboardService. Bypasses pickAdapter on purpose so the demo button
  * never depends on probe ordering.
  */
-export async function connectMock(): Promise<KeyboardService> {
+export async function connectMock(
+    opts?: MockServiceOptions,
+): Promise<KeyboardService> {
+    // Options (e.g. a simulated lock) go straight to the service; the plain
+    // demo keeps the adapter path.
+    if (opts) return new MockKeyboardService(opts)
     const transport = createMockTransport()
     const ctrl = new AbortController()
     return mockAdapter.connect(transport, ctrl.signal)

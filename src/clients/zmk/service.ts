@@ -39,12 +39,13 @@ import {
 import { zmkCodec } from './codec'
 import { behaviorsToActionTypes } from './actionTypes'
 import { zmkKeymapToNeutral } from './keymap'
+import { canSetZmkBinding } from './validateBinding'
 import { zmkNeutralToConfig } from './raise'
 import { serializeKeymap } from '@firmware/config'
 import { generateZMKConfigFile, generateZMKKeymapFile } from './export'
 
 const ZMK_CAPABILITIES: Capabilities = {
-    lock: true,
+    lock: 'editor',
     rename: true,
     notifications: true,
     reorderLayers: true,
@@ -377,7 +378,9 @@ export class ZmkKeyboardService implements KeyboardService {
                       : code === 3
                         ? 'the keyboard rejected the binding parameters'
                         : `error ${code}`
-            throw new ProtocolError(`Failed to set key: ${reason}`)
+            const name = this.behaviors[binding.behaviorId]?.displayName
+            const where = `layer ${layerId}, key ${position}, ${name ?? `behavior #${binding.behaviorId}`} [${binding.param1}, ${binding.param2}]`
+            throw new ProtocolError(`Failed to set key (${where}): ${reason}`)
         }
         // Mirror the edit into cachedKeymap so cache-based raises
         // (getConfigSource) see it without a full getKeymap re-read.
@@ -388,6 +391,28 @@ export class ZmkKeyboardService implements KeyboardService {
             cachedLayer.bindings[position] = binding
         }
         this.markPending(true)
+    }
+
+    /**
+     * Local mirror of the device's binding validation (see {@link canSetZmkBinding}),
+     * so a bulk writer can skip bindings ZMK would answer INVALID_PARAMETERS for —
+     * e.g. `&ext_power` / `&mmv` / `&msc` / parameterized macros, which report no
+     * parameter metadata yet legitimately appear in a compiled keymap.
+     *
+     * Answers optimistically before behaviors have loaded: a caller that reads the
+     * keymap first (every real one does) has them cached by then.
+     */
+    canSetAction(action: KeyAction): boolean {
+        if (Object.keys(this.behaviors).length === 0) return true
+        const binding = this.actionToBinding(action)
+        const km = this.cachedKeymap
+        const layerCount = km ? km.layers.length + km.availableLayers : 0
+        return canSetZmkBinding(
+            this.behaviors[binding.behaviorId],
+            binding.param1,
+            binding.param2,
+            layerCount,
+        )
     }
 
     async setKeys(updates: KeyUpdate[]): Promise<void> {

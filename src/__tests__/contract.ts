@@ -16,7 +16,7 @@ export interface ContractSetup {
     transportKind?: TransportKind
     /**
      * If true, the contract suite will attempt unlock() before any mutation.
-     * Adapters whose `capabilities.lock === false` skip these calls; for
+     * Adapters whose `capabilities.lock` is 'none' skip these calls; for
      * adapters that ship locked, set this so the suite can drive a real flow.
      */
     autoUnlock?: boolean
@@ -47,7 +47,7 @@ export function runContractSuite(name: string, setup: ContractSetup): void {
             const transport = setup.makeMatchingTransport()
             const ctrl = new AbortController()
             service = await adapter.connect(transport, ctrl.signal)
-            if (setup.autoUnlock && service.capabilities.lock) {
+            if (setup.autoUnlock && service.capabilities.lock !== 'none') {
                 await service.unlock()
             }
             return service
@@ -87,7 +87,9 @@ export function runContractSuite(name: string, setup: ContractSetup): void {
             expect(svc.deviceInfo.name).toBeTruthy()
             expect(svc.deviceInfo.firmware).toBeTruthy()
             expect(svc.capabilities).toBeTruthy()
-            expect(typeof svc.capabilities.lock).toBe('boolean')
+            expect(['none', 'editor', 'actions']).toContain(
+                svc.capabilities.lock,
+            )
             expect(Array.isArray(svc.capabilities.exportFormats)).toBe(true)
             // Every firmware must declare its save mode (drives the Save/Discard
             // affordance) — one of the three known values.
@@ -128,7 +130,7 @@ export function runContractSuite(name: string, setup: ContractSetup): void {
 
         it('setKey round-trips through getKeymap', async () => {
             const svc = await connect()
-            if (svc.capabilities.lock && !setup.autoUnlock) {
+            if (svc.capabilities.lock === 'editor' && !setup.autoUnlock) {
                 // Adapter ships locked and suite was not asked to unlock —
                 // setKey must reject with LockedError to satisfy the contract.
                 const km0 = await svc.getKeymap()
@@ -166,7 +168,7 @@ export function runContractSuite(name: string, setup: ContractSetup): void {
             if (!svc.capabilities.variableLayerCount) {
                 return
             }
-            if (svc.capabilities.lock && !setup.autoUnlock) {
+            if (svc.capabilities.lock === 'editor' && !setup.autoUnlock) {
                 await expect(svc.addLayer()).rejects.toBeInstanceOf(LockedError)
                 return
             }
@@ -184,7 +186,7 @@ export function runContractSuite(name: string, setup: ContractSetup): void {
         it('renameLayer updates the layer name when supported', async () => {
             const svc = await connect()
             if (!svc.capabilities.rename) return
-            if (svc.capabilities.lock && !setup.autoUnlock) {
+            if (svc.capabilities.lock === 'editor' && !setup.autoUnlock) {
                 const km = await svc.getKeymap()
                 await expect(
                     svc.renameLayer(km.layers[0].id, 'X'),
@@ -204,13 +206,15 @@ export function runContractSuite(name: string, setup: ContractSetup): void {
             const svc = await connect()
             if (!svc.capabilities.reorderLayers) return
             if (svc.capabilities.variableLayerCount) {
-                if (!(svc.capabilities.lock && !setup.autoUnlock)) {
+                if (!(
+                    svc.capabilities.lock === 'editor' && !setup.autoUnlock
+                )) {
                     await svc.addLayer()
                 }
             }
             const km0 = await svc.getKeymap()
             if (km0.layers.length < 2) return
-            if (svc.capabilities.lock && !setup.autoUnlock) {
+            if (svc.capabilities.lock === 'editor' && !setup.autoUnlock) {
                 await expect(svc.moveLayer(0, 1)).rejects.toBeInstanceOf(
                     LockedError,
                 )
@@ -226,7 +230,7 @@ export function runContractSuite(name: string, setup: ContractSetup): void {
         it('lock state APIs honor capabilities.lock', async () => {
             const svc = await connect()
             const state = await svc.getLockState()
-            if (svc.capabilities.lock) {
+            if (svc.capabilities.lock !== 'none') {
                 expect(['locked', 'unlocking', 'unlocked']).toContain(state)
             } else {
                 expect(state).toBe('not-applicable')
