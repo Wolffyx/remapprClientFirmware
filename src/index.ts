@@ -120,3 +120,4 @@ export {
     connectMockWithConfig,
     MOCK_TRANSPORT_LABEL,
 } from './clients/mock/adapter'
+export type { MockServiceOptions } from './clients/mock/service'

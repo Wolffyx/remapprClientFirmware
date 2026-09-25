@@ -31,7 +31,9 @@ import type {
     KeyOverrideEntry,
     KeyUpdate,
     Layer,
+    LockKind,
     LockState,
+    UnlockOptions,
     MacroAction,
     PhysicalLayout,
     TapDanceEntry,
@@ -98,6 +100,10 @@ const MOCK_LAYOUT_JSON: SideloadFormat = {
     description:
         'Try a VIA or Vial keyboard definition (e.g. vial.json) as the demo board. Bindings carry over by position.',
 }
+
+/** The demo's stand-in unlock combo: the first two keys of the board. */
+const DEMO_UNLOCK_KEYS = [0, 1]
+const DEMO_UNLOCK_HOLD_MS = 3_000
 
 const MOCK_CAPABILITIES: Capabilities = {
     lock: 'editor',
@@ -167,9 +173,18 @@ type LockStateHandler = (state: LockState) => void
 type PendingChangesHandler = (pending: boolean) => void
 type ClosedHandler = (reason?: unknown) => void
 
-interface MockServiceOptions {
+// pattern-check: skip additive demo-only lock options on the existing options bag
+export interface MockServiceOptions {
     deviceInfo?: Partial<DeviceInfo>
     initiallyLocked?: boolean
+    /** Which lock the demo simulates (default 'editor', starting unlocked):
+     *  lets the unlock UI be tried without a keyboard. */
+    lock?: LockKind
+    /** 'editor' only: the demo "device" unlocks itself after this long, as a
+     *  ZMK board does when its studio-unlock key is pressed. */
+    deviceUnlockAfterMs?: number
+    /** 'actions' only: how long the simulated combo hold takes. */
+    unlockHoldMs?: number
     /** Seed the runtime from a specific config (builder "Open in editor"
      *  handoff) instead of the static Corne demo. The physical layout, key
      *  count, and getConfigSource() all derive from this board. */
@@ -248,6 +263,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
     private keyCount: number
     private activeLayoutId = 0
     private lockState: LockState
+    private readonly unlockHoldMs: number
     private pendingChanges = false
     private closed = false
 
@@ -305,12 +321,36 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
             firmwareVersion: opts.deviceInfo?.firmwareVersion ?? '0.0.0',
             serialNumber: opts.deviceInfo?.serialNumber ?? 'MOCK-0001',
         }
-        this.lockState = opts.initiallyLocked ? 'locked' : 'unlocked'
+        const lock = opts.lock ?? MOCK_CAPABILITIES.lock
+        this.unlockHoldMs = opts.unlockHoldMs ?? DEMO_UNLOCK_HOLD_MS
+        this.lockState =
+            lock === 'none'
+                ? 'not-applicable'
+                : opts.initiallyLocked
+                  ? 'locked'
+                  : 'unlocked'
+        if (
+            lock === 'editor' &&
+            opts.initiallyLocked &&
+            opts.deviceUnlockAfterMs
+        ) {
+            setTimeout(() => {
+                if (!this.closed) this.setLockState('unlocked')
+            }, opts.deviceUnlockAfterMs)
+        }
         // Knobs come from the board, like keys: the seed config's
         // keyboard.encoders (1 on the demo Corne), not a fixed number.
         this.capabilities = {
             ...MOCK_CAPABILITIES,
+            lock,
             encoders: this.encoderCount() || undefined,
+            ...(lock === 'editor' && opts.deviceUnlockAfterMs
+                ? {
+                      unlockHint: {
+                          message: `Demo: the keyboard unlocks itself in ${Math.round(opts.deviceUnlockAfterMs / 1000)} s, as if its unlock key were pressed.`,
+                      },
+                  }
+                : {}),
         }
         this.seedDefaultLayers()
         this.sideload = {
@@ -404,6 +444,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
             },
             setMacro: async (idx, actions) => {
                 this.requireUnlocked()
+                this.requireActionUnlocked('Saving macros')
                 this.requireMacro(idx)
                 this.macroBuffers[idx] = actions.map((a) => ({ ...a }))
                 this.markPending(true)
@@ -643,9 +684,38 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
         )
     }
 
+    /** 'editor' lock: every edit waits for the unlock. */
     private requireUnlocked(): void {
+        if (this.capabilities.lock !== 'editor') return
         if (this.lockState !== 'unlocked') {
             throw new LockedError()
+        }
+    }
+
+    /** 'actions' lock: only the guarded operations wait for it (macro saves in
+     *  the demo, standing in for Vial's macros / QK_BOOT). */
+    private requireActionUnlocked(what: string): void {
+        if (this.capabilities.lock !== 'actions') return
+        if (this.lockState !== 'unlocked') {
+            throw new LockedError(`${what} needs the keyboard unlocked`)
+        }
+    }
+
+    /** Stand-in for holding a firmware's unlock combo: ticks the progress up
+     *  over unlockHoldMs, and stops if the caller aborts. */
+    private async simulateUnlockHold(opts: UnlockOptions): Promise<void> {
+        const keys = DEMO_UNLOCK_KEYS.filter((k) => k < this.keyCount)
+        const ticks = Math.max(1, Math.round(this.unlockHoldMs / 100))
+        for (let t = 0; t <= ticks; t++) {
+            if (opts.signal?.aborted) {
+                throw opts.signal.reason ?? new Error('unlock aborted')
+            }
+            opts.onProgress?.({ keys, progress: t / ticks })
+            if (t < ticks) {
+                await new Promise<void>((r) =>
+                    setTimeout(r, this.unlockHoldMs / ticks),
+                )
+            }
         }
     }
 
@@ -674,10 +744,20 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
         return this.lockState
     }
 
-    async unlock(): Promise<void> {
-        if (this.lockState === 'unlocked') return
+    async unlock(opts: UnlockOptions = {}): Promise<void> {
+        if (this.lockState === 'unlocked' || this.capabilities.lock === 'none')
+            return
         this.setLockState('unlocking')
-        // Mock: instant unlock; real device would wait for user.
+        if (this.capabilities.lock === 'actions') {
+            try {
+                await this.simulateUnlockHold(opts)
+            } catch (err) {
+                this.setLockState('locked')
+                throw err
+            }
+        }
+        // 'editor': instant here (tests drive it); the demo's own device-side
+        // unlock is the deviceUnlockAfterMs timer.
         this.setLockState('unlocked')
     }
 
