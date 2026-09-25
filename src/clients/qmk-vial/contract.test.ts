@@ -1,8 +1,8 @@
 // Pattern check: no GoF pattern (-) — rejected — fake Vial responder over paired streams driving the shared FirmwareAdapter contract suite, no abstraction warranted.
-import { compress as lzmaCompress } from 'lzma1'
 import { describe, expect, it, vi } from 'vitest'
 
 import { runContractSuite } from '@firmware/__tests__/contract'
+import { xzStore } from '@firmware/__tests__/xz'
 import type { Transport } from '@firmware'
 import {
     VIA_ID,
@@ -33,7 +33,7 @@ function makeDefJson(): string {
 
 function makeDefBytes(text: string = makeDefJson()): Uint8Array {
     const enc = new TextEncoder().encode(text)
-    return lzmaCompress(enc)
+    return xzStore(enc)
 }
 
 /** One key plus one encoder (KLE label 'e' in slot 9 → parser labels[4]). */
