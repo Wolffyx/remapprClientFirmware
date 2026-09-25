@@ -66,7 +66,11 @@ import {
     type TapDanceEntry,
 } from './dynamic'
 import { readEncoder, writeEncoder } from './encoder'
-import { type ParsedKeyboardDef, type VialCustomKeycode } from './keyboardDef'
+import {
+    fetchAndParseKeyboardDef,
+    type ParsedKeyboardDef,
+    type VialCustomKeycode,
+} from './keyboardDef'
 import {
     getMacroBufferSize,
     getMacroCount,
@@ -298,6 +302,7 @@ export class VialKeyboardService implements KeyboardService {
         this.sideload = createQmkSideload(this, {
             format: VIAL_JSON,
             registry: false,
+            deviceDef: () => fetchAndParseKeyboardDef(this.client),
         })
         if (this.capabilities.dynamicEntries) {
             this.dynamic = {

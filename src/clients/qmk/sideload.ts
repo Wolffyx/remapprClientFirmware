@@ -17,6 +17,7 @@ import type { ParsedKeyboardDef } from '@firmware/kle/parser'
 import { parseLightingMenu } from '@firmware/clients/via/lightingMenu'
 import {
     cacheKey,
+    clearCached,
     loadCached,
     parseSideloadJson,
     saveCached,
@@ -40,6 +41,9 @@ export interface QmkSideloadOptions {
      *  Off for Vial: its board describes itself, and a registry def must never
      *  silently replace the on-device one. */
     registry?: boolean
+    /** Read the definition the device reports itself. When given, the API
+     *  offers `revertToDevice`. Vial boards have one; VIA boards do not. */
+    deviceDef?: () => Promise<ParsedKeyboardDef>
 }
 
 /** Neutral result for a parsed board def. Lighting comes from the board's own
@@ -125,6 +129,20 @@ export function createQmkSideload(
             await service.applyLayout(def)
             return toResult(def, true)
         },
+    }
+    const { deviceDef } = opts
+    if (deviceDef) {
+        api.revertToDevice = async () => {
+            if (!service.applyLayout)
+                throw new Error('This device cannot accept a sideloaded layout')
+            // Read and apply first: if the device's own definition can't be
+            // read, the saved one stays as the fallback it was.
+            const def = await deviceDef()
+            await service.applyLayout(def)
+            const k = key()
+            if (k) clearCached(k)
+            return toResult(def, true)
+        }
     }
     if (opts.registry === false) return api
 

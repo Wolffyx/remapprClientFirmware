@@ -1,5 +1,5 @@
 // Pattern check: no GoF pattern (-) — rejected — fake Vial responder over paired streams driving the shared FirmwareAdapter contract suite, no abstraction warranted.
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { runContractSuite } from '@firmware/__tests__/contract'
 import { xzStore } from '@firmware/__tests__/xz'
@@ -449,6 +449,65 @@ describe('qmk-vial — vial.json sideload (#189)', () => {
         expect(svc.capabilities.encoders).toBe(1)
         expect(seen).toContain('layout-changed')
         await svc.disconnect()
+    })
+
+    describe('revertToDevice', () => {
+        const KEY = 'qmk-via-layout:v1:4b50:0001'
+        const OVERRIDE = JSON.stringify({
+            name: 'Override',
+            matrix: { rows: FAKE_ROWS, cols: FAKE_COLS },
+            layouts: { keymap: [['0,0']] },
+            customKeycodes: [],
+        })
+        let store: Map<string, string>
+
+        beforeEach(() => {
+            store = new Map()
+            vi.stubGlobal('window', {
+                localStorage: {
+                    getItem: (k: string) => store.get(k) ?? null,
+                    setItem: (k: string, v: string) => void store.set(k, v),
+                    removeItem: (k: string) => void store.delete(k),
+                },
+            })
+        })
+        afterEach(() => vi.unstubAllGlobals())
+
+        it('goes back to the board’s own layout and forgets the saved file', async () => {
+            const svc = await connectFake('fake-vial · 4b50:0001')
+            await svc.sideload!.importFile('vial-layout-json', OVERRIDE)
+            expect(store.has(KEY)).toBe(true)
+
+            const result = await svc.sideload!.revertToDevice!()
+            expect(result).toMatchObject({
+                name: 'Fake Vial',
+                keymapChanged: true,
+            })
+            const km = await svc.getKeymap()
+            expect(km.layouts[0].name).toBe('Fake Vial')
+            expect(store.has(KEY)).toBe(false)
+            expect(svc.sideload!.readCached!()).toBeNull()
+            await svc.disconnect()
+        })
+
+        it('keeps the saved file when the board’s layout cannot be read', async () => {
+            let state: FakeState | undefined
+            const t = createFakeVialTransport(
+                { label: 'fake-vial · 4b50:0001' },
+                (s) => (state = s),
+            )
+            const svc = await createVialAdapter().connect(
+                t,
+                new AbortController().signal,
+            )
+            await svc.sideload!.importFile('vial-layout-json', OVERRIDE)
+            state!.defBytes = new Uint8Array(0)
+
+            await expect(svc.sideload!.revertToDevice!()).rejects.toThrow()
+            expect(store.has(KEY)).toBe(true)
+            expect((await svc.getKeymap()).layouts[0].name).toBe('Override')
+            await svc.disconnect()
+        })
     })
 })
 
