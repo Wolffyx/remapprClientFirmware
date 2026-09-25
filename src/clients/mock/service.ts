@@ -100,7 +100,7 @@ const MOCK_LAYOUT_JSON: SideloadFormat = {
 }
 
 const MOCK_CAPABILITIES: Capabilities = {
-    lock: true,
+    lock: 'editor',
     rename: true,
     notifications: true,
     reorderLayers: true,

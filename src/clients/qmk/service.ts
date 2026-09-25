@@ -58,7 +58,7 @@ import {
 } from './protocol'
 
 export const QMK_CAPABILITIES_BASE: Omit<Capabilities, 'maxLayers'> = {
-    lock: false,
+    lock: 'none',
     rename: false,
     notifications: false,
     reorderLayers: false,

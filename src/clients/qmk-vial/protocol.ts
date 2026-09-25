@@ -178,6 +178,31 @@ export function unlockPollCmd(): Uint8Array {
     return makeVialFrame(VIAL_CMD.UNLOCK_POLL)
 }
 
+/** Hold ticks an unlock needs (vial.c VIAL_UNLOCK_COUNTER_MAX): the counter
+ *  starts here and counts down every ~100 ms while the combo is held. */
+export const VIAL_UNLOCK_COUNTER_MAX = 50
+
+export interface UnlockPollResponse {
+    unlocked: boolean
+    inProgress: boolean
+    /** Ticks left; resets to the max when the combo is released. */
+    counter: number
+}
+
+/** vial_unlock_poll reply: [unlocked, in_progress, counter]. */
+export function parseUnlockPoll(resp: Uint8Array): UnlockPollResponse {
+    if (resp.length < 3) {
+        throw new ProtocolError(
+            `Vial unlock-poll: short response (${resp.length})`,
+        )
+    }
+    return {
+        unlocked: (resp[0] & 0xff) === 1,
+        inProgress: (resp[1] & 0xff) !== 0,
+        counter: resp[2] & 0xff,
+    }
+}
+
 export function lockCmd(): Uint8Array {
     return makeVialFrame(VIAL_CMD.LOCK)
 }

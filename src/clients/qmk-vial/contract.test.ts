@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { runContractSuite } from '@firmware/__tests__/contract'
 import { xzStore } from '@firmware/__tests__/xz'
-import type { Transport } from '@firmware'
+import type { KeyboardService, Transport } from '@firmware'
+import { LockedError } from '@firmware/errors'
 import {
     VIA_ID,
     VIA_KBV,
@@ -13,8 +14,10 @@ import {
 
 import keycultSource from '@firmware/kle/fixtures/aftermarket-keycult-tkl.vial.json?raw'
 
+import { decodeVialAsKeyAction } from './actions'
 import { createVialAdapter } from './adapter'
 import { DYNAMIC_OP, VIAL_CMD, VIAL_PREFIX } from './protocol'
+import type { VialKeyboardService } from './service'
 
 const FAKE_ROWS = 1
 const FAKE_COLS = 1
@@ -71,12 +74,17 @@ interface FakeState {
     defReads: number
     /** Encoder map as the firmware stores it: `${layer}:${idx}:${clockwise}`. */
     encoders: Map<string, number>
+    /** The unlock combo get_unlock_status reports (matrix positions). */
+    unlockKeys: [number, number][]
+    /** Vial frames the fake received, by sub-command. */
+    vialCmds: number[]
 }
 
 interface FakeOptions {
     /** Replace the on-device (LZMA) definition bytes, e.g. with garbage. */
     defBytes?: Uint8Array
     label?: string
+    unlockKeys?: [number, number][]
 }
 
 function frame(): Uint8Array {
@@ -91,6 +99,7 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
     if (id === VIAL_PREFIX) {
         const sub = req[1]
         out[1] = sub
+        state.vialCmds.push(sub)
         switch (sub) {
             case VIAL_CMD.GET_KEYBOARD_ID: {
                 // u32 LE protocol + u64 LE id (12 bytes total).
@@ -155,19 +164,26 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
                 r[0] = state.locked ? 0 : 1
                 r[1] = state.unlockInProgress ? 1 : 0
                 for (let i = 0; i < 15; i++) {
-                    r[2 + i * 2] = 0xff
-                    r[3 + i * 2] = 0xff
+                    const key = state.unlockKeys[i]
+                    r[2 + i * 2] = key ? key[0] : 0xff
+                    r[3 + i * 2] = key ? key[1] : 0xff
                 }
                 return r
             }
             case VIAL_CMD.UNLOCK_START:
                 state.unlockInProgress = true
                 return out
-            case VIAL_CMD.UNLOCK_POLL:
-                // After one poll, treat unlock as complete.
+            case VIAL_CMD.UNLOCK_POLL: {
+                // After one poll, treat unlock as complete. Reply like vial.c:
+                // [unlocked, in_progress, counter].
                 state.locked = false
                 state.unlockInProgress = false
-                return out
+                const r = frame()
+                r[0] = 1
+                r[1] = 0
+                r[2] = 0
+                return r
+            }
             case VIAL_CMD.LOCK:
                 state.locked = true
                 return out
@@ -251,6 +267,8 @@ function createFakeVialTransport(
         unlockInProgress: false,
         defReads: 0,
         encoders: new Map(),
+        unlockKeys: opts.unlockKeys ?? [],
+        vialCmds: [],
     }
     stateOut?.(state)
     const writer = inbound.writable.getWriter()
@@ -480,5 +498,62 @@ describe('qmk-vial — real vial.json upload (Keycult TKL)', () => {
         expect(knob.cw.canonicalId).toBe('media.volume_increment')
         expect(knob.ccw.canonicalId).toBe('media.volume_decrement')
         await svc.disconnect()
+    })
+})
+
+describe('qmk-vial — action lock (vial.c guards)', () => {
+    // QK_BOOT as a protocol-6 board encodes it.
+    const BOOT = decodeVialAsKeyAction(0x7c00, [], [])
+
+    async function connectLocked(
+        opts: FakeOptions = {},
+    ): Promise<{ svc: KeyboardService; state: FakeState }> {
+        let state: FakeState | undefined
+        const t = createFakeVialTransport(opts, (s) => (state = s))
+        const svc = await createVialAdapter().connect(
+            t,
+            new AbortController().signal,
+        )
+        return { svc, state: state! }
+    }
+
+    it('declares an actions lock and still edits keys while locked', async () => {
+        const { svc } = await connectLocked()
+        expect(svc.capabilities.lock).toBe('actions')
+        expect(await svc.getLockState()).toBe('locked')
+        const km = await svc.getKeymap()
+        await svc.setKey(km.layers[0].id, 0, decodeVialAsKeyAction(0x05))
+        expect((await svc.getKeymap()).layers[0].keys[0].params).toEqual([0x05])
+    })
+
+    it('refuses QK_BOOT and macro writes while locked, before sending', async () => {
+        const { svc, state } = await connectLocked()
+        const km = await svc.getKeymap()
+        state.vialCmds.length = 0
+        await expect(
+            svc.setKey(km.layers[0].id, 0, BOOT),
+        ).rejects.toBeInstanceOf(LockedError)
+        await expect(
+            svc.setKeys([
+                { layerId: km.layers[0].id, position: 0, action: BOOT },
+            ]),
+        ).rejects.toBeInstanceOf(LockedError)
+        // The macros facade only exists when the board reports macros; the
+        // guard lives on the service method it calls.
+        await expect(
+            (svc as VialKeyboardService).setMacro(0, []),
+        ).rejects.toBeInstanceOf(LockedError)
+        expect(state.vialCmds).toEqual([])
+    })
+
+    it('unlock reports the combo as layout keys, then QK_BOOT writes', async () => {
+        const { svc } = await connectLocked({ unlockKeys: [[0, 0]] })
+        const seen: { keys: number[]; progress: number }[] = []
+        await svc.unlock({ onProgress: (p) => seen.push(p) })
+        expect(seen[0]).toEqual({ keys: [0], progress: 0 })
+        expect(seen.at(-1)?.progress).toBe(1)
+        expect(await svc.getLockState()).toBe('unlocked')
+        const km = await svc.getKeymap()
+        await svc.setKey(km.layers[0].id, 0, BOOT)
     })
 })

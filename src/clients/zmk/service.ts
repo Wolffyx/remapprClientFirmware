@@ -45,7 +45,7 @@ import { serializeKeymap } from '@firmware/config'
 import { generateZMKConfigFile, generateZMKKeymapFile } from './export'
 
 const ZMK_CAPABILITIES: Capabilities = {
-    lock: true,
+    lock: 'editor',
     rename: true,
     notifications: true,
     reorderLayers: true,

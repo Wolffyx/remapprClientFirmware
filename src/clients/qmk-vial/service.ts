@@ -2,7 +2,7 @@
 // Pattern check: Adapter (Tier 1) — extended — extends src/firmware/qmk/service.ts QmkKeyboardService; HidClient-backed Vial implementation of KeyboardService with on-device matrix, encoder, and lock support.
 import { filterCatalogByCodec } from '@firmware/catalog/filter'
 import type { KeyCatalog } from '@firmware/catalog/types'
-import { ProtocolError, UnsupportedError } from '@firmware/errors'
+import { LockedError, ProtocolError, UnsupportedError } from '@firmware/errors'
 import type { HidClient } from '@firmware/clients/qmk/hidClient'
 import {
     fetchKeymapBuffer,
@@ -34,6 +34,7 @@ import type {
     KeyUpdate,
     Layer,
     LockState,
+    UnlockOptions,
     MacroAction,
     PhysicalLayout,
 } from '@firmware/types'
@@ -78,7 +79,7 @@ import {
 import { lockDevice, readUnlockStatus, runUnlockFlow } from './unlock'
 
 const VIAL_CAPABILITIES_BASE: Omit<Capabilities, 'maxLayers'> = {
-    lock: true,
+    lock: 'actions',
     rename: false,
     notifications: false,
     reorderLayers: false,
@@ -376,6 +377,41 @@ export class VialKeyboardService implements KeyboardService {
         return this.def.rowColMap[position]
     }
 
+    // pattern-check: skip guard helpers for Vial's action lock — vial.c silently skips these writes while locked
+    /** QK_BOOT as this board encodes it: Vial protocol 6 moved to QMK's v6
+     *  keycodes (0x7C00); older builds used QMK's RESET (0x5C00). */
+    private get bootKeycode(): number {
+        return this.vialProtocol >= 6 ? 0x7c00 : 0x5c00
+    }
+
+    /** vial.c refuses these operations while locked — and silently: it skips
+     *  the write and still replies. Check first, so the caller gets
+     *  LockedError (and can unlock and retry) instead of a write that
+     *  "succeeded" without landing. */
+    private requireUnlocked(what: string): void {
+        if (this.lockState === 'unlocked') return
+        throw new LockedError(`${what} needs the keyboard unlocked`)
+    }
+
+    /** The one guarded keycode: vial_keycode_firewall turns QK_BOOT into
+     *  KC_NO while locked. */
+    private guardKeycode(action: KeyAction): void {
+        if (encodeVialKeycode(action) === this.bootKeycode) {
+            this.requireUnlocked('Assigning the bootloader key')
+        }
+    }
+
+    /** The unlock combo's matrix positions as physical-layout key indexes. */
+    private layoutIndexes(keys: { row: number; col: number }[]): number[] {
+        return keys
+            .map(({ row, col }) =>
+                this.def.rowColMap.findIndex(
+                    (rc) => rc.row === row && rc.col === col,
+                ),
+            )
+            .filter((i) => i >= 0)
+    }
+
     async getLockState(): Promise<LockState> {
         if (this.closed) return 'not-applicable'
         const status = await readUnlockStatus(this.client)
@@ -388,10 +424,17 @@ export class VialKeyboardService implements KeyboardService {
         return next
     }
 
-    async unlock(): Promise<void> {
+    async unlock(opts: UnlockOptions = {}): Promise<void> {
         this.setLockState('unlocking')
         try {
-            await runUnlockFlow(this.client)
+            await runUnlockFlow(this.client, {
+                signal: opts.signal,
+                onProgress: ({ keys, progress }) =>
+                    opts.onProgress?.({
+                        keys: this.layoutIndexes(keys),
+                        progress,
+                    }),
+            })
             this.setLockState('unlocked')
         } catch (err) {
             this.setLockState('locked')
@@ -467,6 +510,7 @@ export class VialKeyboardService implements KeyboardService {
     ): Promise<void> {
         if (this.closed) throw new UnsupportedError('setKey: connection closed')
         ensureEncodable(action)
+        this.guardKeycode(action)
         const idx = this.layerIndexById(layerId)
         if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
         const { row, col } = this.positionToCoord(position)
@@ -495,6 +539,8 @@ export class VialKeyboardService implements KeyboardService {
     }
 
     async setKeys(updates: KeyUpdate[]): Promise<void> {
+        // All-or-nothing on the lock: refuse before writing any key.
+        for (const u of updates) this.guardKeycode(u.action)
         for (const u of updates) {
             await this.setKey(u.layerId, u.position, u.action)
         }
@@ -508,6 +554,7 @@ export class VialKeyboardService implements KeyboardService {
     ): Promise<void> {
         if (this.closed) throw new UnsupportedError('setEncoder: closed')
         ensureEncodable(action)
+        this.guardKeycode(action)
         const idx = this.layerIndexById(layerId)
         if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
         const slot = this.def.encoderIndices.indexOf(encoderIdx)
@@ -762,6 +809,7 @@ export class VialKeyboardService implements KeyboardService {
     }
 
     async setMacroBytes(idx: number, bytes: Uint8Array): Promise<void> {
+        this.requireUnlocked('Saving macros')
         await writeMacro(this.client, idx, bytes)
         this.setPending(true)
     }
@@ -773,6 +821,7 @@ export class VialKeyboardService implements KeyboardService {
 
     async setMacro(idx: number, actions: MacroAction[]): Promise<void> {
         const bytes = encodeMacro(actions)
+        this.requireUnlocked('Saving macros')
         await writeMacro(this.client, idx, bytes)
         this.setPending(true)
     }
@@ -784,6 +833,7 @@ export class VialKeyboardService implements KeyboardService {
     }
 
     async setMacroBuffer(buffer: Uint8Array): Promise<void> {
+        this.requireUnlocked('Saving macros')
         await writeMacroBuffer(this.client, buffer)
         this.setPending(true)
     }

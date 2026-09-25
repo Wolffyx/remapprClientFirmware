@@ -19,12 +19,15 @@ export type {
     KeyUpdate,
     Keymap,
     Layer,
+    LockKind,
     LockState,
     MacroAction,
     PhysicalLayout,
     PhysicalLayoutKey,
     TapDanceEntry,
     TransportKind,
+    UnlockOptions,
+    UnlockProgress,
 } from './types'
 
 export { isUnlocked } from './types'

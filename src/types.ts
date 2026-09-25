@@ -188,6 +188,31 @@ export type LockState = 'locked' | 'unlocking' | 'unlocked' | 'not-applicable'
 export const isUnlocked = (s: LockState): boolean =>
     s === 'unlocked' || s === 'not-applicable'
 
+// pattern-check: skip additive neutral lock-scope type + unlock progress DTOs next to LockState
+/**
+ * What a firmware's lock protects, declared per client:
+ * - 'none'    — no lock (QMK/VIA, Keychron, Remappr).
+ * - 'editor'  — the whole editing session is locked until the user unlocks on
+ *               the device itself (ZMK's studio-unlock key); the app waits.
+ * - 'actions' — editing works; only certain operations are refused while
+ *               locked (Vial: macros, QK_BOOT, matrix tester, bootloader). They
+ *               throw LockedError, and the app runs unlock() then retries.
+ */
+export type LockKind = 'none' | 'editor' | 'actions'
+
+export interface UnlockProgress {
+    /** Physical-layout key indexes the user must hold. Empty when the unlock
+     *  happens on the device without a combo the client can name. */
+    keys: number[]
+    /** 0 → 1 as the hold completes; drops back if the keys are released. */
+    progress: number
+}
+
+export interface UnlockOptions {
+    signal?: AbortSignal
+    onProgress?: (p: UnlockProgress) => void
+}
+
 export interface AdapterNotification {
     topic: string
     payload: unknown

@@ -21,7 +21,9 @@ import type {
     KeyOverrideEntry,
     KeyUpdate,
     Layer,
+    LockKind,
     LockState,
+    UnlockOptions,
     MacroAction,
     TapDanceEntry,
 } from './types'
@@ -38,7 +40,8 @@ export interface FirmwareBehaviorFlags {
 }
 
 export interface Capabilities {
-    lock: boolean
+    /** What the firmware's lock protects — see LockKind. */
+    lock: LockKind
     rename: boolean
     notifications: boolean
     reorderLayers: boolean
@@ -544,7 +547,10 @@ export interface KeyboardService {
 
     getLockState(): Promise<LockState>
 
-    unlock(): Promise<void>
+    /** Unlock the device. For 'actions' locks this drives an interactive flow
+     *  (the user holds keys) and reports progress; for 'editor' locks the device
+     *  unlocks itself and state arrives via onLockStateChanged. */
+    unlock(opts?: UnlockOptions): Promise<void>
 
     onLockStateChanged(cb: (state: LockState) => void): () => void
 
