@@ -78,6 +78,8 @@ interface FakeState {
     unlockKeys: [number, number][]
     /** Vial frames the fake received, by sub-command. */
     vialCmds: number[]
+    /** Answer VialRGB (one LED, effects Direct + Solid Color). */
+    vialrgb: boolean
 }
 
 interface FakeOptions {
@@ -85,6 +87,7 @@ interface FakeOptions {
     defBytes?: Uint8Array
     label?: string
     unlockKeys?: [number, number][]
+    vialrgb?: boolean
 }
 
 function frame(): Uint8Array {
@@ -241,6 +244,18 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
             writeU16BE(out, 4, kc)
             return out
         }
+        case VIA_ID.CUSTOM_GET_VALUE: {
+            // VialRGB rides the VIA lighting get: [0x08, sub, ...args].
+            if (!state.vialrgb) return out
+            out[1] = req[1]
+            if (req[1] === 0x40) out.set([1, 0, 29], 2) // protocol 1, max V 29
+            if (req[1] === 0x42) {
+                out.fill(0xff, 2)
+                if (req[2] === 0) out.set([1, 0, 2, 0], 2) // Direct, Solid Color
+            }
+            if (req[1] === 0x43) out.set([1, 0], 2) // one LED
+            return out
+        }
         case VIA_ID.DYNAMIC_KEYMAP_RESET: {
             const fresh = defaultKeymap()
             for (let l = 0; l < FAKE_LAYERS; l++)
@@ -269,6 +284,7 @@ function createFakeVialTransport(
         encoders: new Map(),
         unlockKeys: opts.unlockKeys ?? [],
         vialCmds: [],
+        vialrgb: opts.vialrgb ?? false,
     }
     stateOut?.(state)
     const writer = inbound.writable.getWriter()
@@ -508,6 +524,51 @@ describe('qmk-vial — vial.json sideload (#189)', () => {
             expect((await svc.getKeymap()).layouts[0].name).toBe('Override')
             await svc.disconnect()
         })
+    })
+})
+
+describe('qmk-vial — VialRGB on connect (#191)', () => {
+    const lightingDef = (lighting: string): Uint8Array =>
+        makeDefBytes(JSON.stringify({ ...JSON.parse(makeDefJson()), lighting }))
+
+    it('attaches RGB when the definition declares vialrgb and the board answers', async () => {
+        const svc = await createVialAdapter().connect(
+            createFakeVialTransport({
+                defBytes: lightingDef('vialrgb'),
+                vialrgb: true,
+            }),
+            new AbortController().signal,
+        )
+        expect(svc.rgb?.effectCatalog?.effects).toEqual([
+            'None',
+            'Direct',
+            'Solid Color',
+        ])
+        expect(svc.rgb?.perKeyVolatile).toBe(true)
+        expect(await svc.rgb!.getLedCount()).toBe(1)
+        await svc.disconnect()
+    })
+
+    it('has no RGB when the definition declares none', async () => {
+        const svc = await createVialAdapter().connect(
+            createFakeVialTransport({ vialrgb: true }),
+            new AbortController().signal,
+        )
+        expect(svc.rgb).toBeUndefined()
+        await svc.disconnect()
+    })
+
+    it('connects without RGB when a vialrgb board does not answer', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const svc = await createVialAdapter().connect(
+            createFakeVialTransport({ defBytes: lightingDef('vialrgb') }),
+            new AbortController().signal,
+        )
+        expect(svc.rgb).toBeUndefined()
+        expect(svc.deviceInfo.firmware).toBe('qmk-vial')
+        expect(warn).toHaveBeenCalled()
+        warn.mockRestore()
+        await svc.disconnect()
     })
 })
 

@@ -20,6 +20,7 @@ import type {
     EncoderApi,
     KeyboardService,
     MacroApi,
+    RgbApi,
 } from '@firmware/service'
 import type { SideloadApi, SideloadFormat } from '@firmware/sideload'
 import { createQmkSideload } from '@firmware/clients/qmk/sideload'
@@ -81,6 +82,7 @@ import {
     writeMacroBuffer,
 } from './macros'
 import { lockDevice, readUnlockStatus, runUnlockFlow } from './unlock'
+import { createVialRgbFacade, probeVialRgb, type VialRgbInfo } from './vialrgb'
 
 const VIAL_CAPABILITIES_BASE: Omit<Capabilities, 'maxLayers'> = {
     lock: 'actions',
@@ -122,6 +124,24 @@ function layoutFromDef(def: ParsedKeyboardDef): PhysicalLayout {
         name: def.name || 'Default',
         keys: def.layoutKeys,
         encoders: def.encoderSlots.length ? def.encoderSlots : undefined,
+    }
+}
+
+/** VialRGB, when the board's definition declares it (as the Vial GUI decides)
+ *  and the board answers the probe. Lighting is optional: a failed probe
+ *  connects without it. */
+async function loadVialRgb(
+    client: HidClient,
+    def: ParsedKeyboardDef,
+): Promise<VialRgbInfo | null> {
+    if (def.raw.lighting !== 'vialrgb') return null
+    try {
+        const info = await probeVialRgb(client)
+        if (!info) console.warn('[qmk-vial] vialrgb declared but not answered')
+        return info
+    } catch (err) {
+        console.warn('[qmk-vial] vialrgb probe failed', err)
+        return null
     }
 }
 
@@ -230,6 +250,7 @@ export class VialKeyboardService implements KeyboardService {
     public readonly encoders: EncoderApi
     public readonly dynamic?: DynamicEntriesApi
     public readonly macros?: MacroApi
+    public readonly rgb?: RgbApi
     public readonly sideload: SideloadApi
     public readonly codec = vialCodec
     public readonly connectNotices?: readonly ConnectNotice[]
@@ -259,6 +280,7 @@ export class VialKeyboardService implements KeyboardService {
         layers: Layer[],
         lock: LockState,
         profile: VialDeviceProfile,
+        rgbInfo: VialRgbInfo | null,
     ) {
         this.deviceInfo = cfg.deviceInfo
         this.client = cfg.client
@@ -324,6 +346,15 @@ export class VialKeyboardService implements KeyboardService {
                 setMacro: (idx, actions) => this.setMacro(idx, actions),
             }
         }
+        if (rgbInfo) {
+            // Keys are read through the current definition, which a sideload
+            // can swap after connect.
+            this.rgb = createVialRgbFacade(
+                cfg.client,
+                rgbInfo,
+                () => this.def.rowColMap,
+            )
+        }
         cfg.client.onClosed((reason) => this.handleClientClosed(reason))
     }
 
@@ -342,7 +373,14 @@ export class VialKeyboardService implements KeyboardService {
         const profile = await loadDeviceProfile(cfg.client)
         const initialLock = await readUnlockStatus(cfg.client)
         const lockState: LockState = initialLock.locked ? 'locked' : 'unlocked'
-        return new VialKeyboardService(cfg, layers, lockState, profile)
+        const rgbInfo = await loadVialRgb(cfg.client, cfg.def)
+        return new VialKeyboardService(
+            cfg,
+            layers,
+            lockState,
+            profile,
+            rgbInfo,
+        )
     }
 
     private handleClientClosed(reason?: unknown): void {

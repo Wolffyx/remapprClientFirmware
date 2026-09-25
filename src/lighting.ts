@@ -161,4 +161,4 @@ export const ZMK_UNDERGLOW_CATALOG: LightingCatalog = {
 
 // Effects whose palette is fixed/animated and ignore the single-colour picker.
 export const COLORLESS_EFFECT =
-    /cycle|rainbow|spiral|pinwheel|beacon|splash|rain|heatmap|spectrum|swirl|christmas|test|alternating|gradient|wave|flower|starlight|riverflow|fractal|flow|breathe|breathing|band/i
+    /cycle|rainbow|spiral|pinwheel|beacon|splash|rain|heatmap|spectrum|swirl|christmas|test|alternating|gradient|wave|flower|starlight|riverflow|fractal|flow|breathe|breathing|band|direct/i

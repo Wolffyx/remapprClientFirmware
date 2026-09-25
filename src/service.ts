@@ -319,9 +319,10 @@ export interface RgbEffectState {
 export interface RgbApi {
     getLedCount(): Promise<number>
 
-    getIndicators(): Promise<IndicatorConfig>
+    /** OS-lock indicators. Firmware without indicator control omits both. */
+    getIndicators?(): Promise<IndicatorConfig>
 
-    setIndicators(cfg: IndicatorConfig): Promise<void>
+    setIndicators?(cfg: IndicatorConfig): Promise<void>
 
     save(): Promise<void>
 
@@ -344,13 +345,21 @@ export interface RgbApi {
 
     setPerKeyType?(type: number): Promise<void>
 
+    /** Read back per-key colours. Omitted when the firmware can only write
+     *  them. */
     getPerKeyColors?(startLed: number, count: number): Promise<HsvColor[]>
 
     setPerKeyColors?(startLed: number, colors: HsvColor[]): Promise<void>
 
+    /** Per-key colours live in the keyboard's RAM only: they are gone after a
+     *  power cycle, and save() does not keep them. */
+    perKeyVolatile?: boolean
+
     /** Map physical-layout key index → LED index for per-key colour I/O. Identity
      *  when the firmware's LED order matches layout order; firmware-specific
-     *  otherwise. `keyCount` is the number of layout keys. */
+     *  otherwise. `keyCount` is the number of layout keys. A key without an
+     *  LED maps to an index outside 0…ledCount−1, and writes to it are
+     *  ignored. */
     getLedIndexMap?(keyCount: number): Promise<number[]>
 
     getMixedRegions?(): Promise<Uint8Array>
@@ -499,7 +508,11 @@ export interface RadioPipeTable {
 
 /** Re-exported so a consumer imports the whole cluster surface (facade + its
  *  wire DTOs) from one entry point. */
-export type { ClusterDiag, ClusterPeer, RoleEvent } from './clients/remappr/protocol'
+export type {
+    ClusterDiag,
+    ClusterPeer,
+    RoleEvent,
+} from './clients/remappr/protocol'
 
 export interface ClusterApi {
     /** Snapshot this node's cluster role plus each node-bus peer's advertised
