@@ -120,21 +120,24 @@ export interface EncoderPair {
     ccw: number
 }
 
+// vial_get_encoder answers dynamic_keymap_get_encoder(layer, idx, clockwise)
+// for clockwise = 0 then 1: counter-clockwise comes FIRST on the wire.
 export function parseEncoder(resp: Uint8Array): EncoderPair {
     if (resp.length < 4) throw new ProtocolError('Vial encoder: short response')
-    return { cw: readU16BE(resp, 0), ccw: readU16BE(resp, 2) }
+    return { ccw: readU16BE(resp, 0), cw: readU16BE(resp, 2) }
 }
 
+/** `clockwise` is the firmware's own flag (dynamic_keymap_set_encoder). */
 export function setEncoderCmd(
     layer: number,
     idx: number,
-    direction: 0 | 1,
+    clockwise: boolean,
     keycode: number,
 ): Uint8Array {
     const out = makeVialFrame(VIAL_CMD.SET_ENCODER, [
         layer & 0xff,
         idx & 0xff,
-        direction & 0xff,
+        clockwise ? 1 : 0,
     ])
     writeU16BE(out, 5, keycode & 0xffff)
     return out
@@ -173,6 +176,31 @@ export function unlockStartCmd(): Uint8Array {
 
 export function unlockPollCmd(): Uint8Array {
     return makeVialFrame(VIAL_CMD.UNLOCK_POLL)
+}
+
+/** Hold ticks an unlock needs (vial.c VIAL_UNLOCK_COUNTER_MAX): the counter
+ *  starts here and counts down every ~100 ms while the combo is held. */
+export const VIAL_UNLOCK_COUNTER_MAX = 50
+
+export interface UnlockPollResponse {
+    unlocked: boolean
+    inProgress: boolean
+    /** Ticks left; resets to the max when the combo is released. */
+    counter: number
+}
+
+/** vial_unlock_poll reply: [unlocked, in_progress, counter]. */
+export function parseUnlockPoll(resp: Uint8Array): UnlockPollResponse {
+    if (resp.length < 3) {
+        throw new ProtocolError(
+            `Vial unlock-poll: short response (${resp.length})`,
+        )
+    }
+    return {
+        unlocked: (resp[0] & 0xff) === 1,
+        inProgress: (resp[1] & 0xff) !== 0,
+        counter: resp[2] & 0xff,
+    }
 }
 
 export function lockCmd(): Uint8Array {

@@ -20,7 +20,10 @@ export interface Discovery {
     /** Ordering weight when a host can only apply ONE discovery filter (the
      *  Electron HID path). Highest wins; default 0. Client registration order is
      *  nondeterministic under lazy chunk loading, so an adapter that must own
-     *  the filter declares it here rather than relying on import order. */
+     *  the filter declares it here rather than relying on import order.
+     *  Also the HID probe tie-break between equally specific adapters: a
+     *  protocol superset (Vial over VIA) declares a higher weight so it is asked
+     *  before the base protocol that would also accept the device. */
     priority?: number
 }
 

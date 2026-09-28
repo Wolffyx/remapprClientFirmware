@@ -12,6 +12,8 @@ import {
 } from '@firmware/clients/qmk/actions'
 import type { KeyAction, KeyLabel } from '@firmware/types'
 
+import { vialCodec } from './codec'
+
 export const VIAL_KIND = {
     TAP_DANCE: 'vial:tap-dance',
     MACRO: 'vial:macro',
@@ -98,7 +100,9 @@ export function buildVialKeyAction(
             label: buildVialLabel(kind, params, customNames),
         }
     }
-    return buildQmkKeyAction(kind, params, layerNames)
+    // Through the codec, as the VIA client does, so quantum keycodes (RGB
+    // matrix, dynamic macros, mouse keys…) get catalog names, not raw hex.
+    return buildQmkKeyAction(kind, params, layerNames, vialCodec)
 }
 
 export function decodeVialKeycode(kc: number): {
@@ -150,9 +154,7 @@ export function relabelVialLayer(
 ): KeyAction[] {
     return keys.map((k) => ({
         ...k,
-        label: isVialKind(k.kind)
-            ? buildVialLabel(k.kind, k.params, customNames)
-            : buildQmkLabel(k.kind, k.params, layerNames),
+        ...buildVialKeyAction(k.kind, k.params, layerNames, customNames),
     }))
 }
 

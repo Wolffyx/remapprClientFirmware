@@ -1,8 +1,10 @@
-// Pattern check: no GoF pattern (-) — rejected — Vial wire fetch + LZMA decode glue around shared KLE parser.
-// Vial firmware ships a per-board JSON definition compressed with raw LZMA1.
-// Wire flow: GET_SIZE → GET_DEFINITION (block index) → concat → lzma1.decompress → JSON.
+// Pattern check: no GoF pattern (-) — rejected — Vial wire fetch + XZ decode glue around shared KLE parser.
+// Vial firmware ships a per-board JSON definition compressed as an XZ stream
+// (vial-qmk util/vial_generate_definition.py: Python lzma.compress, whose
+// default format is XZ — not raw LZMA1).
+// Wire flow: GET_SIZE → GET_DEFINITION (block index) → concat → XZ decode → JSON.
 
-import { decompress as lzmaDecompress } from 'lzma1'
+import { XzReadableStream } from 'xz-decompress'
 
 import { ProtocolError } from '@firmware/errors'
 import {
@@ -45,31 +47,66 @@ export async function fetchKeyboardDefBytes(
     return out
 }
 
-// Cap on the LZMA-decompressed payload. The compressed wire frame is already
-// limited to 1 MiB (see fetchKeyboardDefBytes); LZMA1 can blow that up
-// 100×+, so without a post-decode cap a hostile firmware blob could OOM
-// the renderer. Real Vial defs are tens of KB; 5 MiB is comfortable safety.
+// Cap on the decompressed payload. The compressed wire frame is already
+// limited to 1 MiB (see fetchKeyboardDefBytes); XZ can blow that up 100×+,
+// so the cap is enforced while decoding — a hostile firmware blob is cut off
+// as soon as it passes the cap instead of OOMing the renderer first. Real
+// Vial defs are tens of KB; 5 MiB is comfortable safety.
 const MAX_DECOMPRESSED_DEF_BYTES = 5 * 1024 * 1024
 
-export function decompressDef(bytes: Uint8Array): RawKeyboardDef {
-    const decoded = lzmaDecompress(bytes)
-    const decodedLen =
-        decoded instanceof Uint8Array
-            ? decoded.length
-            : (decoded as ArrayLike<number>).length
-    if (decodedLen > MAX_DECOMPRESSED_DEF_BYTES) {
+const XZ_MAGIC = [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]
+
+async function decodeXz(
+    bytes: Uint8Array,
+    maxBytes: number,
+): Promise<Uint8Array> {
+    if (!XZ_MAGIC.every((b, i) => bytes[i] === b)) {
+        throw new ProtocolError('Vial def: not an XZ stream')
+    }
+    const input = new ReadableStream<Uint8Array>({
+        start(ctrl) {
+            ctrl.enqueue(bytes)
+            ctrl.close()
+        },
+    })
+    const reader = new XzReadableStream(input).getReader()
+    const parts: Uint8Array[] = []
+    let total = 0
+    try {
+        for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            total += value.length
+            if (total > maxBytes) {
+                throw new ProtocolError(
+                    `Vial def: decompressed size exceeds ${maxBytes}-byte cap`,
+                )
+            }
+            parts.push(value)
+        }
+    } catch (err) {
+        await reader.cancel().catch(() => undefined)
+        if (err instanceof ProtocolError) throw err
         throw new ProtocolError(
-            `Vial def: decompressed ${decodedLen} bytes exceeds ${MAX_DECOMPRESSED_DEF_BYTES}-byte cap`,
+            `Vial def: corrupt XZ stream (${err instanceof Error ? err.message : String(err)})`,
         )
     }
-    const u8 =
-        decoded instanceof Uint8Array ? decoded : new Uint8Array(decodedLen)
-    if (!(decoded instanceof Uint8Array)) {
-        for (let i = 0; i < u8.length; i++) {
-            u8[i] = (decoded as ArrayLike<number>)[i] & 0xff
-        }
+    const out = new Uint8Array(total)
+    let offset = 0
+    for (const p of parts) {
+        out.set(p, offset)
+        offset += p.length
     }
-    const text = new TextDecoder('utf-8').decode(u8)
+    return out
+}
+
+export async function decompressDef(
+    bytes: Uint8Array,
+    maxBytes: number = MAX_DECOMPRESSED_DEF_BYTES,
+): Promise<RawKeyboardDef> {
+    const text = new TextDecoder('utf-8').decode(
+        await decodeXz(bytes, maxBytes),
+    )
     let json: unknown
     try {
         json = JSON.parse(text)
@@ -83,6 +120,6 @@ export async function fetchAndParseKeyboardDef(
     client: HidClient,
 ): Promise<ParsedKeyboardDef> {
     const bytes = await fetchKeyboardDefBytes(client)
-    const def = decompressDef(bytes)
+    const def = await decompressDef(bytes)
     return parseKeyboardDef(def)
 }

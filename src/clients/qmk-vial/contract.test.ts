@@ -1,8 +1,10 @@
 // Pattern check: no GoF pattern (-) — rejected — fake Vial responder over paired streams driving the shared FirmwareAdapter contract suite, no abstraction warranted.
-import { compress as lzmaCompress } from 'lzma1'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { runContractSuite } from '@firmware/__tests__/contract'
-import type { Transport } from '@firmware'
+import { xzStore } from '@firmware/__tests__/xz'
+import type { KeyboardService, Transport } from '@firmware'
+import { LockedError } from '@firmware/errors'
 import {
     VIA_ID,
     VIA_KBV,
@@ -10,8 +12,12 @@ import {
     writeU16BE,
 } from '@firmware/clients/qmk/protocol'
 
+import keycultSource from '@firmware/kle/fixtures/aftermarket-keycult-tkl.vial.json?raw'
+
+import { decodeVialAsKeyAction } from './actions'
 import { createVialAdapter } from './adapter'
 import { DYNAMIC_OP, VIAL_CMD, VIAL_PREFIX } from './protocol'
+import type { VialKeyboardService } from './service'
 
 const FAKE_ROWS = 1
 const FAKE_COLS = 1
@@ -28,10 +34,19 @@ function makeDefJson(): string {
     })
 }
 
-function makeDefBytes(): Uint8Array {
-    const text = makeDefJson()
+function makeDefBytes(text: string = makeDefJson()): Uint8Array {
     const enc = new TextEncoder().encode(text)
-    return lzmaCompress(enc)
+    return xzStore(enc)
+}
+
+/** One key plus one encoder (KLE label 'e' in slot 9 → parser labels[4]). */
+function makeEncoderDefJson(): string {
+    return JSON.stringify({
+        name: 'Fake Vial Knob',
+        matrix: { rows: FAKE_ROWS, cols: FAKE_COLS },
+        layouts: { keymap: [['0,0', { x: 1 }, '0,0\n\n\n\n\n\n\n\n\ne']] },
+        customKeycodes: [],
+    })
 }
 
 function defaultKeymap(): number[][][] {
@@ -55,6 +70,24 @@ interface FakeState {
     defBytes: Uint8Array
     locked: boolean
     unlockInProgress: boolean
+    /** Count of GET_SIZE / GET_DEFINITION requests seen. */
+    defReads: number
+    /** Encoder map as the firmware stores it: `${layer}:${idx}:${clockwise}`. */
+    encoders: Map<string, number>
+    /** The unlock combo get_unlock_status reports (matrix positions). */
+    unlockKeys: [number, number][]
+    /** Vial frames the fake received, by sub-command. */
+    vialCmds: number[]
+    /** Answer VialRGB (one LED, effects Direct + Solid Color). */
+    vialrgb: boolean
+}
+
+interface FakeOptions {
+    /** Replace the on-device (LZMA) definition bytes, e.g. with garbage. */
+    defBytes?: Uint8Array
+    label?: string
+    unlockKeys?: [number, number][]
+    vialrgb?: boolean
 }
 
 function frame(): Uint8Array {
@@ -69,6 +102,7 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
     if (id === VIAL_PREFIX) {
         const sub = req[1]
         out[1] = sub
+        state.vialCmds.push(sub)
         switch (sub) {
             case VIAL_CMD.GET_KEYBOARD_ID: {
                 // u32 LE protocol + u64 LE id (12 bytes total).
@@ -84,6 +118,7 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
                 return out
             }
             case VIAL_CMD.GET_SIZE: {
+                state.defReads++
                 const size = state.defBytes.length
                 out[0] = size & 0xff
                 out[1] = (size >> 8) & 0xff
@@ -92,6 +127,7 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
                 return out
             }
             case VIAL_CMD.GET_DEFINITION: {
+                state.defReads++
                 const block =
                     (req[2] |
                         (req[3] << 8) |
@@ -108,6 +144,22 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
                 }
                 return out
             }
+            // Mirrors vial.c: counter-clockwise (clockwise=0) first.
+            case VIAL_CMD.GET_ENCODER: {
+                const r = frame()
+                const ccw = state.encoders.get(`${req[2]}:${req[3]}:0`) ?? 0
+                const cw = state.encoders.get(`${req[2]}:${req[3]}:1`) ?? 0
+                writeU16BE(r, 0, ccw)
+                writeU16BE(r, 2, cw)
+                return r
+            }
+            case VIAL_CMD.SET_ENCODER: {
+                state.encoders.set(
+                    `${req[2]}:${req[3]}:${req[4]}`,
+                    ((req[5] << 8) | req[6]) & 0xffff,
+                )
+                return out
+            }
             case VIAL_CMD.GET_UNLOCK_STATUS: {
                 // 32-byte response: status byte (1 = unlocked, 0 = locked),
                 // inProgress byte, then 15 (row,col) pairs (0xff,0xff = unused).
@@ -115,19 +167,26 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
                 r[0] = state.locked ? 0 : 1
                 r[1] = state.unlockInProgress ? 1 : 0
                 for (let i = 0; i < 15; i++) {
-                    r[2 + i * 2] = 0xff
-                    r[3 + i * 2] = 0xff
+                    const key = state.unlockKeys[i]
+                    r[2 + i * 2] = key ? key[0] : 0xff
+                    r[3 + i * 2] = key ? key[1] : 0xff
                 }
                 return r
             }
             case VIAL_CMD.UNLOCK_START:
                 state.unlockInProgress = true
                 return out
-            case VIAL_CMD.UNLOCK_POLL:
-                // After one poll, treat unlock as complete.
+            case VIAL_CMD.UNLOCK_POLL: {
+                // After one poll, treat unlock as complete. Reply like vial.c:
+                // [unlocked, in_progress, counter].
                 state.locked = false
                 state.unlockInProgress = false
-                return out
+                const r = frame()
+                r[0] = 1
+                r[1] = 0
+                r[2] = 0
+                return r
+            }
             case VIAL_CMD.LOCK:
                 state.locked = true
                 return out
@@ -185,6 +244,18 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
             writeU16BE(out, 4, kc)
             return out
         }
+        case VIA_ID.CUSTOM_GET_VALUE: {
+            // VialRGB rides the VIA lighting get: [0x08, sub, ...args].
+            if (!state.vialrgb) return out
+            out[1] = req[1]
+            if (req[1] === 0x40) out.set([1, 0, 29], 2) // protocol 1, max V 29
+            if (req[1] === 0x42) {
+                out.fill(0xff, 2)
+                if (req[2] === 0) out.set([1, 0, 2, 0], 2) // Direct, Solid Color
+            }
+            if (req[1] === 0x43) out.set([1, 0], 2) // one LED
+            return out
+        }
         case VIA_ID.DYNAMIC_KEYMAP_RESET: {
             const fresh = defaultKeymap()
             for (let l = 0; l < FAKE_LAYERS; l++)
@@ -198,15 +269,24 @@ function buildResponse(req: Uint8Array, state: FakeState): Uint8Array {
     }
 }
 
-function createFakeVialTransport(): Transport {
+function createFakeVialTransport(
+    opts: FakeOptions = {},
+    stateOut?: (state: FakeState) => void,
+): Transport {
     const inbound = new TransformStream<Uint8Array, Uint8Array>()
     const outbound = new TransformStream<Uint8Array, Uint8Array>()
     const state: FakeState = {
         keymap: defaultKeymap(),
-        defBytes: makeDefBytes(),
+        defBytes: opts.defBytes ?? makeDefBytes(),
         locked: true,
         unlockInProgress: false,
+        defReads: 0,
+        encoders: new Map(),
+        unlockKeys: opts.unlockKeys ?? [],
+        vialCmds: [],
+        vialrgb: opts.vialrgb ?? false,
     }
+    stateOut?.(state)
     const writer = inbound.writable.getWriter()
     const reader = outbound.readable.getReader()
 
@@ -231,7 +311,7 @@ function createFakeVialTransport(): Transport {
     })()
 
     return {
-        label: 'fake-vial',
+        label: opts.label ?? 'fake-vial',
         abortController: new AbortController(),
         readable: inbound.readable,
         writable: outbound.writable,
@@ -261,8 +341,339 @@ const adapter = createVialAdapter()
 
 runContractSuite('qmk-vial', {
     makeAdapter: () => adapter,
-    makeMatchingTransport: createFakeVialTransport,
+    makeMatchingTransport: () => createFakeVialTransport(),
     makeMismatchingTransport: createMismatchTransport,
     transportKind: 'hid',
     autoUnlock: true,
+})
+
+describe('qmk-vial — identification vs loading (#187)', () => {
+    it('canHandle identifies the board without reading its definition', async () => {
+        let state: FakeState | undefined
+        const t = createFakeVialTransport({}, (s) => (state = s))
+        const probe = await createVialAdapter().canHandle(t, {
+            transportKind: 'hid',
+        })
+        expect(probe.ok).toBe(true)
+        expect(state!.defReads).toBe(0)
+    })
+
+    it('a broken definition is still a Vial board, and falls back to VIA mode with a notice', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const adapter = createVialAdapter()
+        // Implausible size (0) → the definition fetch throws.
+        const t = createFakeVialTransport({ defBytes: new Uint8Array(0) })
+        const probe = await adapter.canHandle(t, { transportKind: 'hid' })
+        expect(probe.ok).toBe(true)
+        const svc = await adapter.connect(t, new AbortController().signal)
+        expect(svc.deviceInfo.firmware).toBe('qmk-via')
+        expect(svc.connectNotices?.[0]).toMatchObject({
+            level: 'warning',
+            title: 'Connected in VIA mode',
+        })
+        expect(svc.connectNotices?.[0].description).toMatch(/implausible size/)
+        expect(warn).toHaveBeenCalled()
+        warn.mockRestore()
+        await svc.disconnect()
+    })
+
+    it('prefers the saved vial.json for this board over VIA mode', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const store = new Map<string, string>()
+        vi.stubGlobal('window', {
+            localStorage: {
+                getItem: (k: string) => store.get(k) ?? null,
+                setItem: (k: string, v: string) => void store.set(k, v),
+                removeItem: (k: string) => void store.delete(k),
+            },
+        })
+        try {
+            store.set(
+                'qmk-via-layout:v1:4b50:0001',
+                JSON.stringify({ v: 1, raw: JSON.parse(makeDefJson()) }),
+            )
+            const t = createFakeVialTransport({
+                defBytes: new Uint8Array(0),
+                label: 'fake-vial · 4b50:0001',
+            })
+            const svc = await createVialAdapter().connect(
+                t,
+                new AbortController().signal,
+            )
+            expect(svc.deviceInfo.firmware).toBe('qmk-vial')
+            expect(svc.deviceInfo.name).toBe('Fake Vial')
+            expect(svc.connectNotices?.[0].title).toBe(
+                'Using your saved vial.json',
+            )
+            await svc.disconnect()
+        } finally {
+            vi.unstubAllGlobals()
+            warn.mockRestore()
+        }
+    })
+
+    it('a healthy board connects as Vial with no notices', async () => {
+        const svc = await createVialAdapter().connect(
+            createFakeVialTransport(),
+            new AbortController().signal,
+        )
+        expect(svc.deviceInfo.firmware).toBe('qmk-vial')
+        expect(svc.connectNotices ?? []).toHaveLength(0)
+        await svc.disconnect()
+    })
+})
+
+describe('qmk-vial — vial.json sideload (#189)', () => {
+    async function connectFake(label?: string) {
+        const adapter = createVialAdapter()
+        const t = createFakeVialTransport({ label })
+        const svc = await adapter.connect(t, new AbortController().signal)
+        return svc
+    }
+
+    it('offers a vial.json format and no registry lookup', async () => {
+        const svc = await connectFake()
+        expect(svc.sideload?.formats.map((f) => f.id)).toEqual([
+            'vial-layout-json',
+        ])
+        expect(svc.sideload?.resolveAuto).toBeUndefined()
+        expect(svc.capabilities.layoutSideloadable).toBe(true)
+        await svc.disconnect()
+    })
+
+    it('importFile swaps the layout and reads encoders under the new def', async () => {
+        const svc = await connectFake()
+        const seen: string[] = []
+        svc.subscribe((n) => seen.push(n.topic))
+        const override = JSON.stringify({
+            name: 'Override',
+            matrix: { rows: FAKE_ROWS, cols: FAKE_COLS },
+            layouts: {
+                keymap: [['0,0', { x: 1 }, '0,0\n\n\n\n\n\n\n\n\ne']],
+            },
+            customKeycodes: [],
+        })
+        const result = await svc.sideload!.importFile(
+            'vial-layout-json',
+            override,
+        )
+        expect(result.keymapChanged).toBe(true)
+        const km = await svc.getKeymap()
+        expect(km.layouts[0].name).toBe('Override')
+        expect(km.layouts[0].encoders?.length).toBe(1)
+        expect(km.layers[0].encoders?.length).toBe(1)
+        expect(svc.capabilities.encoders).toBe(1)
+        expect(seen).toContain('layout-changed')
+        await svc.disconnect()
+    })
+
+    describe('revertToDevice', () => {
+        const KEY = 'qmk-via-layout:v1:4b50:0001'
+        const OVERRIDE = JSON.stringify({
+            name: 'Override',
+            matrix: { rows: FAKE_ROWS, cols: FAKE_COLS },
+            layouts: { keymap: [['0,0']] },
+            customKeycodes: [],
+        })
+        let store: Map<string, string>
+
+        beforeEach(() => {
+            store = new Map()
+            vi.stubGlobal('window', {
+                localStorage: {
+                    getItem: (k: string) => store.get(k) ?? null,
+                    setItem: (k: string, v: string) => void store.set(k, v),
+                    removeItem: (k: string) => void store.delete(k),
+                },
+            })
+        })
+        afterEach(() => vi.unstubAllGlobals())
+
+        it('goes back to the board’s own layout and forgets the saved file', async () => {
+            const svc = await connectFake('fake-vial · 4b50:0001')
+            await svc.sideload!.importFile('vial-layout-json', OVERRIDE)
+            expect(store.has(KEY)).toBe(true)
+
+            const result = await svc.sideload!.revertToDevice!()
+            expect(result).toMatchObject({
+                name: 'Fake Vial',
+                keymapChanged: true,
+            })
+            const km = await svc.getKeymap()
+            expect(km.layouts[0].name).toBe('Fake Vial')
+            expect(store.has(KEY)).toBe(false)
+            expect(svc.sideload!.readCached!()).toBeNull()
+            await svc.disconnect()
+        })
+
+        it('keeps the saved file when the board’s layout cannot be read', async () => {
+            let state: FakeState | undefined
+            const t = createFakeVialTransport(
+                { label: 'fake-vial · 4b50:0001' },
+                (s) => (state = s),
+            )
+            const svc = await createVialAdapter().connect(
+                t,
+                new AbortController().signal,
+            )
+            await svc.sideload!.importFile('vial-layout-json', OVERRIDE)
+            state!.defBytes = new Uint8Array(0)
+
+            await expect(svc.sideload!.revertToDevice!()).rejects.toThrow()
+            expect(store.has(KEY)).toBe(true)
+            expect((await svc.getKeymap()).layouts[0].name).toBe('Override')
+            await svc.disconnect()
+        })
+    })
+})
+
+describe('qmk-vial — VialRGB on connect (#191)', () => {
+    const lightingDef = (lighting: string): Uint8Array =>
+        makeDefBytes(JSON.stringify({ ...JSON.parse(makeDefJson()), lighting }))
+
+    it('attaches RGB when the definition declares vialrgb and the board answers', async () => {
+        const svc = await createVialAdapter().connect(
+            createFakeVialTransport({
+                defBytes: lightingDef('vialrgb'),
+                vialrgb: true,
+            }),
+            new AbortController().signal,
+        )
+        expect(svc.rgb?.effectCatalog?.effects).toEqual([
+            'None',
+            'Direct',
+            'Solid Color',
+        ])
+        expect(svc.rgb?.perKeyVolatile).toBe(true)
+        expect(await svc.rgb!.getLedCount()).toBe(1)
+        await svc.disconnect()
+    })
+
+    it('has no RGB when the definition declares none', async () => {
+        const svc = await createVialAdapter().connect(
+            createFakeVialTransport({ vialrgb: true }),
+            new AbortController().signal,
+        )
+        expect(svc.rgb).toBeUndefined()
+        await svc.disconnect()
+    })
+
+    it('connects without RGB when a vialrgb board does not answer', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const svc = await createVialAdapter().connect(
+            createFakeVialTransport({ defBytes: lightingDef('vialrgb') }),
+            new AbortController().signal,
+        )
+        expect(svc.rgb).toBeUndefined()
+        expect(svc.deviceInfo.firmware).toBe('qmk-vial')
+        expect(warn).toHaveBeenCalled()
+        warn.mockRestore()
+        await svc.disconnect()
+    })
+})
+
+describe('qmk-vial — encoder direction', () => {
+    it('reads counter-clockwise first, and writes clockwise with the firmware flag set', async () => {
+        let state: FakeState | undefined
+        const t = createFakeVialTransport(
+            { defBytes: makeDefBytes(makeEncoderDefJson()) },
+            (st) => {
+                state = st
+                st.encoders.set('0:0:0', 0x05) // ccw = KC_B
+                st.encoders.set('0:0:1', 0x06) // cw  = KC_C
+            },
+        )
+        const svc = await createVialAdapter().connect(
+            t,
+            new AbortController().signal,
+        )
+        const km = await svc.getKeymap()
+        const enc = km.layers[0].encoders![0]
+        expect(enc.ccw.params).toEqual([0x05])
+        expect(enc.cw.params).toEqual([0x06])
+
+        const kcD = svc.buildKeyAction(enc.cw.kind, [0x07])
+        await svc.encoders!.setEncoder(km.layers[0].id, 0, 0, kcD) // 0 = cw
+        expect(state!.encoders.get('0:0:1')).toBe(0x07)
+        expect(state!.encoders.get('0:0:0')).toBe(0x05)
+        await svc.disconnect()
+    })
+})
+
+describe('qmk-vial — real vial.json upload (Keycult TKL)', () => {
+    it('loads 87 keys and the knob, reading its actions from the board', async () => {
+        const t = createFakeVialTransport({}, (st) => {
+            st.encoders.set('0:0:0', 0xaa) // ccw = KC_VOLD
+            st.encoders.set('0:0:1', 0xa9) // cw  = KC_VOLU
+        })
+        const svc = await createVialAdapter().connect(
+            t,
+            new AbortController().signal,
+        )
+        await svc.sideload!.importFile('vial-layout-json', keycultSource)
+        const km = await svc.getKeymap()
+        expect(km.layouts[0].keys).toHaveLength(87)
+        expect(km.layouts[0].encoders).toEqual([{ x: 1850, y: 0 }])
+        const knob = km.layers[0].encoders![0]
+        expect(knob.cw.canonicalId).toBe('media.volume_increment')
+        expect(knob.ccw.canonicalId).toBe('media.volume_decrement')
+        await svc.disconnect()
+    })
+})
+
+describe('qmk-vial — action lock (vial.c guards)', () => {
+    // QK_BOOT as a protocol-6 board encodes it.
+    const BOOT = decodeVialAsKeyAction(0x7c00, [], [])
+
+    async function connectLocked(
+        opts: FakeOptions = {},
+    ): Promise<{ svc: KeyboardService; state: FakeState }> {
+        let state: FakeState | undefined
+        const t = createFakeVialTransport(opts, (s) => (state = s))
+        const svc = await createVialAdapter().connect(
+            t,
+            new AbortController().signal,
+        )
+        return { svc, state: state! }
+    }
+
+    it('declares an actions lock and still edits keys while locked', async () => {
+        const { svc } = await connectLocked()
+        expect(svc.capabilities.lock).toBe('actions')
+        expect(await svc.getLockState()).toBe('locked')
+        const km = await svc.getKeymap()
+        await svc.setKey(km.layers[0].id, 0, decodeVialAsKeyAction(0x05))
+        expect((await svc.getKeymap()).layers[0].keys[0].params).toEqual([0x05])
+    })
+
+    it('refuses QK_BOOT and macro writes while locked, before sending', async () => {
+        const { svc, state } = await connectLocked()
+        const km = await svc.getKeymap()
+        state.vialCmds.length = 0
+        await expect(
+            svc.setKey(km.layers[0].id, 0, BOOT),
+        ).rejects.toBeInstanceOf(LockedError)
+        await expect(
+            svc.setKeys([
+                { layerId: km.layers[0].id, position: 0, action: BOOT },
+            ]),
+        ).rejects.toBeInstanceOf(LockedError)
+        // The macros facade only exists when the board reports macros; the
+        // guard lives on the service method it calls.
+        await expect(
+            (svc as VialKeyboardService).setMacro(0, []),
+        ).rejects.toBeInstanceOf(LockedError)
+        expect(state.vialCmds).toEqual([])
+    })
+
+    it('unlock reports the combo as layout keys, then QK_BOOT writes', async () => {
+        const { svc } = await connectLocked({ unlockKeys: [[0, 0]] })
+        const seen: { keys: number[]; progress: number }[] = []
+        await svc.unlock({ onProgress: (p) => seen.push(p) })
+        expect(seen[0]).toEqual({ keys: [0], progress: 0 })
+        expect(seen.at(-1)?.progress).toBe(1)
+        expect(await svc.getLockState()).toBe('unlocked')
+        const km = await svc.getKeymap()
+        await svc.setKey(km.layers[0].id, 0, BOOT)
+    })
 })

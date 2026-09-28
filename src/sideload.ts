@@ -92,6 +92,11 @@ export interface SideloadApi {
      *  nothing is cached. Adapters with no cache omit it. */
     restoreCached?(): Promise<SideloadResult | null>
 
+    /** Forget the cached source and go back to the layout the device reports
+     *  itself. Only adapters whose device describes its own layout offer it.
+     *  Throws, keeping the cache, when the device's layout can't be read. */
+    revertToDevice?(): Promise<SideloadResult>
+
     /** Look the device up in an online registry and apply the match. Resolves
      *  null on a miss. Adapters with no registry omit it. */
     resolveAuto?(

@@ -239,7 +239,7 @@ export class RemapprKeyboardService
         this.sealedChunk = LEGACY_SEALED_CHUNK
 
         this.capabilities = {
-            lock: false,
+            lock: 'none',
             rename: !this.readOnly,
             notifications: false,
             reorderLayers: !this.readOnly,

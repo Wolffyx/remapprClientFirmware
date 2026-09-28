@@ -31,7 +31,9 @@ import type {
     KeyOverrideEntry,
     KeyUpdate,
     Layer,
+    LockKind,
     LockState,
+    UnlockOptions,
     MacroAction,
     PhysicalLayout,
     TapDanceEntry,
@@ -46,8 +48,12 @@ import {
     relabelLayer,
 } from './actions'
 import { mockCodec } from './codec'
+import type { ParsedKeyboardDef } from '@firmware/kle/parser'
+import { parseSideloadJson } from '@firmware/clients/qmk/layoutSideload'
+import type { SideloadApi, SideloadFormat } from '@firmware/sideload'
 import { MOCK_CORNE_LAYOUT, MOCK_LAYOUTS } from './layout'
 import {
+    configFromBoardDef,
     configToPhysicalLayout,
     lowerConfigToMock,
     raiseMockToConfig,
@@ -83,10 +89,24 @@ const MOCK_DYNAMIC_COUNTS: DynamicEntryCounts = {
 
 const MOCK_MACRO_COUNT = 3
 const MOCK_MACRO_BUFFER = 256
-const MOCK_ENCODER_COUNT = 2
+/** The demo takes the same board definitions a real QMK/Vial board does, so
+ *  the upload flow can be tried without hardware. Session-only, like every
+ *  other demo edit. */
+const MOCK_LAYOUT_JSON: SideloadFormat = {
+    id: 'layout-json',
+    kind: 'layout',
+    accept: '.json,application/json',
+    label: 'Load layout JSON',
+    description:
+        'Try a VIA or Vial keyboard definition (e.g. vial.json) as the demo board. Bindings carry over by position.',
+}
+
+/** The demo's stand-in unlock combo: the first two keys of the board. */
+const DEMO_UNLOCK_KEYS = [0, 1]
+const DEMO_UNLOCK_HOLD_MS = 3_000
 
 const MOCK_CAPABILITIES: Capabilities = {
-    lock: true,
+    lock: 'editor',
     rename: true,
     notifications: true,
     reorderLayers: true,
@@ -98,7 +118,6 @@ const MOCK_CAPABILITIES: Capabilities = {
     // keyed to real hardware (preview capture, pinning a compile target).
     demo: true,
     maxLayers: 8,
-    encoders: MOCK_ENCODER_COUNT,
     dynamicEntries: MOCK_DYNAMIC_COUNTS,
     macros: { count: MOCK_MACRO_COUNT, bufferSize: MOCK_MACRO_BUFFER },
     behaviors: {
@@ -154,9 +173,18 @@ type LockStateHandler = (state: LockState) => void
 type PendingChangesHandler = (pending: boolean) => void
 type ClosedHandler = (reason?: unknown) => void
 
-interface MockServiceOptions {
+// pattern-check: skip additive demo-only lock options on the existing options bag
+export interface MockServiceOptions {
     deviceInfo?: Partial<DeviceInfo>
     initiallyLocked?: boolean
+    /** Which lock the demo simulates (default 'editor', starting unlocked):
+     *  lets the unlock UI be tried without a keyboard. */
+    lock?: LockKind
+    /** 'editor' only: the demo "device" unlocks itself after this long, as a
+     *  ZMK board does when its studio-unlock key is pressed. */
+    deviceUnlockAfterMs?: number
+    /** 'actions' only: how long the simulated combo hold takes. */
+    unlockHoldMs?: number
     /** Seed the runtime from a specific config (builder "Open in editor"
      *  handoff) instead of the static Corne demo. The physical layout, key
      *  count, and getConfigSource() all derive from this board. */
@@ -164,7 +192,7 @@ interface MockServiceOptions {
 }
 
 export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
-    public readonly capabilities: Capabilities = MOCK_CAPABILITIES
+    public capabilities: Capabilities
     // The demo's runtime keymap is a lossy projection of the config it was built
     // from, so edits are raised back into that config (merging, so lighting /
     // macros the runtime can't model survive).
@@ -174,6 +202,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
     }
     public readonly deviceInfo: DeviceInfo
     public readonly codec = mockCodec
+    public readonly sideload: SideloadApi
     public readonly encoders: EncoderApi
     public readonly dynamic: DynamicEntriesApi
     public readonly macros: MacroApi
@@ -222,7 +251,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
     private layers: Layer[] = []
     private layouts: PhysicalLayout[]
     /** Source config the runtime is seeded from (static demo or a builder board). */
-    private readonly seedCfg: ConfigKeymap
+    private seedCfg: ConfigKeymap
     /** Live config the config-blob editors read/write (§7.4 defaults + custom def
      *  pools + tri-layers). Copy-on-write off `seedCfg` (never mutated in place, so
      *  the shared demo seed is safe); discardChanges resets it. */
@@ -231,9 +260,10 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
      *  the edited config instead of the pristine seed source. */
     private configEdited = false
     /** Per-layer key count — derived from the seed geometry, not a fixed Corne. */
-    private readonly keyCount: number
+    private keyCount: number
     private activeLayoutId = 0
     private lockState: LockState
+    private readonly unlockHoldMs: number
     private pendingChanges = false
     private closed = false
 
@@ -279,11 +309,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
         this.seedCfg = opts.seedConfig ?? SEED_CONFIG
         this.cfg = this.seedCfg
         this.keyCount = this.seedCfg.keyboard.keys.length
-        this.perKeyColors = Array.from({ length: this.keyCount }, (_, i) => ({
-            h: Math.round(((i * 255) / this.keyCount) % 256),
-            s: 220,
-            v: 200,
-        }))
+        this.perKeyColors = this.rainbow()
         this.layouts = opts.seedConfig
             ? [configToPhysicalLayout(opts.seedConfig)]
             : MOCK_LAYOUTS.map((l) => ({ ...l }))
@@ -295,8 +321,49 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
             firmwareVersion: opts.deviceInfo?.firmwareVersion ?? '0.0.0',
             serialNumber: opts.deviceInfo?.serialNumber ?? 'MOCK-0001',
         }
-        this.lockState = opts.initiallyLocked ? 'locked' : 'unlocked'
+        const lock = opts.lock ?? MOCK_CAPABILITIES.lock
+        this.unlockHoldMs = opts.unlockHoldMs ?? DEMO_UNLOCK_HOLD_MS
+        this.lockState =
+            lock === 'none'
+                ? 'not-applicable'
+                : opts.initiallyLocked
+                  ? 'locked'
+                  : 'unlocked'
+        if (
+            lock === 'editor' &&
+            opts.initiallyLocked &&
+            opts.deviceUnlockAfterMs
+        ) {
+            setTimeout(() => {
+                if (!this.closed) this.setLockState('unlocked')
+            }, opts.deviceUnlockAfterMs)
+        }
+        // Knobs come from the board, like keys: the seed config's
+        // keyboard.encoders (1 on the demo Corne), not a fixed number.
+        this.capabilities = {
+            ...MOCK_CAPABILITIES,
+            lock,
+            encoders: this.encoderCount() || undefined,
+            ...(lock === 'editor' && opts.deviceUnlockAfterMs
+                ? {
+                      unlockHint: {
+                          message: `Demo: the keyboard unlocks itself in ${Math.round(opts.deviceUnlockAfterMs / 1000)} s, as if its unlock key were pressed.`,
+                      },
+                  }
+                : {}),
+        }
         this.seedDefaultLayers()
+        this.sideload = {
+            formats: [MOCK_LAYOUT_JSON],
+            importFile: async (formatId, text) => {
+                if (formatId !== MOCK_LAYOUT_JSON.id) {
+                    throw new Error(`Unknown sideload format: ${formatId}`)
+                }
+                const def = parseSideloadJson(text)
+                await this.applyLayout(def)
+                return { name: def.name, keymapChanged: true }
+            },
+        }
         // pattern-check: skip — inline closures over private state for sub-bundle stubs
         this.encoders = {
             setEncoder: async (layerId, encoderIdx, direction, action) => {
@@ -304,7 +371,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                 const li = this.layerIndexById(layerId)
                 if (li < 0)
                     throw new ProtocolError(`Unknown layer id: ${layerId}`)
-                if (encoderIdx < 0 || encoderIdx >= MOCK_ENCODER_COUNT) {
+                if (encoderIdx < 0 || encoderIdx >= this.encoderCount()) {
                     throw new ProtocolError(
                         `Encoder index out of range: ${encoderIdx}`,
                     )
@@ -377,6 +444,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
             },
             setMacro: async (idx, actions) => {
                 this.requireUnlocked()
+                this.requireActionUnlocked('Saving macros')
                 this.requireMacro(idx)
                 this.macroBuffers[idx] = actions.map((a) => ({ ...a }))
                 this.markPending(true)
@@ -503,7 +571,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
             [],
             this.layerNames(),
         )
-        return Array.from({ length: MOCK_ENCODER_COUNT }, () => ({
+        return Array.from({ length: this.encoderCount() }, () => ({
             cw: xparent,
             ccw: xparent,
         }))
@@ -556,8 +624,54 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                     `Seed layer "${l.name}" has ${l.keys.length} keys, expected ${this.keyCount}`,
                 )
             }
-            return { id: this.nextLayerId++, name: l.name, keys: l.keys }
+            return {
+                id: this.nextLayerId++,
+                name: l.name,
+                keys: l.keys,
+                ...(l.encoders ? { encoders: l.encoders } : {}),
+            }
         })
+    }
+
+    /** One LED per key, hues spread across the board. */
+    private rainbow(): HsvColor[] {
+        return Array.from({ length: this.keyCount }, (_, i) => ({
+            h: Math.round(((i * 255) / this.keyCount) % 256),
+            s: 220,
+            v: 200,
+        }))
+    }
+
+    /**
+     * Become the board a VIA/Vial definition describes: the current keymap
+     * (edits included) is raised into the config, re-homed onto the def's
+     * geometry, and the runtime is re-seeded from that. The new board is the
+     * baseline Discard/Reset return to, and what the config source serves.
+     */
+    async applyLayout(def: ParsedKeyboardDef): Promise<void> {
+        this.requireUnlocked()
+        const next = configFromBoardDef(
+            def,
+            raiseMockToConfig(this.layers, this.cfg),
+        )
+        this.seedCfg = next
+        this.cfg = next
+        this.configEdited = false
+        this.keyCount = next.keyboard.keys.length
+        this.perKeyColors = this.rainbow()
+        this.layouts = [configToPhysicalLayout(next)]
+        this.activeLayoutId = 0
+        this.capabilities = {
+            ...this.capabilities,
+            encoders: this.encoderCount() || undefined,
+        }
+        this.seedDefaultLayers()
+        this.markPending(false)
+        this.emitNotification('layout-changed', null)
+    }
+
+    private encoderCount(): number {
+        return this.seedCfg.keyboard.encoders?.length ?? 0
     }
 
     private layerNames(): string[] {
@@ -570,9 +684,38 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
         )
     }
 
+    /** 'editor' lock: every edit waits for the unlock. */
     private requireUnlocked(): void {
+        if (this.capabilities.lock !== 'editor') return
         if (this.lockState !== 'unlocked') {
             throw new LockedError()
+        }
+    }
+
+    /** 'actions' lock: only the guarded operations wait for it (macro saves in
+     *  the demo, standing in for Vial's macros / QK_BOOT). */
+    private requireActionUnlocked(what: string): void {
+        if (this.capabilities.lock !== 'actions') return
+        if (this.lockState !== 'unlocked') {
+            throw new LockedError(`${what} needs the keyboard unlocked`)
+        }
+    }
+
+    /** Stand-in for holding a firmware's unlock combo: ticks the progress up
+     *  over unlockHoldMs, and stops if the caller aborts. */
+    private async simulateUnlockHold(opts: UnlockOptions): Promise<void> {
+        const keys = DEMO_UNLOCK_KEYS.filter((k) => k < this.keyCount)
+        const ticks = Math.max(1, Math.round(this.unlockHoldMs / 100))
+        for (let t = 0; t <= ticks; t++) {
+            if (opts.signal?.aborted) {
+                throw opts.signal.reason ?? new Error('unlock aborted')
+            }
+            opts.onProgress?.({ keys, progress: t / ticks })
+            if (t < ticks) {
+                await new Promise<void>((r) =>
+                    setTimeout(r, this.unlockHoldMs / ticks),
+                )
+            }
         }
     }
 
@@ -601,10 +744,20 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
         return this.lockState
     }
 
-    async unlock(): Promise<void> {
-        if (this.lockState === 'unlocked') return
+    async unlock(opts: UnlockOptions = {}): Promise<void> {
+        if (this.lockState === 'unlocked' || this.capabilities.lock === 'none')
+            return
         this.setLockState('unlocking')
-        // Mock: instant unlock; real device would wait for user.
+        if (this.capabilities.lock === 'actions') {
+            try {
+                await this.simulateUnlockHold(opts)
+            } catch (err) {
+                this.setLockState('locked')
+                throw err
+            }
+        }
+        // 'editor': instant here (tests drive it); the demo's own device-side
+        // unlock is the deviceUnlockAfterMs timer.
         this.setLockState('unlocked')
     }
 
@@ -631,6 +784,13 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                 id: l.id,
                 name: l.name,
                 keys: relabelLayer(l.keys, this.layerNames()),
+                encoders: l.encoders?.map((e) => {
+                    const [cw, ccw] = relabelLayer(
+                        [e.cw, e.ccw],
+                        this.layerNames(),
+                    )
+                    return { cw, ccw }
+                }),
             })),
             availableLayers:
                 (this.capabilities.maxLayers ?? 8) - this.layers.length,

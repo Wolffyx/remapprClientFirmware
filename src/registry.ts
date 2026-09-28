@@ -52,13 +52,23 @@ export async function pickAdapter(
     // single-use transport before the owning adapter is ever tried (the cause of
     // "No firmware adapter handled the device" on a Remappr USB keyboard). Serial
     // /BLE keep the original order — they do not key off a USB VID.
+    //
+    // Among equally specific HID adapters, the higher Discovery.priority probes
+    // first. Registration order is chunk-load order (nondeterministic), and a
+    // protocol superset must be asked before its base: every Vial board also
+    // answers a VIA probe, so VIA going first silently downgrades it.
     let candidates = adapters
     if (hint?.transportKind === 'hid') {
         const { vid } = readTransportIds(transport)
         if (vid) {
             candidates = adapters
                 .filter((a) => hidRank(a, vid) < 2)
-                .sort((a, b) => hidRank(a, vid) - hidRank(b, vid))
+                .sort(
+                    (a, b) =>
+                        hidRank(a, vid) - hidRank(b, vid) ||
+                        (b.discovery.priority ?? 0) -
+                            (a.discovery.priority ?? 0),
+                )
         }
     }
     for (const adapter of candidates) {
