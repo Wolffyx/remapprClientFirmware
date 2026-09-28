@@ -159,6 +159,58 @@ export const ZMK_UNDERGLOW_CATALOG: LightingCatalog = {
     hasSpeed: true,
 }
 
-// Effects whose palette is fixed/animated and ignore the single-colour picker.
-export const COLORLESS_EFFECT =
-    /cycle|rainbow|spiral|pinwheel|beacon|splash|rain|heatmap|spectrum|swirl|christmas|test|alternating|gradient|wave|flower|starlight|riverflow|fractal|flow|breathe|breathing|band|direct/i
+// Effects that set their own hue, so the colour picker changes nothing. Read
+// from the firmware sources rather than guessed from the names: an effect is
+// listed only when it overwrites the configured hue (cycles, random or fixed
+// palettes). Effects that keep the configured hue, or shift from it (Breathing,
+// Band *, Gradient *, Dual Beacon, Rainbow Pinwheels, Splash, Starlight,
+// Riverflow…), are not. Anything unlisted, including custom effects, keeps the
+// picker.
+//   - RGB Matrix   quantum/rgb_matrix/animations/*_anim.h
+//   - RGBLight     quantum/rgblight/rgblight.c (rgblight_effect_*)
+//   - ZMK          app/src/rgb_underglow.c (zmk_rgb_underglow_effect_*)
+const COLORLESS_EFFECT_NAMES = [
+    // off
+    'None',
+    // RGB Matrix (VialRGB uses the same names)
+    'Cycle All',
+    'Cycle Left Right',
+    'Cycle Up Down',
+    'Cycle Out In',
+    'Cycle Out In Dual',
+    'Cycle Pinwheel',
+    'Cycle Spiral',
+    'Flower Blooming',
+    'Jellybean Raindrops',
+    'Pixel Flow',
+    'Pixel Rain',
+    'Typing Heatmap',
+    'Digital Rain',
+    // VialRGB: per-key colours from the host
+    'Direct',
+    // RGBLight
+    'Rainbow Mood',
+    'Rainbow Swirl',
+    'Christmas',
+    'RGB Test',
+    // ZMK underglow
+    'Spectrum',
+    'Swirl',
+] as const
+
+// Case and punctuation folded: VIA definitions spell the same effect
+// "Cycle Left/Right" or "Cycle_Left_Right".
+const effectKey = (name: string): string =>
+    name.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+const COLORLESS_EFFECTS: ReadonlySet<string> = new Set(
+    COLORLESS_EFFECT_NAMES.map(effectKey),
+)
+
+/** Whether the colour picker affects effect `name` of `catalog`. */
+export function effectUsesColor(
+    catalog: LightingCatalog,
+    name: string,
+): boolean {
+    return catalog.hasColor && !COLORLESS_EFFECTS.has(effectKey(name))
+}
