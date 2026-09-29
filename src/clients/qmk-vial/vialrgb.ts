@@ -189,17 +189,17 @@ export function createVialRgbFacade(
         hasSpeed: true,
     }
 
-    // LED → matrix position, read once (one round trip per LED).
-    let ledMatrix: Promise<Map<string, number>> | null = null
-    const readLedMatrix = async (): Promise<Map<string, number>> => {
-        const byPos = new Map<string, number>()
+    // Matrix position → the LEDs under it, read once (one round trip per LED).
+    // Several LEDs can share a key: a long spacebar lit by two or three.
+    let ledMatrix: Promise<Map<string, number[]>> | null = null
+    const readLedMatrix = async (): Promise<Map<string, number[]>> => {
+        const byPos = new Map<string, number[]>()
         for (let led = 0; led < Math.min(ledCount, LED_INFO_MAX); led++) {
             const r = await query(client, GET_LED_INFO, [led & 0xff, led >> 8])
             // [x, y, flags, row, col]; 0xFF row/col = not under a key.
             if (!r || r[3] === 0xff || r[4] === 0xff) continue
             const pos = `${r[3]},${r[4]}`
-            // Two LEDs can share a key (a long spacebar); the first one wins.
-            if (!byPos.has(pos)) byPos.set(pos, led)
+            byPos.set(pos, [...(byPos.get(pos) ?? []), led])
         }
         return byPos
     }
@@ -275,7 +275,7 @@ export function createVialRgbFacade(
                 )
             }
         },
-        async getLedIndexMap(keyCount: number): Promise<number[]> {
+        async getKeyLeds(keyCount: number): Promise<number[][]> {
             ledMatrix ??= readLedMatrix().catch((err: unknown) => {
                 ledMatrix = null // try again next time
                 throw err
@@ -284,7 +284,7 @@ export function createVialRgbFacade(
             const keys = keyMatrix()
             return Array.from({ length: keyCount }, (_, i) => {
                 const k = keys[i]
-                return (k && byPos.get(`${k.row},${k.col}`)) ?? -1
+                return (k && byPos.get(`${k.row},${k.col}`)) ?? []
             })
         },
     }

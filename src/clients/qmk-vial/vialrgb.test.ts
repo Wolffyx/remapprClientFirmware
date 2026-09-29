@@ -247,14 +247,18 @@ describe('qmk-vial — VialRGB (#191)', () => {
         expect(board.sent).toHaveLength(0)
     })
 
-    it('maps layout keys to LEDs through their matrix positions', async () => {
+    it('maps layout keys to every LED under their matrix positions', async () => {
+        // Aftermarket Keycult TKL (qmk_firmware#26409): Caps Lock has two
+        // LEDs, the spacebar three.
         const { client } = fakeBoard({
             leds: [
                 { row: 1, col: 0 },
                 { row: 0, col: 0 },
-                { row: 2, col: 3 }, // spacebar: two LEDs, first wins
+                { row: 2, col: 3 }, // spacebar
+                { row: 1, col: 0 }, // Caps Lock, second LED
                 { row: 2, col: 3 },
                 { row: 0xff, col: 0xff }, // underglow, not under a key
+                { row: 2, col: 3 },
             ],
         })
         const keys = [
@@ -268,7 +272,7 @@ describe('qmk-vial — VialRGB (#191)', () => {
             (await probeVialRgb(client))!,
             () => keys,
         )
-        expect(await rgb.getLedIndexMap!(4)).toEqual([1, 0, 2, -1])
+        expect(await rgb.getKeyLeds!(4)).toEqual([[1], [0, 3], [2, 4, 6], []])
     })
 
     it('has no per-key surface when the build lacks the Direct effect', async () => {

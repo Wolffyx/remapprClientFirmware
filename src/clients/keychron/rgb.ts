@@ -29,6 +29,36 @@ import {
     setPerKeyTypeCmd,
 } from './protocol'
 
+/** Key idx → LED idx via RGB_SUB.GET_LED_IDX (0x06), plus the LED count to
+ *  validate it against. */
+async function readLedIndexMap(
+    client: HidClient,
+    keyCount: number,
+): Promise<{ leds: number[]; ledCount: number }> {
+    const ledCount = parseLedCount(await client.send(getLedCountCmd()))
+    const leds: number[] = []
+    for (let s = 0; s < keyCount; s += LED_IDX_BATCH_MAX) {
+        const n = Math.min(LED_IDX_BATCH_MAX, keyCount - s)
+        leds.push(
+            ...parseLedIndexMap(await client.send(getLedIndexCmd(s, n)), n),
+        )
+    }
+    return { leds, ledCount }
+}
+
+/** One entry per key, every real LED in range and used once. NO_LED keys
+ *  are skipped: they may repeat. */
+function isValidLedMap(
+    leds: number[],
+    keyCount: number,
+    ledCount: number,
+): boolean {
+    if (leds.length !== keyCount) return false
+    const real = leds.filter((led) => led !== NO_LED)
+    if (real.some((led) => led < 0 || led >= ledCount)) return false
+    return new Set(real).size === real.length
+}
+
 // pattern-check: skip — extends existing Facade; composes via rgbMatrix effect into keychron RgbApi
 export function createRgbFacade(client: HidClient): RgbApi {
     // Global effect (mode/brightness/speed/colour) rides stock VIA's custom
@@ -97,40 +127,23 @@ export function createRgbFacade(client: HidClient): RgbApi {
         ): Promise<void> {
             await client.send(setPerKeyColorCmd(startLed, colors))
         },
-        async getLedIndexMap(keyCount: number): Promise<number[]> {
-            // canvas idx → LED idx via RGB_SUB.GET_LED_IDX (0x06). Falls back to
-            // identity (LED order == layout order) on any read error or if the
-            // returned map fails validation — so a wrong byte-layout guess (see
+        async getKeyLeds(keyCount: number): Promise<number[][]> {
+            // Keychron reports one LED per key (the firmware's g_led_config
+            // matrix, where the last LED of a shared key wins). Falls back to
+            // identity (LED order == layout order) when the read fails or the
+            // map fails validation, so a wrong byte-layout guess (see
             // protocol.ts HW-CONFIRM) degrades safely instead of mismapping.
-            const identity = Array.from({ length: keyCount }, (_, i) => i)
-            try {
-                const ledCount = parseLedCount(
-                    await client.send(getLedCountCmd()),
-                )
-                const map: number[] = []
-                for (let s = 0; s < keyCount; s += LED_IDX_BATCH_MAX) {
-                    const n = Math.min(LED_IDX_BATCH_MAX, keyCount - s)
-                    map.push(
-                        ...parseLedIndexMap(
-                            await client.send(getLedIndexCmd(s, n)),
-                            n,
-                        ),
-                    )
-                }
-                // Valid iff length matches and every real LED idx is in range
-                // and unique (NO_LED keys are skipped — they may repeat).
-                const seen = new Set<number>()
-                let valid = map.length === keyCount
-                for (const v of map) {
-                    if (!valid) break
-                    if (v === NO_LED) continue
-                    if (v < 0 || v >= ledCount || seen.has(v)) valid = false
-                    else seen.add(v)
-                }
-                return valid ? map : identity
-            } catch {
-                return identity
-            }
+            const map = await readLedIndexMap(client, keyCount).catch(
+                (err: unknown) => {
+                    console.warn('[keychron] LED map read failed', err)
+                    return null
+                },
+            )
+            const leds =
+                map && isValidLedMap(map.leds, keyCount, map.ledCount)
+                    ? map.leds
+                    : Array.from({ length: keyCount }, (_, i) => i)
+            return leds.map((led) => (led === NO_LED ? [] : [led]))
         },
         async getMixedRegions(): Promise<Uint8Array> {
             const resp = await client.send(getMixedRegionsCmd())

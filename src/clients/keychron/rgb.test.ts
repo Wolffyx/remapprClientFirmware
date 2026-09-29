@@ -37,31 +37,31 @@ function clientFor(ledCount: number, leds: number[]): HidClient {
     }
 }
 
-describe('keychron/rgb — getLedIndexMap', () => {
+describe('keychron/rgb — getKeyLeds', () => {
     it('returns the device map when valid (in range + unique)', async () => {
         const rgb = createRgbFacade(clientFor(10, [2, 0, 3, 1]))
-        expect(await rgb.getLedIndexMap!(4)).toEqual([2, 0, 3, 1])
+        expect(await rgb.getKeyLeds!(4)).toEqual([[2], [0], [3], [1]])
     })
 
-    it('allows repeated NO_LED (0xFF) sentinels', async () => {
+    it('gives NO_LED (0xFF) keys no LEDs, even when repeated', async () => {
         const rgb = createRgbFacade(clientFor(10, [2, 0xff, 0xff, 1]))
-        expect(await rgb.getLedIndexMap!(4)).toEqual([2, 0xff, 0xff, 1])
+        expect(await rgb.getKeyLeds!(4)).toEqual([[2], [], [], [1]])
     })
 
     it('falls back to identity on duplicate LED indices', async () => {
         const rgb = createRgbFacade(clientFor(10, [0, 0, 1, 2]))
-        expect(await rgb.getLedIndexMap!(4)).toEqual([0, 1, 2, 3])
+        expect(await rgb.getKeyLeds!(4)).toEqual([[0], [1], [2], [3]])
     })
 
     it('falls back to identity on an out-of-range LED index', async () => {
         const rgb = createRgbFacade(clientFor(4, [9, 1, 2, 3]))
-        expect(await rgb.getLedIndexMap!(4)).toEqual([0, 1, 2, 3])
+        expect(await rgb.getKeyLeds!(4)).toEqual([[0], [1], [2], [3]])
     })
 
     it('falls back to identity when the device errors', async () => {
         const client = clientFor(10, [0, 1, 2, 3])
         client.send = () => Promise.reject(new Error('hid timeout'))
         const rgb = createRgbFacade(client)
-        expect(await rgb.getLedIndexMap!(4)).toEqual([0, 1, 2, 3])
+        expect(await rgb.getKeyLeds!(4)).toEqual([[0], [1], [2], [3]])
     })
 })
