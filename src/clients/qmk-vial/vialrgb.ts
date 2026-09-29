@@ -16,6 +16,8 @@ import type { LightingCatalog } from '@firmware/lighting'
 import type { HsvColor, RgbApi, RgbEffectState } from '@firmware/service'
 import { makeFrame, VIA_PAYLOAD_SIZE } from '@firmware/clients/qmk/protocol'
 
+import { keyLedsByPos, posKey, type KeyPlace, type LedInfo } from './ledKeys'
+
 const LIGHTING_SET = 0x07
 const LIGHTING_GET = 0x08
 const LIGHTING_SAVE = 0x09
@@ -105,8 +107,8 @@ export interface VialRgbInfo {
     ledCount: number
 }
 
-/** Matrix position of each layout key, in layout order. */
-export type KeyMatrix = () => readonly { row: number; col: number }[]
+/** Each layout key's matrix position and physical place, in layout order. */
+export type LayoutKeys = () => readonly KeyPlace[]
 
 const u16le = (b: Uint8Array, off: number): number => b[off] | (b[off + 1] << 8)
 
@@ -170,7 +172,7 @@ export async function probeVialRgb(
 export function createVialRgbFacade(
     client: HidClient,
     info: VialRgbInfo,
-    keyMatrix: KeyMatrix,
+    layoutKeys: LayoutKeys,
 ): RgbApi {
     const { maxBrightness, effectIds, ledCount } = info
     // The app works in 0–255; the firmware clamps V at maxBrightness. Scale so
@@ -189,19 +191,25 @@ export function createVialRgbFacade(
         hasSpeed: true,
     }
 
-    // Matrix position → the LEDs under it, read once (one round trip per LED).
-    // Several LEDs can share a key: a long spacebar lit by two or three.
-    let ledMatrix: Promise<Map<string, number[]>> | null = null
-    const readLedMatrix = async (): Promise<Map<string, number[]>> => {
-        const byPos = new Map<string, number[]>()
+    // Every LED's place, read once (one round trip per LED). Which key each
+    // lights is worked out per call: a sideload can swap the layout.
+    let ledInfo: Promise<LedInfo[]> | null = null
+    const readLedInfo = async (): Promise<LedInfo[]> => {
+        const leds: LedInfo[] = []
         for (let led = 0; led < Math.min(ledCount, LED_INFO_MAX); led++) {
             const r = await query(client, GET_LED_INFO, [led & 0xff, led >> 8])
+            if (!r) continue
             // [x, y, flags, row, col]; 0xFF row/col = not under a key.
-            if (!r || r[3] === 0xff || r[4] === 0xff) continue
-            const pos = `${r[3]},${r[4]}`
-            byPos.set(pos, [...(byPos.get(pos) ?? []), led])
+            const underKey = r[3] !== 0xff && r[4] !== 0xff
+            leds.push({
+                led,
+                x: r[0],
+                y: r[1],
+                flags: r[2],
+                pos: underKey ? { row: r[3], col: r[4] } : null,
+            })
         }
-        return byPos
+        return leds
     }
 
     const api: RgbApi = {
@@ -276,15 +284,15 @@ export function createVialRgbFacade(
             }
         },
         async getKeyLeds(keyCount: number): Promise<number[][]> {
-            ledMatrix ??= readLedMatrix().catch((err: unknown) => {
-                ledMatrix = null // try again next time
+            ledInfo ??= readLedInfo().catch((err: unknown) => {
+                ledInfo = null // try again next time
                 throw err
             })
-            const byPos = await ledMatrix
-            const keys = keyMatrix()
+            const keys = layoutKeys()
+            const byPos = keyLedsByPos(await ledInfo, keys)
             return Array.from({ length: keyCount }, (_, i) => {
                 const k = keys[i]
-                return (k && byPos.get(`${k.row},${k.col}`)) ?? []
+                return (k && byPos.get(posKey(k.row, k.col))) ?? []
             })
         },
     }

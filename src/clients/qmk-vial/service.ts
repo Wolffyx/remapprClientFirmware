@@ -194,13 +194,7 @@ async function loadLayers(
         })
         const encoders: EncoderAction[] = []
         for (const idx of def.encoderIndices) {
-            const e = await readEncoder(
-                client,
-                l,
-                idx,
-                layerNames,
-                customNames,
-            )
+            const e = await readEncoder(client, l, idx, layerNames, customNames)
             encoders.push(e)
         }
         layers.push({
@@ -349,10 +343,11 @@ export class VialKeyboardService implements KeyboardService {
         if (rgbInfo) {
             // Keys are read through the current definition, which a sideload
             // can swap after connect.
-            this.rgb = createVialRgbFacade(
-                cfg.client,
-                rgbInfo,
-                () => this.def.rowColMap,
+            this.rgb = createVialRgbFacade(cfg.client, rgbInfo, () =>
+                this.def.rowColMap.map((pos, i) => ({
+                    ...this.def.layoutKeys[i],
+                    ...pos,
+                })),
             )
         }
         cfg.client.onClosed((reason) => this.handleClientClosed(reason))
@@ -374,13 +369,7 @@ export class VialKeyboardService implements KeyboardService {
         const initialLock = await readUnlockStatus(cfg.client)
         const lockState: LockState = initialLock.locked ? 'locked' : 'unlocked'
         const rgbInfo = await loadVialRgb(cfg.client, cfg.def)
-        return new VialKeyboardService(
-            cfg,
-            layers,
-            lockState,
-            profile,
-            rgbInfo,
-        )
+        return new VialKeyboardService(cfg, layers, lockState, profile, rgbInfo)
     }
 
     private handleClientClosed(reason?: unknown): void {
