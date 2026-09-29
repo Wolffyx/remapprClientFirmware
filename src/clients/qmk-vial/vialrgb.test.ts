@@ -16,6 +16,9 @@ import {
 interface Led {
     row: number
     col: number
+    /** LED-space position and flags; default x = index × 10, key light. */
+    x?: number
+    flags?: number
 }
 
 interface FakeBoard {
@@ -99,7 +102,13 @@ function fakeBoard(opts: Partial<FakeBoard> = {}): {
                         const led = args[0] | (args[1] >> 8)
                         if (led >= board.leds.length) break
                         const l = board.leds[led]
-                        args.set([led * 10, 0, 4, l.row, l.col])
+                        args.set([
+                            l.x ?? led * 10,
+                            0,
+                            l.flags ?? 4,
+                            l.row,
+                            l.col,
+                        ])
                         break
                     }
                 }
@@ -247,28 +256,39 @@ describe('qmk-vial — VialRGB (#191)', () => {
         expect(board.sent).toHaveLength(0)
     })
 
-    it('maps layout keys to LEDs through their matrix positions', async () => {
+    it('maps layout keys to every LED under them', async () => {
+        // Stock vial-qmk places one LED per key: a 3u spacebar's outer LEDs
+        // come back under no key and are placed by position.
         const { client } = fakeBoard({
             leds: [
-                { row: 1, col: 0 },
-                { row: 0, col: 0 },
-                { row: 2, col: 3 }, // spacebar: two LEDs, first wins
-                { row: 2, col: 3 },
-                { row: 0xff, col: 0xff }, // underglow, not under a key
+                { row: 0, col: 0, x: 5 },
+                { row: 0xff, col: 0xff, x: 15 }, // spacebar, left
+                { row: 0, col: 1, x: 25 }, // spacebar, middle
+                { row: 0xff, col: 0xff, x: 35 }, // spacebar, right
+                { row: 0, col: 2, x: 45 },
+                { row: 0xff, col: 0xff, x: 25, flags: 2 }, // underglow
             ],
         })
+        const at = (col: number, x: number, w: number, row = 0) => ({
+            row,
+            col,
+            x: x * 100,
+            y: row * 100,
+            w: w * 100,
+            h: 100,
+        })
         const keys = [
-            { row: 0, col: 0 },
-            { row: 1, col: 0 },
-            { row: 2, col: 3 },
-            { row: 3, col: 3 }, // no LED
+            at(0, 0, 1),
+            at(1, 1, 3), // spacebar
+            at(2, 4, 1),
+            at(0, 0, 1, 1), // no LED
         ]
         const rgb = createVialRgbFacade(
             client,
             (await probeVialRgb(client))!,
             () => keys,
         )
-        expect(await rgb.getLedIndexMap!(4)).toEqual([1, 0, 2, -1])
+        expect(await rgb.getKeyLeds!(4)).toEqual([[0], [1, 2, 3], [4], []])
     })
 
     it('has no per-key surface when the build lacks the Direct effect', async () => {

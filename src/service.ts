@@ -355,12 +355,13 @@ export interface RgbApi {
      *  power cycle, and save() does not keep them. */
     perKeyVolatile?: boolean
 
-    /** Map physical-layout key index → LED index for per-key colour I/O. Identity
-     *  when the firmware's LED order matches layout order; firmware-specific
-     *  otherwise. `keyCount` is the number of layout keys. A key without an
-     *  LED maps to an index outside 0…ledCount−1, and writes to it are
-     *  ignored. */
-    getLedIndexMap?(keyCount: number): Promise<number[]>
+    /** The LEDs under each physical-layout key, for per-key colour I/O.
+     *  `keyCount` is the number of layout keys; entry i lists key i's LED
+     *  indices. A key may have several (a long spacebar lit by three LEDs, as
+     *  QMK allows since qmk_firmware#26278) or none (an empty list).
+     *  Firmware-specific; callers assume one LED per key, in layout order,
+     *  when it is absent. */
+    getKeyLeds?(keyCount: number): Promise<number[][]>
 
     getMixedRegions?(): Promise<Uint8Array>
 
