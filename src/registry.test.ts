@@ -114,3 +114,75 @@ describe('pickAdapter — HID VID specificity', () => {
         expect(t.abortController.signal.aborted).toBe(false) // specific never probed
     })
 })
+
+describe('pickAdapter — protocol superset before its base', () => {
+    // Vial is a VIA superset: a Vial board also passes the VIA probe. Both are
+    // generic (usage-page only), so without a tie-break the winner was whichever
+    // client chunk registered first.
+    function generic(
+        id: string,
+        accepts: boolean,
+        probed: string[],
+        priority?: number,
+    ): FirmwareAdapter {
+        return {
+            id,
+            displayName: id,
+            discovery: { hid: { usagePage: 0xff60, usage: 0x61 }, priority },
+            async canHandle() {
+                probed.push(id)
+                return accepts
+                    ? { ok: true as const, deviceInfo: { name: id, firmware: id } }
+                    : { ok: false as const, reason: 'not me' }
+            },
+            async connect() {
+                throw new Error('unused')
+            },
+        }
+    }
+
+    it('probes the higher-priority generic adapter first even when registered last', async () => {
+        const { registerAdapter, pickAdapter } = await freshRegistry()
+        const probed: string[] = []
+        registerAdapter(generic('via-like', true, probed))
+        registerAdapter(generic('vial-like', true, probed, 10))
+
+        const winner = await pickAdapter(hidTransport(0x4b50), {
+            transportKind: 'hid',
+        })
+
+        expect(winner?.id).toBe('vial-like')
+        expect(probed).toEqual(['vial-like'])
+    })
+
+    it('falls through to the base protocol when the superset declines', async () => {
+        const { registerAdapter, pickAdapter } = await freshRegistry()
+        const probed: string[] = []
+        registerAdapter(generic('via-like', true, probed))
+        registerAdapter(generic('vial-like', false, probed, 10))
+
+        const winner = await pickAdapter(hidTransport(0x4b50), {
+            transportKind: 'hid',
+        })
+
+        expect(winner?.id).toBe('via-like')
+        expect(probed).toEqual(['vial-like', 'via-like'])
+    })
+
+    it('keeps VID specificity ahead of priority', async () => {
+        const { registerAdapter, pickAdapter } = await freshRegistry()
+        const probed: string[] = []
+        registerAdapter(generic('vial-like', true, probed, 10))
+        registerAdapter({
+            ...generic('owner', true, probed),
+            discovery: { hid: { vendorIds: [0x3434] } },
+        })
+
+        const winner = await pickAdapter(hidTransport(0x3434), {
+            transportKind: 'hid',
+        })
+
+        expect(winner?.id).toBe('owner')
+        expect(probed).toEqual(['owner'])
+    })
+})
