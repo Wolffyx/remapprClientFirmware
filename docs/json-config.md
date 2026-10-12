@@ -216,8 +216,9 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
 }
 ```
 
-- `node.personality` picks the node role; a dongle exposes a limited surface, a
-  mouse node carries pointer settings. _(emitted to the blob in a later phase)_
+- `node.personality` picks the node role: `keyboard` and `mouse` are written
+  to the blob (TBL_PERSONALITY); a mouse node carries pointer settings. A
+  dongle is configured by its own device document instead (below).
 - `firmware.<target>` namespaces settings so every registered firmware target's
   knobs are reachable. _(consumed per-target in a later phase)_
 - `board` feeds the DT/Kconfig generator; `controller` accepts a known Zephyr
@@ -230,6 +231,40 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   explicit `keyboard.hardware.transform` and warn when derived from geometry.
   Get it via `getCompiler('remappr-board')` or `buildProjectBundle(config,
   'remappr-board')`.
+
+## Device documents (non-keyboard devices)
+
+A device that is not a keyboard has no keys or layers, so it is configured by a
+separate, smaller document, `kind: "remappr.device"` (`src/config/device.ts`).
+Today it covers the 2.4 GHz dongle; the mouse joins it later.
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "kind": "remappr.device",
+  "meta": { "name": "Desk dongle" },
+  "personality": "dongle",      // the device refuses a config for another one
+  "dongle": {                   // every field optional: absent = firmware default
+    "nkro": true,               // NKRO interface (true) or boot 6KRO (false)
+    "pairWindowMs": 60000,      // 5000..600000, default 30000
+    "pairDoneReplayMs": 2000,   // 0..30000
+    "failsafeMs": 150,          // 50..2000, default 100: silent node -> keys up
+    "rosterLiveMs": 2500,       // 100..60000, default 1500, not below failsafe
+    "hidSubmitTimeoutMs": 2     // 0..50
+  }
+}
+```
+
+- `parseDeviceConfig(json)` validates it (the ranges match the firmware, so a
+  config that parses is never refused by the dongle); `isDeviceConfig(json)`
+  tells it apart from a keymap; `buildDeviceJsonSchema()` feeds the editor.
+- `buildRemapprDeviceBlob(config, { configVersion })` writes TBL_PERSONALITY
+  (dongle = 4) plus TBL_DONGLE (id 25). Push it to the dongle itself (target
+  0) with the usual WRITE / VALIDATE / COMMIT verbs.
+- `decodeRemapprDeviceBlob(bytes)` reads one back; it returns `DEVICE` for a
+  blob made for another device and `MISSING` for one that names none.
+- A live NKRO switch (DONGLE `SET_NKRO`) made after a config is saved stands
+  until the next config that sets `nkro`.
 
 ## Reserved / planned sections
 

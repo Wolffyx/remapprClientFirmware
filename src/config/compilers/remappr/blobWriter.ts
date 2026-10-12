@@ -44,7 +44,42 @@ export const TableId = {
     ClusterSec: 22, // cluster PSK for §6 election/roster MAC (N5b)
     LinkProfile: 23, // latency/link profile + knob overrides (§8, N6)
     Autocorrect: 24, // on-device autocorrect dictionary (§5.2-E)
+    Dongle: 25, // 2.4 GHz dongle settings (device-config plan)
 } as const
+
+/** enum remappr_personality (firmware include/remappr/role.h). */
+export const Personality = {
+    unknown: 0,
+    keyboard: 1,
+    mouse: 2,
+    recovery: 3,
+    dongle: 4,
+} as const
+
+/** TBL_DONGLE `set` bits (config_blob.h REMAPPR_DONGLE_SET_*): which fields the
+ *  config sets; a clear bit keeps the dongle's image default. */
+export const DongleSet = {
+    nkro: 1 << 0,
+    pairWindow: 1 << 1,
+    pairDoneReplay: 1 << 2,
+    failsafe: 1 << 3,
+    rosterLive: 1 << 4,
+    hidSubmit: 1 << 5,
+} as const
+export const DONGLE_FLAG_NKRO = 0x01
+export const DONGLE_TBL_LEN = 16
+
+/** One TBL_DONGLE payload. A field is only meaningful when its DongleSet bit
+ *  is in `set`; the builder writes 0 for the others. */
+export interface DongleTableRecord {
+    set: number
+    nkro: boolean
+    hidSubmitTimeoutMs: number
+    pairWindowMs: number
+    pairDoneReplayMs: number
+    failsafeMs: number
+    rosterLiveMs: number
+}
 
 /** TBL_PERSONALITY byte 1 role_flags (config_blob.h REMAPPR_CFG_ROLE_*). */
 export const CFG_ROLE_VALID = 0x01
@@ -900,6 +935,26 @@ export class BlobBuilder {
             this.w.u8(o.knob)
             this.w.u32(o.value >>> 0)
         }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_DONGLE (id 25), 16 bytes: u16 set, u8 flags (bit0 NKRO), u8
+     *  hid_submit_timeout_ms, u32 pair_window_ms, u16 pair_done_replay_ms, u16
+     *  failsafe_ms, u16 roster_live_ms, u16 reserved. Mirrors the firmware
+     *  decoder lib/config_blob/decode_dongle.c. */
+    dongleTable(d: DongleTableRecord): this {
+        const on = (bit: number): boolean => (d.set & bit) !== 0
+        this.tableBegin(TableId.Dongle, 1)
+        this.w.u16(d.set)
+        this.w.u8(on(DongleSet.nkro) && d.nkro ? DONGLE_FLAG_NKRO : 0)
+        this.w.u8(on(DongleSet.hidSubmit) ? d.hidSubmitTimeoutMs : 0)
+        this.w.u32(on(DongleSet.pairWindow) ? d.pairWindowMs >>> 0 : 0)
+        this.w.u16(on(DongleSet.pairDoneReplay) ? d.pairDoneReplayMs : 0)
+        this.w.u16(on(DongleSet.failsafe) ? d.failsafeMs : 0)
+        this.w.u16(on(DongleSet.rosterLive) ? d.rosterLiveMs : 0)
+        this.w.u16(0) // reserved
         this.tableEnd()
         return this
     }

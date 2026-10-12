@@ -8,6 +8,7 @@
 // in the builder's JSON config panel. Generated once and cached: the schema is
 // static for the process lifetime.
 import { z } from 'zod'
+import { DeviceConfigSchema } from './device'
 import { KeymapSchema } from './schema'
 
 let cached: Record<string, unknown> | null = null
@@ -29,4 +30,19 @@ export function buildConfigJsonSchema(): Record<string, unknown> {
         }) as Record<string, unknown>
     }
     return cached
+}
+
+let cachedDevice: Record<string, unknown> | null = null
+
+/** The JSON Schema of the device config document (`kind: "remappr.device"`,
+ *  device.ts), generated the same way as buildConfigJsonSchema(). */
+// pattern-check: skip second memoized converter, same shape as the one above
+export function buildDeviceJsonSchema(): Record<string, unknown> {
+    if (!cachedDevice) {
+        cachedDevice = z.toJSONSchema(DeviceConfigSchema, {
+            unrepresentable: 'any',
+            io: 'input',
+        }) as Record<string, unknown>
+    }
+    return cachedDevice
 }

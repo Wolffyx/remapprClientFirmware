@@ -1,0 +1,128 @@
+// pattern-check: skip plain zod wire-DTO schema plus a JSON parse wrapper
+//
+// The device config document (`kind: "remappr.device"`): the JSON for a Remappr
+// device that is not a keyboard. A keyboard is configured by the keymap document
+// (`remappr.keymap`, schema.ts); a dongle has no keys or layers, so it gets this
+// small document instead. It compiles to an RMBC blob holding TBL_PERSONALITY
+// plus the device's own table (compilers/remappr/device.ts). Today it covers the
+// dongle; the mouse joins it later (firmware docs/device-config-plan.md).
+//
+//   {
+//     "schemaVersion": 1,
+//     "kind": "remappr.device",
+//     "meta": { "name": "Desk dongle" },
+//     "personality": "dongle",
+//     "dongle": { "nkro": true, "pairWindowMs": 60000, "failsafeMs": 150 }
+//   }
+//
+// Every dongle field is optional: one left out keeps the firmware's default.
+// The ranges mirror the firmware decoder (config_blob.h REMAPPR_DONGLE_*), so a
+// config that passes here is never refused by the dongle.
+import { z } from 'zod'
+
+export const DongleSettingsSchema = z
+    .object({
+        nkro: z
+            .boolean()
+            .optional()
+            .describe(
+                'Route keystrokes out the NKRO interface (true) or the boot 6KRO ' +
+                    'interface (false, BIOS-safe). A live NKRO switch made after ' +
+                    'this config is saved stands until the next config.',
+            ),
+        pairWindowMs: z
+            .number()
+            .int()
+            .min(5000)
+            .max(600000)
+            .optional()
+            .describe('How long the pairing window stays open, ms (default 30000).'),
+        pairDoneReplayMs: z
+            .number()
+            .int()
+            .min(0)
+            .max(30000)
+            .optional()
+            .describe(
+                'After a bond, how long a lost PAIR_DONE is replayed to the node, ms ' +
+                    '(default 2000).',
+            ),
+        failsafeMs: z
+            .number()
+            .int()
+            .min(50)
+            .max(2000)
+            .optional()
+            .describe(
+                'A node silent this long gets an all-keys-up report, ms (default 100).',
+            ),
+        rosterLiveMs: z
+            .number()
+            .int()
+            .min(100)
+            .max(60000)
+            .optional()
+            .describe(
+                'A node silent this long is listed offline, ms (default 1500). Not ' +
+                    'below the failsafe.',
+            ),
+        hidSubmitTimeoutMs: z
+            .number()
+            .int()
+            .min(0)
+            .max(50)
+            .optional()
+            .describe(
+                'How long a USB report waits for the host to read the previous ' +
+                    'one before it is held for later, ms (default 2).',
+            ),
+    })
+    .superRefine((d, ctx) => {
+        const failsafe = d.failsafeMs ?? 100
+        if (d.rosterLiveMs !== undefined && d.rosterLiveMs < failsafe) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['rosterLiveMs'],
+                message: `rosterLiveMs (${d.rosterLiveMs}) must not be below the failsafe (${failsafe} ms)`,
+            })
+        }
+    })
+    .describe('2.4 GHz dongle settings (TBL_DONGLE).')
+
+export const DeviceConfigSchema = z
+    .object({
+        schemaVersion: z.literal(1),
+        kind: z.literal('remappr.device'),
+        meta: z.object({
+            name: z.string(),
+            author: z.string().optional(),
+            version: z
+                .string()
+                .optional()
+                .describe('Config version for an exported blob (integer string).'),
+            description: z.string().optional(),
+        }),
+        personality: z
+            .enum(['dongle'])
+            .describe('Which device this config is for; the device refuses any other.'),
+        dongle: DongleSettingsSchema.optional(),
+    })
+    .describe('Config for a Remappr device that is not a keyboard.')
+
+export type ConfigDevice = z.infer<typeof DeviceConfigSchema>
+export type DongleSettings = z.infer<typeof DongleSettingsSchema>
+
+/** Parse + validate a device config document. Throws a ZodError (or a
+ *  SyntaxError for bad JSON) like parseKeymap does. */
+export function parseDeviceConfig(src: string): ConfigDevice {
+    return DeviceConfigSchema.parse(JSON.parse(src))
+}
+
+/** True when @p json is a device config document rather than a keymap. */
+export function isDeviceConfig(json: unknown): boolean {
+    return (
+        typeof json === 'object' &&
+        json !== null &&
+        (json as { kind?: unknown }).kind === 'remappr.device'
+    )
+}

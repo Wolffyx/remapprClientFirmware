@@ -102,6 +102,7 @@ export const DecodeCode = {
     REFERENCE: -9,
     CAPABILITY: -10,
     BUDGET: -11,
+    DEVICE: -12,
 } as const
 
 export type DecodeCodeValue = (typeof DecodeCode)[keyof typeof DecodeCode]
@@ -119,6 +120,7 @@ const DECODE_CODE_NAME: Record<number, string> = {
     [-9]: 'REFERENCE',
     [-10]: 'CAPABILITY',
     [-11]: 'BUDGET',
+    [-12]: 'DEVICE',
 }
 
 /** Human label for a decode result code, e.g. "CRC mismatch (-4)". */
@@ -137,7 +139,7 @@ export interface DecodeResult {
 
 /* ── little-endian reader ───────────────────────────────────────────────── */
 
-class ByteReader {
+export class ByteReader {
     pos = 0
     constructor(private readonly b: Uint8Array) {}
     get length(): number {
@@ -595,7 +597,7 @@ function tapHold(
 
 /* ── table walk ─────────────────────────────────────────────────────────── */
 
-interface TableFrame {
+export interface TableFrame {
     id: number
     version: number
     start: number // payload start
@@ -633,11 +635,24 @@ function parseBehaviorRecord(r: ByteReader): BehaviorRecord {
  * walks the table frames. Header-level failures return a `code` and no config;
  * intra-table reference issues surface as diagnostics with a best-effort config.
  */
-export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
-    const diag = new DiagnosticBag()
-    const fail = (code: DecodeCodeValue): DecodeResult => ({
+/** A blob's validated header and its table frames (payloads not yet read). */
+export interface BlobFrames {
+    code: DecodeCodeValue
+    /** Header config_version; meaningful when `code === OK`. */
+    configVersion: number
+    frames: TableFrame[]
+}
+
+/**
+ * Validate the 20-byte header (magic / min_reader / CRC32-over-body) exactly
+ * like the firmware, then split the body into table frames. Shared by the
+ * keymap decoder and the device decoder (device.ts).
+ */
+export function readBlobFrames(bytes: Uint8Array): BlobFrames {
+    const fail = (code: DecodeCodeValue): BlobFrames => ({
         code,
-        diagnostics: diag.all,
+        configVersion: 0,
+        frames: [],
     })
 
     // ── header ──
@@ -670,6 +685,19 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         frames.push({ id, version, start, end: start + len })
         off = start + len
     }
+    return { code: DecodeCode.OK, configVersion, frames }
+}
+
+export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
+    const diag = new DiagnosticBag()
+    const fail = (code: DecodeCodeValue): DecodeResult => ({
+        code,
+        diagnostics: diag.all,
+    })
+
+    const parsed = readBlobFrames(bytes)
+    if (parsed.code !== DecodeCode.OK) return fail(parsed.code)
+    const { configVersion, frames } = parsed
     const table = (id: number): TableFrame | undefined =>
         frames.find((f) => f.id === id)
 

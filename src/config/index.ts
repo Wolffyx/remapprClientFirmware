@@ -83,7 +83,20 @@ export {
     type SurfaceAction,
 } from './schema'
 
-export { buildConfigJsonSchema } from './jsonSchema'
+export { buildConfigJsonSchema, buildDeviceJsonSchema } from './jsonSchema'
+export {
+    type ConfigDevice,
+    type DongleSettings,
+    DeviceConfigSchema,
+    DongleSettingsSchema,
+    isDeviceConfig,
+    parseDeviceConfig,
+} from './device'
+export {
+    type DeviceDecodeResult,
+    buildRemapprDeviceBlob,
+    decodeRemapprDeviceBlob,
+} from './compilers/remappr/device'
 export {
     type BuilderFirmwareId,
     type BuilderFirmwareTarget,
