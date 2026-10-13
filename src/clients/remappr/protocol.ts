@@ -246,7 +246,17 @@ export const DongleVerb = {
      *  count 8-byte records {u8 pipe, u8 flags, u16 short_id, u8 device_type,
      *  u8 node_role, u8 ctrl_owner, u8 hops}. */
     GET_PIPE_TABLE: 0x09,
+    /** Reboot into the board's own bootloader so new firmware can be loaded,
+     *  arg = ENTER_BOOTLOADER_ARG. Replies OK, reboots ~200 ms later; the
+     *  dongle relays nothing until reflashed or replugged. Only on a board
+     *  that declares a bootloader entry (listed in its DONGLE verb mask);
+     *  elsewhere ERR_CMD. */
+    ENTER_BOOTLOADER: 0x0a,
 } as const
+
+/** DONGLE.ENTER_BOOTLOADER's confirmation argument, ASCII "DFU!" — anything
+ *  else is refused (ERR_ARG), so a stray frame cannot reboot the dongle. */
+export const ENTER_BOOTLOADER_ARG = new Uint8Array([0x44, 0x46, 0x55, 0x21])
 
 /** Device role (enum remappr_role, firmware include/remappr/role.h) — reported as
  *  byte 0 of GET_PERSONALITY_MAP. A dongle self-identifies as DONGLE so the host

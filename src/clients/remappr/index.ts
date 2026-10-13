@@ -36,6 +36,7 @@ export {
     establishNodeSession,
     unpairRadio,
     clearAllBonds,
+    enterDongleBootloader,
     type NodeRecord,
 } from './nodes'
 export {
