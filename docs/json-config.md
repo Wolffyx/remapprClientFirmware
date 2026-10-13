@@ -218,7 +218,14 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
 
 - `node.personality` picks the node role: `keyboard` and `mouse` are written
   to the blob (TBL_PERSONALITY); a mouse node carries pointer settings. A
-  dongle is configured by its own device document instead (below).
+  dongle or a standalone mouse is configured by its own device document
+  instead (below).
+- `node.mouse` is the pointer block (TBL_MOUSE): `cpi`, `autoLayerTimeoutMs`,
+  `accel` ([speedIn, multX100] points), and from table version 2 `invertX`,
+  `invertY`, `invertWheel`, `invertHwheel`, `swapXY`, `scrollDivisor` (1..16)
+  and `buttonMap` (8 entries, 0..7 or `null` to drop a button). The compiler
+  writes version 1 unless a version-2 field differs from the default, so older
+  firmware still reads it. A keyboard's key-driven pointer uses only the curve.
 - `node.radio` holds the node's own 2.4 GHz link settings and is written to
   the blob (TBL_RADIO, id 26). Every field is optional; one left out keeps the
   firmware default, and an empty section writes no table. On a split board the
@@ -256,7 +263,8 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
 
 A device that is not a keyboard has no keys or layers, so it is configured by a
 separate, smaller document, `kind: "remappr.device"` (`src/config/device.ts`).
-Today it covers the 2.4 GHz dongle; the mouse joins it later.
+It covers the 2.4 GHz dongle and the standalone mouse. Each personality takes
+only its own sections; another device's section is refused.
 
 ```jsonc
 {
@@ -285,6 +293,33 @@ Today it covers the 2.4 GHz dongle; the mouse joins it later.
   blob made for another device and `MISSING` for one that names none.
 - A live NKRO switch (DONGLE `SET_NKRO`) made after a config is saved stands
   until the next config that sets `nkro`.
+
+A mouse document carries the pointer block (the same fields as `node.mouse`
+above) and the radio block (as `node.radio`):
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "kind": "remappr.device",
+  "meta": { "name": "Travel mouse" },
+  "personality": "mouse",
+  "mouse": {
+    "cpi": 1600,                // within the board's range (GET_MOTION_CONFIG)
+    "accel": [[0, 100], [8, 150], [16, 200]],
+    "invertWheel": true,
+    "scrollDivisor": 2,
+    "buttonMap": [1, 0, 2, 3, 4, 5, 6, null]  // swap left/right, drop button 8
+  },
+  "radio": { "keepaliveMs": 60 }
+}
+```
+
+- `buildRemapprDeviceBlob` writes TBL_PERSONALITY (mouse = 2), TBL_MOUSE and
+  TBL_RADIO; `decodeRemapprDeviceBlob` returns `personality`, `mouse` and
+  `radio`. Push it to the mouse over USB, or through the dongle relay.
+- The mouse's DPI range is the board's; the device refuses a `cpi` outside it.
+- The MOUSE verbs (`SET_DPI`, `SET_ACCEL_PROFILE`, `SET_SCROLL_MODE`) are live
+  tweaks that stand until a different config becomes active.
 
 ## Reserved / planned sections
 

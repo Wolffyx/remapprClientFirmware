@@ -86,6 +86,7 @@ import {
     type BehaviorRecord,
 } from './blobWriter'
 import { readRadio } from './radio'
+import { readMouseTable } from './mouse'
 
 const HID_PAGE_KEYBOARD = 7
 const HID_PAGE_CONSUMER = 12
@@ -1072,40 +1073,25 @@ function readRgb(
     return Object.keys(out).length ? out : undefined
 }
 
-// TBL_MOUSE (id 8, §4b): u16 cpi, u16 auto_layer_timeout_ms, u8 accel_point_count,
-// u8 flags, then N × { u16 speed_in, u16 mult_x100 }. Bounds-checked so a foreign
-// or truncated blob can't throw; returns undefined when the table carries no
-// pointer settings. The inverse of blobWriter.mouseTable / index.ts node.mouse.
+// TBL_MOUSE (id 8, §4b; version 2 adds inverts / swap / scroll divisor / button
+// map): the shared reader in compilers/remappr/mouse.ts. Bounds-checked so a
+// foreign or truncated blob can't throw; returns undefined when the table
+// carries no pointer settings.
 function readMouse(
     bytes: Uint8Array,
     t: TableFrame,
     diag: DiagnosticBag,
 ): ConfigMouse | undefined {
-    if (t.end - t.start < 6) {
-        diag.error('mouse table header truncated')
+    if (t.version < 1 || t.version > 2) {
+        diag.error(`mouse table version ${t.version} not supported`)
         return undefined
     }
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
-    const cpi = r.u16()
-    const autoLayerTimeoutMs = r.u16()
-    const count = r.u8()
-    r.u8() // flags (reserved)
-    if (t.start + 6 + count * 4 > t.end) {
-        diag.error('mouse accel curve truncated')
+    const m = readMouseTable(bytes, t.start, t.end, t.version)
+    if (typeof m === 'string') {
+        diag.error(m)
         return undefined
     }
-    const accel: Array<[number, number]> = []
-    for (let i = 0; i < count; i++) {
-        const speedIn = r.u16()
-        const multX100 = r.u16()
-        accel.push([speedIn, multX100])
-    }
-    const out: ConfigMouse = {}
-    if (cpi) out.cpi = cpi
-    if (autoLayerTimeoutMs) out.autoLayerTimeoutMs = autoLayerTimeoutMs
-    if (accel.length) out.accel = accel
-    return Object.keys(out).length ? out : undefined
+    return Object.keys(m).length ? m : undefined
 }
 
 // pattern-check: skip pure wire-decode fn mirroring the TBL_PERSONALITY layout

@@ -1,12 +1,14 @@
 // pattern-check: skip pure encode/decode functions over the existing BlobBuilder
 //
 // Device config document (config/device.ts) <-> RMBC blob. A device blob holds
-// TBL_PERSONALITY (which device it is for) and that device's own table; no
+// TBL_PERSONALITY (which device it is for) and that device's own tables; no
 // keymap tables. The firmware refuses a blob whose personality is not its own,
-// so the personality is always emitted. Today: the dongle (TBL_DONGLE, id 25).
-// Byte layout mirrors firmware include/remappr/config_blob.h and
-// lib/config_blob/decode_dongle.c.
+// so the personality is always emitted. The dongle reads TBL_DONGLE (id 25);
+// the mouse reads TBL_MOUSE (id 8) and TBL_RADIO (id 26). Byte layout mirrors
+// firmware include/remappr/config_blob.h, lib/config_blob/decode_dongle.c and
+// include/remappr/radio_settings.h.
 import type { ConfigDevice, DongleSettings } from '../../device'
+import type { ConfigMouse, ConfigRadioSettings } from '../../types'
 import {
     BLOB_READER_VERSION,
     BlobBuilder,
@@ -14,6 +16,7 @@ import {
     DONGLE_TBL_LEN,
     DongleSet,
     Personality,
+    RADIO_TBL_LEN,
     TableId,
 } from './blobWriter'
 import {
@@ -21,7 +24,12 @@ import {
     DecodeCode,
     type DecodeCodeValue,
     readBlobFrames,
+    type TableFrame,
 } from './decode'
+import { mouseRecord, readMouseTable } from './mouse'
+import { radioRecord, readRadio } from './radio'
+
+type DevicePersonality = ConfigDevice['personality']
 
 function dongleSetBits(d: DongleSettings): number {
     const fields: [unknown, number][] = [
@@ -33,6 +41,18 @@ function dongleSetBits(d: DongleSettings): number {
         [d.hidSubmitTimeoutMs, DongleSet.hidSubmit],
     ]
     return fields.reduce((set, [v, bit]) => (v === undefined ? set : set | bit), 0)
+}
+
+function addDongle(builder: BlobBuilder, d: DongleSettings): void {
+    builder.dongleTable({
+        set: dongleSetBits(d),
+        nkro: d.nkro ?? false,
+        hidSubmitTimeoutMs: d.hidSubmitTimeoutMs ?? 0,
+        pairWindowMs: d.pairWindowMs ?? 0,
+        pairDoneReplayMs: d.pairDoneReplayMs ?? 0,
+        failsafeMs: d.failsafeMs ?? 0,
+        rosterLiveMs: d.rosterLiveMs ?? 0,
+    })
 }
 
 /**
@@ -47,18 +67,11 @@ export function buildRemapprDeviceBlob(
     const builder = new BlobBuilder().personalityTable(
         Personality[config.personality],
     )
-    const d = config.dongle
-    if (d) {
-        builder.dongleTable({
-            set: dongleSetBits(d),
-            nkro: d.nkro ?? false,
-            hidSubmitTimeoutMs: d.hidSubmitTimeoutMs ?? 0,
-            pairWindowMs: d.pairWindowMs ?? 0,
-            pairDoneReplayMs: d.pairDoneReplayMs ?? 0,
-            failsafeMs: d.failsafeMs ?? 0,
-            rosterLiveMs: d.rosterLiveMs ?? 0,
-        })
-    }
+    if (config.dongle) addDongle(builder, config.dongle)
+    const mouse = config.mouse ? mouseRecord(config.mouse) : undefined
+    if (mouse) builder.mouseTable(mouse)
+    const radio = config.radio ? radioRecord(config.radio) : undefined
+    if (radio) builder.radioTable(radio)
     return builder.finalize(
         config.schemaVersion,
         BLOB_READER_VERSION,
@@ -68,8 +81,14 @@ export function buildRemapprDeviceBlob(
 
 export interface DeviceDecodeResult {
     code: DecodeCodeValue
-    /** The decoded settings, present iff `code === OK`. */
+    /** Which device the blob is for, present iff `code === OK`. */
+    personality?: DevicePersonality
+    /** The dongle's settings (a dongle blob). */
     dongle?: DongleSettings
+    /** The mouse's pointer settings (a mouse blob that carries TBL_MOUSE). */
+    mouse?: ConfigMouse
+    /** The mouse's radio settings (a mouse blob that carries TBL_RADIO). */
+    radio?: ConfigRadioSettings
     /** The blob's config_version, present on OK. */
     configVersion?: number
 }
@@ -101,30 +120,78 @@ function readDongle(bytes: Uint8Array, start: number): DongleSettings {
     return out
 }
 
+const PERSONALITY_BY_CODE: Record<number, DevicePersonality> = {
+    [Personality.dongle]: 'dongle',
+    [Personality.mouse]: 'mouse',
+}
+
+type Frames = (id: number) => TableFrame | undefined
+type DeviceTables = Pick<DeviceDecodeResult, 'dongle' | 'mouse' | 'radio'>
+
+function decodeDongleTables(
+    bytes: Uint8Array,
+    table: Frames,
+): DeviceTables | DecodeCodeValue {
+    const dt = table(TableId.Dongle)
+    if (!dt) return { dongle: {} }
+    if (dt.version !== 1) return DecodeCode.TABLE_VER
+    if (dt.end - dt.start < DONGLE_TBL_LEN) return DecodeCode.TABLE_FRAME
+    return { dongle: readDongle(bytes, dt.start) }
+}
+
+function decodeMouseTables(
+    bytes: Uint8Array,
+    table: Frames,
+): DeviceTables | DecodeCodeValue {
+    const out: DeviceTables = {}
+    const mt = table(TableId.Mouse)
+    if (mt) {
+        if (mt.version < 1 || mt.version > 2) return DecodeCode.TABLE_VER
+        const m = readMouseTable(bytes, mt.start, mt.end, mt.version)
+        if (typeof m === 'string') return DecodeCode.TABLE_FRAME
+        out.mouse = m
+    }
+    const rt = table(TableId.Radio)
+    if (rt) {
+        if (rt.version !== 1) return DecodeCode.TABLE_VER
+        if (rt.end - rt.start < RADIO_TBL_LEN) return DecodeCode.TABLE_FRAME
+        out.radio = readRadio(bytes, rt.start)
+    }
+    return out
+}
+
+const TABLES_BY_PERSONALITY: Record<
+    DevicePersonality,
+    (bytes: Uint8Array, table: Frames) => DeviceTables | DecodeCodeValue
+> = {
+    dongle: decodeDongleTables,
+    mouse: decodeMouseTables,
+}
+
 /**
- * RMBC blob -> dongle settings (e.g. read back from a device). Checks the header
- * like the firmware, requires the dongle personality (DecodeCode.DEVICE when the
- * blob is for another device, MISSING when it names none) and a well-framed
- * TBL_DONGLE when present. Ranges are not re-checked here; parse the result
- * with DongleSettingsSchema for that.
+ * RMBC blob -> device settings (e.g. read back from a device). Checks the
+ * header like the firmware, requires a device personality (DecodeCode.DEVICE
+ * for a keyboard or unknown one, MISSING when it names none) and well-framed
+ * tables. Ranges are not re-checked here; parse the result with the schemas
+ * for that.
  */
 export function decodeRemapprDeviceBlob(bytes: Uint8Array): DeviceDecodeResult {
     const parsed = readBlobFrames(bytes)
     if (parsed.code !== DecodeCode.OK) return { code: parsed.code }
-    const table = (id: number) => parsed.frames.find((f) => f.id === id)
+    const table: Frames = (id) => parsed.frames.find((f) => f.id === id)
 
     const pers = table(TableId.Personality)
     if (!pers || pers.end <= pers.start) return { code: DecodeCode.MISSING }
     if (pers.version !== 1) return { code: DecodeCode.TABLE_VER }
-    if (bytes[pers.start] !== Personality.dongle) return { code: DecodeCode.DEVICE }
+    const personality = PERSONALITY_BY_CODE[bytes[pers.start]]
+    if (!personality) return { code: DecodeCode.DEVICE }
 
-    const dt = table(TableId.Dongle)
-    if (dt && dt.version !== 1) return { code: DecodeCode.TABLE_VER }
-    if (dt && dt.end - dt.start < DONGLE_TBL_LEN)
-        return { code: DecodeCode.TABLE_FRAME }
+    const tables = TABLES_BY_PERSONALITY[personality](bytes, table)
+    if (typeof tables === 'number') return { code: tables }
     return {
         code: DecodeCode.OK,
-        dongle: dt ? readDongle(bytes, dt.start) : {},
+        personality,
+        ...tables,
         configVersion: parsed.configVersion,
     }
 }

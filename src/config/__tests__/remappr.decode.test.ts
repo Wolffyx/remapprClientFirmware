@@ -1232,6 +1232,40 @@ describe('node.radio ↔ TBL_RADIO (id 26, device-config plan step 2)', () => {
     })
 })
 
+describe('node.mouse TBL_MOUSE version 2 (device-config plan step 3)', () => {
+    // pattern-check: skip — encode/decode fixtures, no production logic
+    const nodeJson = (node: string): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "M", "target": "zmk" }, ${kb(2)},
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+        "node": ${node}
+    }`
+
+    it('round-trips inverts, swap, divisor and button map byte-stably', () => {
+        roundTrips(
+            nodeJson(
+                '{ "mouse": { "cpi": 1200, "accel": [[0, 100], [8, 150]], "invertX": true, "swapXY": true, "scrollDivisor": 3, "buttonMap": [0, 2, 1, null, 4, 5, 6, 7] } }',
+            ),
+        )
+    })
+
+    it('stays version 1 for v1-only settings', () => {
+        const { blob } = buildRemapprBlob(
+            parseKeymap(nodeJson('{ "mouse": { "cpi": 800, "scrollDivisor": 1 } }')),
+            { configVersion: 1 },
+        )
+        const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength)
+        let off = 20
+        let version = -1
+        while (off + 8 <= blob.length) {
+            const len = dv.getUint32(off + 4, true)
+            if (dv.getUint16(off, true) === TableId.Mouse) version = dv.getUint16(off + 2, true)
+            off += 8 + len
+        }
+        expect(version).toBe(1)
+    })
+})
+
 describe('decodeRemapprBlob TBL_AUTOCORRECT (id 24, §5.2-E)', () => {
     // pattern-check: skip — round-trip test data, no production logic
     const withDict = (entries: string): string => `{
