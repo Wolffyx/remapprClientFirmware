@@ -45,6 +45,7 @@ export const TableId = {
     LinkProfile: 23, // latency/link profile + knob overrides (§8, N6)
     Autocorrect: 24, // on-device autocorrect dictionary (§5.2-E)
     Dongle: 25, // 2.4 GHz dongle settings (device-config plan)
+    Radio: 26, // a node's own 2.4 GHz link settings (device-config plan)
 } as const
 
 /** enum remappr_personality (firmware include/remappr/role.h). */
@@ -79,6 +80,27 @@ export interface DongleTableRecord {
     pairDoneReplayMs: number
     failsafeMs: number
     rosterLiveMs: number
+}
+
+/** TBL_RADIO `set` bits (radio_settings.h REMAPPR_RADIO_SET_*): which fields
+ *  the config sets; a clear bit keeps the node's build default. */
+export const RadioSet = {
+    autoPair: 1 << 0,
+    keepalive: 1 << 1,
+    inputRepeats: 1 << 2,
+    beaconLoss: 1 << 3,
+} as const
+export const RADIO_FLAG_AUTO_PAIR = 0x01
+export const RADIO_TBL_LEN = 8
+
+/** One TBL_RADIO payload. A field is only meaningful when its RadioSet bit is
+ *  in `set`; the builder writes 0 for the others. */
+export interface RadioTableRecord {
+    set: number
+    autoPair: boolean
+    inputRepeats: number
+    keepaliveMs: number
+    beaconLossMs: number
 }
 
 /** TBL_PERSONALITY byte 1 role_flags (config_blob.h REMAPPR_CFG_ROLE_*). */
@@ -955,6 +977,23 @@ export class BlobBuilder {
         this.w.u16(on(DongleSet.failsafe) ? d.failsafeMs : 0)
         this.w.u16(on(DongleSet.rosterLive) ? d.rosterLiveMs : 0)
         this.w.u16(0) // reserved
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_RADIO (id 26), 8 bytes: u16 set, u8 flags (bit0 auto-pair), u8
+     *  input_repeats, u16 keepalive_ms, u16 beacon_loss_ms. The same 8 bytes the
+     *  main MCU forwards to a radio coprocessor. Mirrors the firmware
+     *  include/remappr/radio_settings.h. */
+    radioTable(r: RadioTableRecord): this {
+        const on = (bit: number): boolean => (r.set & bit) !== 0
+        this.tableBegin(TableId.Radio, 1)
+        this.w.u16(r.set)
+        this.w.u8(on(RadioSet.autoPair) && r.autoPair ? RADIO_FLAG_AUTO_PAIR : 0)
+        this.w.u8(on(RadioSet.inputRepeats) ? r.inputRepeats : 0)
+        this.w.u16(on(RadioSet.keepalive) ? r.keepaliveMs : 0)
+        this.w.u16(on(RadioSet.beaconLoss) ? r.beaconLossMs : 0)
         this.tableEnd()
         return this
     }

@@ -52,6 +52,7 @@ export type {
     ConfigClusterNode,
     ConfigLinkProfile,
     ConfigLinkProfileOverride,
+    ConfigRadioSettings,
     DiodeDirection,
     GpioSpec,
     LayerMode,

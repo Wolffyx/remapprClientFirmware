@@ -219,6 +219,26 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
 - `node.personality` picks the node role: `keyboard` and `mouse` are written
   to the blob (TBL_PERSONALITY); a mouse node carries pointer settings. A
   dongle is configured by its own device document instead (below).
+- `node.radio` holds the node's own 2.4 GHz link settings and is written to
+  the blob (TBL_RADIO, id 26). Every field is optional; one left out keeps the
+  firmware default, and an empty section writes no table. On a split board the
+  main MCU forwards them to the radio chip.
+
+  ```jsonc
+  "node": {
+    "radio": {
+      "autoPair": true,       // arm pairing while unbonded (default on)
+      "inputRepeats": 3,      // sends per input change, 1..8 (default 3)
+      "keepaliveMs": 40,      // idle re-send period, 20..1000 (default 40)
+      "beaconLossMs": 600     // no dongle beacon this long = link lost,
+                              // 200..10000 (default 600)
+    }
+  }
+  ```
+
+  Keep `keepaliveMs` below the dongle's `failsafeMs` with room for one lost
+  frame, or the dongle releases a key held without change. The two live on
+  different devices, so the compiler cannot check that for you.
 - `firmware.<target>` namespaces settings so every registered firmware target's
   knobs are reachable. _(consumed per-target in a later phase)_
 - `board` feeds the DT/Kconfig generator; `controller` accepts a known Zephyr
