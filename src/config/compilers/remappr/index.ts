@@ -71,6 +71,7 @@ import {
     type PosholdRecord,
 } from './blobWriter'
 import { encodeAutocorrectDictionary } from './autocorrect'
+import { radioRecord } from './radio'
 import type { CanonicalKeyId } from '../../../catalog/types'
 import type {
     CanonHoldTapDef,
@@ -1477,6 +1478,10 @@ function encodeBlob(
             builder.linkProfileTable(profileId, overrides)
         }
     }
+    // TBL_RADIO (device-config plan, step 2): the node's 2.4 GHz link settings.
+    // A section that sets nothing emits no table, which already means defaults.
+    const radio = nodeCfg?.radio ? radioRecord(nodeCfg.radio) : undefined
+    if (radio) builder.radioTable(radio)
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
     if (leaders.length > 0) builder.leaderTable(leaders)

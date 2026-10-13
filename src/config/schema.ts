@@ -946,6 +946,56 @@ export const LinkProfileSchema = z
             'power tier). Absent ⇒ the balanced default.',
     )
 
+// pattern-check: skip plain zod wire-DTO schema mirroring TBL_RADIO
+// Ranges mirror the firmware (radio_settings.h REMAPPR_RADIO_*), so a config
+// that passes here is never refused by the node.
+export const RadioSettingsSchema = z
+    .object({
+        autoPair: z
+            .boolean()
+            .optional()
+            .describe(
+                'Arm pairing on its own while the node has no dongle bond (default ' +
+                    'on). Off: pairing waits for an explicit request.',
+            ),
+        inputRepeats: z
+            .number()
+            .int()
+            .min(1)
+            .max(8)
+            .optional()
+            .describe(
+                'Sends per input change, keyboard state and media/system keys ' +
+                    'alike (default 3).',
+            ),
+        keepaliveMs: z
+            .number()
+            .int()
+            .min(20)
+            .max(1000)
+            .optional()
+            .describe(
+                'Idle re-send period, ms (default 40). Keep it below the dongle ' +
+                    "failsafe with room for one lost frame, or the dongle releases " +
+                    'a key held without change.',
+            ),
+        beaconLossMs: z
+            .number()
+            .int()
+            .min(200)
+            .max(10000)
+            .optional()
+            .describe(
+                'No dongle beacon for this long means the link is lost, ms ' +
+                    '(default 600).',
+            ),
+    })
+    .describe(
+        "The node's 2.4 GHz link settings (TBL_RADIO). A field left out keeps " +
+            'the firmware default. On a split board the main MCU forwards them to ' +
+            'the radio chip.',
+    )
+
 // pattern-check: skip adding well-known optional fields to an existing zod schema
 export const NodeSchema = z
     .looseObject({
@@ -957,6 +1007,7 @@ export const NodeSchema = z
         forwardMode: z.enum(['resolved', 'physical']).optional(),
         cluster: z.array(ClusterNodeSchema).optional(),
         linkProfile: LinkProfileSchema.optional(),
+        radio: RadioSettingsSchema.optional(),
     })
     .describe(
         'Per-personality node configuration; a dongle has a limited surface, a ' +

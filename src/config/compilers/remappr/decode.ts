@@ -39,6 +39,7 @@ import type {
     ConfigKeymap,
     ConfigLinkProfile,
     ConfigLinkProfileOverride,
+    ConfigRadioSettings,
     ConfigMouse,
     ConfigNode,
     Direction,
@@ -80,9 +81,11 @@ import {
     LINK_PROFILE_TBL_HDR_LEN,
     LINK_PROFILE_OVR_WIRE,
     LinkProfileId,
+    RADIO_TBL_LEN,
     bytesToHex,
     type BehaviorRecord,
 } from './blobWriter'
+import { readRadio } from './radio'
 
 const HID_PAGE_KEYBOARD = 7
 const HID_PAGE_CONSUMER = 12
@@ -881,6 +884,10 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         ? readLinkProfile(bytes, linkProfileT, diag)
         : undefined
 
+    // ── RADIO (optional, id 26, device-config plan) → node.radio ──
+    const radioT = table(TableId.Radio)
+    const radio = radioT ? readRadioTable(bytes, radioT, diag) : undefined
+
     // ── ACTION_BINDING (optional, id 17, §F) → top-level actionBindings[] ──
     const actionT = table(TableId.ActionBinding)
     const actionBindings = actionT ? readActionBindings(bytes, actionT) : []
@@ -902,7 +909,8 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         pers.role ||
         pers.forwardMode ||
         cluster ||
-        linkProfile
+        linkProfile ||
+        radio
             ? {
                   ...(pers.personality ? { personality: pers.personality } : {}),
                   ...(pers.role ? { role: pers.role } : {}),
@@ -910,6 +918,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
                   ...(mouse ? { mouse } : {}),
                   ...(cluster ? { cluster } : {}),
                   ...(linkProfile ? { linkProfile } : {}),
+                  ...(radio ? { radio } : {}),
               }
             : undefined
 
@@ -1220,6 +1229,25 @@ function readLinkProfile(
         overrides.push({ knob, value })
     }
     return overrides.length ? { profile, overrides } : { profile }
+}
+
+// pattern-check: skip frame checks around the shared radio reader
+// TBL_RADIO (id 26): the 8-byte radio settings (compilers/remappr/radio.ts).
+// A wrong version or a short frame is reported, not thrown.
+function readRadioTable(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigRadioSettings | undefined {
+    if (t.version !== 1) {
+        diag.error(`radio table version ${t.version} not supported`)
+        return undefined
+    }
+    if (t.end - t.start < RADIO_TBL_LEN) {
+        diag.error('radio table truncated')
+        return undefined
+    }
+    return readRadio(bytes, t.start)
 }
 
 interface DecodedNames {

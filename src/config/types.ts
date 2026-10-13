@@ -826,6 +826,26 @@ export interface ConfigLinkProfile {
     overrides?: ConfigLinkProfileOverride[]
 }
 
+// pattern-check: skip plain wire-DTO mirroring the TBL_RADIO layout
+/** The node's own 2.4 GHz link settings (TBL_RADIO, firmware
+ *  include/remappr/radio_settings.h). Every field is optional: one left out
+ *  keeps the firmware's build default. On a split board the main MCU forwards
+ *  them to the radio chip. */
+export interface ConfigRadioSettings {
+    /** Arm pairing on its own while the node has no dongle bond (default on).
+     *  Off: pairing waits for an explicit request. */
+    autoPair?: boolean
+    /** Sends per input change, keyboard state and media/system keys alike,
+     *  1..8 (default 3). */
+    inputRepeats?: number
+    /** Idle re-send period, ms, 20..1000 (default 40). Keep it below the
+     *  dongle's failsafe with room for one lost frame. */
+    keepaliveMs?: number
+    /** No dongle beacon for this long means the link is lost, ms, 200..10000
+     *  (default 600). */
+    beaconLossMs?: number
+}
+
 /** One {typo → correction} pair of the on-device dictionary (§5.2-E). */
 export interface CanonAutocorrectEntry {
     typo: string
@@ -858,6 +878,9 @@ export interface ConfigNode {
     /** Node-bus link/latency profile (§8, N6, TBL_LINK_PROFILE) — base profile +
      *  per-knob overrides for the USART baud / §6 election cadence / power tier. */
     linkProfile?: ConfigLinkProfile
+    /** The node's 2.4 GHz link settings (TBL_RADIO): auto-pair, repeats,
+     *  keepalive, beacon loss. */
+    radio?: ConfigRadioSettings
     [k: string]: unknown
 }
 

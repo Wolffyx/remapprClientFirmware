@@ -1135,6 +1135,103 @@ describe('decodeRemapprBlob node linkProfile (§8 N6 TBL_LINK_PROFILE)', () => {
     })
 })
 
+describe('node.radio ↔ TBL_RADIO (id 26, device-config plan step 2)', () => {
+    // pattern-check: skip — encode/decode fixtures, no production logic
+    const nodeJson = (node: string): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "R", "target": "zmk" }, ${kb(2)},
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+        "node": ${node}
+    }`
+    const build = (node: string): Uint8Array => {
+        const { blob, diagnostics } = buildRemapprBlob(parseKeymap(nodeJson(node)), {
+            configVersion: 1,
+        })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        return blob
+    }
+
+    it('writes the same 8 bytes the firmware golden pins', () => {
+        // firmware tests/config_blob/src/test_radio_decode.c test_wire_form_golden
+        const blob = build(
+            '{ "radio": { "autoPair": true, "inputRepeats": 4, "keepaliveMs": 20, "beaconLossMs": 600 } }',
+        )
+        expect(Array.from(tablePayload(blob, TableId.Radio)!)).toEqual([
+            0x0f, 0x00, 0x01, 0x04, 0x14, 0x00, 0x58, 0x02,
+        ])
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node?.radio).toEqual({
+            autoPair: true,
+            inputRepeats: 4,
+            keepaliveMs: 20,
+            beaconLossMs: 600,
+        })
+    })
+
+    it('sets only the named fields', () => {
+        const blob = build('{ "radio": { "keepaliveMs": 30 } }')
+        expect(Array.from(tablePayload(blob, TableId.Radio)!)).toEqual([
+            0x02, 0x00, 0x00, 0x00, 0x1e, 0x00, 0x00, 0x00,
+        ])
+        expect(decodeRemapprBlob(blob).config?.node?.radio).toEqual({ keepaliveMs: 30 })
+    })
+
+    it('keeps auto-pair off as a value, not as unset', () => {
+        const blob = build('{ "radio": { "autoPair": false } }')
+        expect(Array.from(tablePayload(blob, TableId.Radio)!.subarray(0, 3))).toEqual([
+            0x01, 0x00, 0x00,
+        ])
+        expect(decodeRemapprBlob(blob).config?.node?.radio).toEqual({ autoPair: false })
+    })
+
+    it('emits no table for an empty section', () => {
+        const blob = build('{ "radio": {} }')
+        expect(tablePayload(blob, TableId.Radio)).toBeNull()
+        expect(decodeRemapprBlob(blob).config?.node?.radio).toBeUndefined()
+    })
+
+    it('refuses values the firmware would refuse', () => {
+        for (const bad of [
+            '{ "keepaliveMs": 19 }',
+            '{ "keepaliveMs": 1001 }',
+            '{ "inputRepeats": 0 }',
+            '{ "inputRepeats": 9 }',
+            '{ "beaconLossMs": 199 }',
+            '{ "beaconLossMs": 10001 }',
+        ]) {
+            expect(() => parseKeymap(nodeJson(`{ "radio": ${bad} }`)), bad).toThrow()
+        }
+    })
+
+    it('reports a radio table of an unknown version', () => {
+        const blob = build('{ "radio": { "keepaliveMs": 30 } }')
+        const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength)
+        let off = 20
+        while (off + 8 <= blob.length) {
+            const len = dv.getUint32(off + 4, true)
+            if (dv.getUint16(off, true) === TableId.Radio) {
+                dv.setUint16(off + 2, 2, true)
+                break
+            }
+            off += 8 + len
+        }
+        dv.setUint32(16, crc32(blob.subarray(20, 20 + dv.getUint32(12, true))), true)
+        const { code, config, diagnostics } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node?.radio).toBeUndefined()
+        expect(diagnostics.some((d) => d.level === 'error')).toBe(true)
+    })
+
+    it('round-trips byte-stably next to a link profile', () => {
+        roundTrips(
+            nodeJson(
+                '{ "linkProfile": { "profile": "gaming" }, "radio": { "autoPair": false, "beaconLossMs": 900, "inputRepeats": 2 } }',
+            ),
+        )
+    })
+})
+
 describe('decodeRemapprBlob TBL_AUTOCORRECT (id 24, §5.2-E)', () => {
     // pattern-check: skip — round-trip test data, no production logic
     const withDict = (entries: string): string => `{
