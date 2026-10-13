@@ -16,6 +16,7 @@ import {
     DongleVerb,
     Namespace,
     NODE_RECORD_LEN,
+    RELAY_STATS,
     Status,
     type NodeRecord,
 } from './protocol'
@@ -405,7 +406,39 @@ describe('error counters (COMMON.GET_ERROR_COUNTERS)', () => {
             micFail: 70000,
             txChanFail: 12,
             linkResync: 3,
+            relay: null,
         })
+    })
+
+    it('decodes the relay tail in firmware enum order', async () => {
+        const body = counters(0x03, 1, 2, 3)
+        const tail = new Uint8Array(2 * RELAY_STATS.length)
+        const tdv = new DataView(tail.buffer)
+        RELAY_STATS.forEach((_, i) => tdv.setUint16(2 * i, 0x100 + i, true))
+        const rpc = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([...body, ...tail]),
+        }))
+        const ec = await getErrorCounters(rpc)
+        expect(ec.relay?.rxOk).toBe(0x100)
+        expect(ec.relay?.rxAuth).toBe(0x103)
+        expect(ec.relay?.txAcked).toBe(0x10b)
+        expect(ec.relay?.txLinkLost).toBe(0x10f)
+        expect(Object.keys(ec.relay ?? {})).toHaveLength(16)
+    })
+
+    it('ignores a relay tail that is unflagged or cut short', async () => {
+        const tail = new Uint8Array(2 * RELAY_STATS.length).fill(1)
+        const unflagged = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([...counters(0x01, 0, 0, 0), ...tail]),
+        }))
+        expect((await getErrorCounters(unflagged)).relay).toBeNull()
+        const short = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([...counters(0x03, 0, 0, 0), 1, 0]),
+        }))
+        expect((await getErrorCounters(short)).relay).toBeNull()
     })
 
     it('relays with targetNode + retries and reports radio-invalid', async () => {
