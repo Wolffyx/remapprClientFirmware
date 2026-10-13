@@ -906,10 +906,31 @@ export const MouseSchema = z
             )
             .max(255)
             .optional(),
+        invertX: z.boolean().optional(),
+        invertY: z.boolean().optional(),
+        invertWheel: z.boolean().optional(),
+        invertHwheel: z.boolean().optional(),
+        swapXY: z.boolean().optional().describe('Swap X and Y (before the inverts).'),
+        scrollDivisor: z
+            .number()
+            .int()
+            .min(1)
+            .max(16)
+            .optional()
+            .describe('Wheel counts per reported step (default 1).'),
+        buttonMap: z
+            .array(z.number().int().min(0).max(7).nullable())
+            .length(8)
+            .optional()
+            .describe(
+                'Physical button i reports as buttonMap[i] (0..7), or null to ' +
+                    'drop it.',
+            ),
     })
     .describe(
         'Pointer/mouse-node settings (TBL_MOUSE, §4b): sensor cpi, auto-layer ' +
-            'timeout, and an acceleration curve of [speedIn, multX100] points.',
+            'timeout, an acceleration curve of [speedIn, multX100] points, and ' +
+            '(TBL_MOUSE v2) axis inverts / swap, scroll divisor and button map.',
     )
 
 // pattern-check: skip plain zod wire-DTO schema mirroring TBL_CLUSTER

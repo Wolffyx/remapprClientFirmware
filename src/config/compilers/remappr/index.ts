@@ -72,6 +72,7 @@ import {
 } from './blobWriter'
 import { encodeAutocorrectDictionary } from './autocorrect'
 import { radioRecord } from './radio'
+import { mouseRecord } from './mouse'
 import type { CanonicalKeyId } from '../../../catalog/types'
 import type {
     CanonHoldTapDef,
@@ -1352,23 +1353,11 @@ function encodeBlob(
     if (combos.length > 0) builder.comboTable(combos)
     if (encoders.length > 0) builder.encoderTable(encoders)
     // TBL_MOUSE (§4b): pointer settings from the v2 node.mouse block. Emitted
-    // when the node declares any pointer intent (cpi / auto-layer timeout /
-    // accel curve); flags is reserved (0). Old firmware skips the unknown table.
-    const mouseCfg = config.node?.mouse
-    if (
-        mouseCfg &&
-        (mouseCfg.cpi || mouseCfg.autoLayerTimeoutMs || mouseCfg.accel?.length)
-    ) {
-        builder.mouseTable({
-            cpi: mouseCfg.cpi ?? 0,
-            autoLayerTimeoutMs: mouseCfg.autoLayerTimeoutMs ?? 0,
-            flags: 0,
-            accel: (mouseCfg.accel ?? []).map(([speedIn, multX100]) => ({
-                speedIn,
-                multX100,
-            })),
-        })
-    }
+    // when the node declares any pointer intent; version 2 only when it uses an
+    // inverts / swap / scroll divisor / button-map field (compilers/remappr/
+    // mouse.ts). Old firmware skips the unknown table.
+    const mouseRec = config.node?.mouse ? mouseRecord(config.node.mouse) : undefined
+    if (mouseRec) builder.mouseTable(mouseRec)
     // TBL_RGB (§4c): per-key static colors from keyboard.lighting.perKey, emitted
     // as a flat (non-per-layer) RGB888 map over every physical position; unset
     // positions stay black (0,0,0). The firmware LED sink renders it locally.

@@ -480,7 +480,22 @@ export interface MouseTable {
     autoLayerTimeoutMs: number
     flags: number
     accel: Array<{ speedIn: number; multX100: number }>
+    /** Version-2 tail (scroll divisor + button map); absent = a v1 table. */
+    v2?: { scrollDivisor: number; buttonMap: number[] }
 }
+
+/** TBL_MOUSE v2 flag bits (firmware mouse.h REMAPPR_MOUSE_FLAG_*). */
+export const MouseFlag = {
+    invertX: 1 << 0,
+    invertY: 1 << 1,
+    invertWheel: 1 << 2,
+    invertHwheel: 1 << 3,
+    swapXY: 1 << 4,
+} as const
+/** Button-map entry that drops the button. */
+export const MOUSE_BUTTON_OFF = 0xff
+export const MOUSE_TBL_HDR_LEN = 6
+export const MOUSE_TBL_V2_TAIL_LEN = 10
 
 /** One action-binding record (10 bytes): an additive per-position action that
  *  sits alongside the keymap binding. `kind`/`code`/`arg0`/`arg1` are passed
@@ -716,17 +731,24 @@ export class BlobBuilder {
 
     // pattern-check: skip one more table-emit method on the existing Builder
     /** TBL_MOUSE (id 8, §4b): u16 cpi, u16 auto_layer_timeout_ms,
-     *  u8 accel_point_count, u8 flags, then N × { u16 speed_in, u16 mult_x100 }
-     *  — matching firmware decode_mouse.c. */
+     *  u8 accel_point_count, u8 flags, then N × { u16 speed_in, u16 mult_x100 };
+     *  version 2 appends u8 scroll_divisor, u8 reserved, u8 button_map[8] —
+     *  matching firmware decode_mouse.c. Flags are written only in version 2
+     *  (version 1 reserves the byte). */
     mouseTable(m: MouseTable): this {
-        this.tableBegin(TableId.Mouse, 1)
+        this.tableBegin(TableId.Mouse, m.v2 ? 2 : 1)
         this.w.u16(m.cpi)
         this.w.u16(m.autoLayerTimeoutMs)
         this.w.u8(m.accel.length)
-        this.w.u8(m.flags)
+        this.w.u8(m.v2 ? m.flags : 0)
         for (const p of m.accel) {
             this.w.u16(p.speedIn)
             this.w.u16(p.multX100)
+        }
+        if (m.v2) {
+            this.w.u8(m.v2.scrollDivisor)
+            this.w.u8(0) // reserved
+            for (const to of m.v2.buttonMap) this.w.u8(to)
         }
         this.tableEnd()
         return this

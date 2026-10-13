@@ -780,6 +780,22 @@ export interface ConfigMouse {
     /** Acceleration curve: each point is [speedIn, multX100], the multiplier
      *  scaled ×100 (so 100 = 1.0×). */
     accel?: Array<[number, number]>
+    /* The fields below need TBL_MOUSE version 2 (a mouse image reads them; a
+     * keyboard's key-driven pointer ignores them). */
+    /** Flip the reported X / Y / wheel / horizontal wheel. */
+    invertX?: boolean
+    invertY?: boolean
+    invertWheel?: boolean
+    invertHwheel?: boolean
+    /** Swap X and Y (before the inverts). */
+    swapXY?: boolean
+    /** Wheel counts per reported step, 1..16 (default 1). */
+    scrollDivisor?: number
+    /** Eight entries: physical button i reports as buttonMap[i] (0..7), or
+     *  null to drop it. Omit to keep the buttons as wired. */
+    buttonMap?: Array<number | null>
+    /** Open shape, like the schema (MouseSchema is a loose object). */
+    [k: string]: unknown
 }
 
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_CLUSTER layout

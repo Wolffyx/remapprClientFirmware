@@ -4,8 +4,9 @@
 // device that is not a keyboard. A keyboard is configured by the keymap document
 // (`remappr.keymap`, schema.ts); a dongle has no keys or layers, so it gets this
 // small document instead. It compiles to an RMBC blob holding TBL_PERSONALITY
-// plus the device's own table (compilers/remappr/device.ts). Today it covers the
-// dongle; the mouse joins it later (firmware docs/device-config-plan.md).
+// plus the device's own tables (compilers/remappr/device.ts): the dongle's
+// TBL_DONGLE, or the mouse's TBL_MOUSE and TBL_RADIO (firmware
+// docs/device-config-plan.md).
 //
 //   {
 //     "schemaVersion": 1,
@@ -15,10 +16,21 @@
 //     "dongle": { "nkro": true, "pairWindowMs": 60000, "failsafeMs": 150 }
 //   }
 //
-// Every dongle field is optional: one left out keeps the firmware's default.
-// The ranges mirror the firmware decoder (config_blob.h REMAPPR_DONGLE_*), so a
-// config that passes here is never refused by the dongle.
+//   {
+//     "schemaVersion": 1,
+//     "kind": "remappr.device",
+//     "meta": { "name": "Travel mouse" },
+//     "personality": "mouse",
+//     "mouse": { "cpi": 1600, "invertWheel": true, "buttonMap": [1,0,2,3,4,5,6,7] },
+//     "radio": { "keepaliveMs": 60 }
+//   }
+//
+// Every field is optional: one left out keeps the firmware's default. The
+// ranges mirror the firmware decoders (config_blob.h, radio_settings.h), so a
+// config that passes here is never refused for a range. A mouse's DPI must also
+// sit inside its board's range, which only the device knows (GET_MOTION_CONFIG).
 import { z } from 'zod'
+import { MouseSchema, RadioSettingsSchema } from './schema'
 
 export const DongleSettingsSchema = z
     .object({
@@ -103,9 +115,27 @@ export const DeviceConfigSchema = z
             description: z.string().optional(),
         }),
         personality: z
-            .enum(['dongle'])
+            .enum(['dongle', 'mouse'])
             .describe('Which device this config is for; the device refuses any other.'),
         dongle: DongleSettingsSchema.optional(),
+        mouse: MouseSchema.optional(),
+        radio: RadioSettingsSchema.optional(),
+    })
+    .superRefine((d, ctx) => {
+        // A section another device reads would be silently ignored: refuse it.
+        const own: Record<string, string[]> = {
+            dongle: ['dongle'],
+            mouse: ['mouse', 'radio'],
+        }
+        for (const key of ['dongle', 'mouse', 'radio'] as const) {
+            if (d[key] !== undefined && !own[d.personality].includes(key)) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: [key],
+                    message: `a ${d.personality} config has no "${key}" section`,
+                })
+            }
+        }
     })
     .describe('Config for a Remappr device that is not a keyboard.')
 
