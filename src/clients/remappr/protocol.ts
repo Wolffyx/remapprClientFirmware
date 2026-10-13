@@ -881,6 +881,30 @@ export function parsePipeTable(d: Uint8Array): PipeTable {
     }
 }
 
+/** The relay outcomes a node counts (GET_ERROR_COUNTERS relay tail): what
+ *  became of each control frame the dongle relayed to it, and of each reply.
+ *  Wire order = the firmware's include/remappr/relay_stats.h enum. */
+export const RELAY_STATS = [
+    'rxOk', // opened, handed to the device
+    'rxNotLinked', // arrived with no live session
+    'rxReplay', // counter equals the last one (duplicate)
+    'rxAuth', // failed its MIC
+    'rxBad', // malformed
+    'rxAbuse', // MIC failures hit the §17 limit: session torn down
+    'rxEvtFull', // radio event queue full: a received frame dropped
+    'rxQueueFull', // request queue full
+    'txQueueFull', // reply never reached the radio thread
+    'txStageFail', // link refused to stage a reply frame
+    'txStaged', // reply frame sealed and staged
+    'txAcked', // staged frame HW-ACKed by the dongle
+    'txRetry', // unACKed frame sent again
+    'txGaveUp', // retries spent: reply dropped
+    'txSuperseded', // unACKed reply dropped by a newer request
+    'txLinkLost', // unACKed reply dropped on leaving LINKED
+] as const
+
+export type RelayStats = Record<(typeof RELAY_STATS)[number], number>
+
 /** COMMON.GET_ERROR_COUNTERS reply (§20): free-running error counters since
  *  boot. `radioValid` is false when the radio counters are unreadable on the
  *  build (no radio, or a split tier where they live on the coprocessor) —
@@ -893,9 +917,24 @@ export interface ErrorCounters {
     txChanFail: number
     /** LINKED sessions torn back to SEARCHING. */
     linkResync: number
+    /** Relay outcomes, or null when the node does not send them (older
+     *  firmware, a split tier, or a sealed reply with no room). */
+    relay: RelayStats | null
 }
 
 const ERR_COUNTERS_LEN = 10
+const ERR_F_RELAY_VALID = 0x02
+
+function parseRelayStats(d: Uint8Array): RelayStats | null {
+    if ((d[1] & ERR_F_RELAY_VALID) === 0) return null
+    if (d.length < ERR_COUNTERS_LEN + 2 * RELAY_STATS.length) return null
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const stats = {} as RelayStats
+    RELAY_STATS.forEach((name, i) => {
+        stats[name] = dv.getUint16(ERR_COUNTERS_LEN + 2 * i, true)
+    })
+    return stats
+}
 
 export function parseErrorCounters(d: Uint8Array): ErrorCounters {
     if (d.length < ERR_COUNTERS_LEN)
@@ -907,6 +946,7 @@ export function parseErrorCounters(d: Uint8Array): ErrorCounters {
         micFail: dv.getUint32(2, true),
         txChanFail: dv.getUint16(6, true),
         linkResync: dv.getUint16(8, true),
+        relay: parseRelayStats(d),
     }
 }
 

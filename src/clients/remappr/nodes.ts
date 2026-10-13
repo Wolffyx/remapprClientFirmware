@@ -27,6 +27,7 @@ import {
     type LinkStats,
     type NodeRecord,
     type PipeTable,
+    type RelayStats,
 } from './protocol'
 import {
     loadOrCreateIdentity,
@@ -35,7 +36,7 @@ import {
 } from './auth'
 import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
 
-export type { ErrorCounters, LinkStats, NodeRecord, PipeTable }
+export type { ErrorCounters, LinkStats, NodeRecord, PipeTable, RelayStats }
 
 /** Enumerate the nodes bonded to a dongle (DONGLE.LIST_NODES). Returns [] for a
  *  directly-attached (non-dongle) device or an empty roster. */
