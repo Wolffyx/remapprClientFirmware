@@ -30,31 +30,36 @@ const READ_CHUNK_WANT_RELAY = 48
  * Read the full active blob over the plaintext READ_CONFIG_CHUNK loop. With
  * `targetNode` unset (or 0) it uses the direct legacy frame; with a node short-id
  * the verb rides the universal COMMON relay (legacy verbs keep their number under
- * COMMON, §6.2) so the same loop reads a behind-dongle node.
+ * COMMON, §6.2) so the same loop reads a behind-dongle node. `universal` sends
+ * universal frames to the device itself as well (a dongle drops legacy ones);
+ * chunks then stay as small as the relay's so every reply is one frame.
  */
+// pattern-check: skip — one optional flag on the existing read loop
 export async function readConfigBlob(
     rpc: RemapprRpc,
     hasActive: boolean,
-    opts: { targetNode?: number } = {},
+    opts: { targetNode?: number; universal?: boolean } = {},
 ): Promise<Uint8Array> {
     if (!hasActive) return new Uint8Array()
     const target = opts.targetNode ?? 0
+    const legacy = target === 0 && !opts.universal
     const chunks: Uint8Array[] = []
     let offset = 0
     let total = 0
-    const want = target === 0 ? READ_CHUNK_WANT_DIRECT : READ_CHUNK_WANT_RELAY
+    const want = legacy ? READ_CHUNK_WANT_DIRECT : READ_CHUNK_WANT_RELAY
     let guard = 0
     while (guard++ < 8192) {
         const arg = buildReadChunkArg(offset, want)
-        const r =
-            target === 0
-                ? await rpc.callPlain(Cmd.READ_CONFIG_CHUNK, arg)
-                : await rpc.callUniversalPlain(
-                      Namespace.COMMON,
-                      Cmd.READ_CONFIG_CHUNK,
-                      arg,
-                      { targetNode: target, retries: RELAY_READ_RETRIES },
-                  )
+        const r = legacy
+            ? await rpc.callPlain(Cmd.READ_CONFIG_CHUNK, arg)
+            : await rpc.callUniversalPlain(
+                  Namespace.COMMON,
+                  Cmd.READ_CONFIG_CHUNK,
+                  arg,
+                  target === 0
+                      ? undefined
+                      : { targetNode: target, retries: RELAY_READ_RETRIES },
+              )
         if (r.status !== Status.OK || r.data.length === 0) break // EOF
         chunks.push(r.data)
         offset += r.data.length
@@ -84,6 +89,21 @@ export function defaultConfig(keyCount: number): ConfigKeymap {
                 })),
             },
         ],
+    }
+}
+
+// pattern-check: skip — config literal helper beside defaultConfig
+/** An empty keymap for a device with no keys (dongle, mouse): its config is a
+ *  device document (`service.device`), and the renderer lands on the node roster
+ *  or the mouse page rather than the editor. */
+export function makeKeylessConfig(name: string): ConfigKeymap {
+    const id = name.toLowerCase().replace(/\s+/g, '-')
+    return {
+        schemaVersion: 1,
+        kind: 'remappr.keymap',
+        meta: { name, target: null },
+        keyboard: { id, name, keys: [] },
+        layers: [],
     }
 }
 

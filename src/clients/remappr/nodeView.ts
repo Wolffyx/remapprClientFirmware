@@ -7,8 +7,11 @@
 import type { NodesApi, NodeView, KeyboardService } from '../../service'
 import type { DeviceInfo } from '../../types'
 
-import { loadDeviceConfig } from './configRead'
-import { discover } from './discovery'
+import { Personality } from '../../config/compilers/remappr/blobWriter'
+import { loadDeviceConfig, makeKeylessConfig } from './configRead'
+import { buildDeviceConfigApi } from './deviceConfig'
+import { discover, type DiscoveryResult } from './discovery'
+import { buildMouseMotionApi } from './mouse'
 import {
     clearAllBonds,
     forgetNode,
@@ -46,14 +49,49 @@ function toNodeView(r: NodeRecord): NodeView {
 
 /** Build the client DeviceInfo for a behind-dongle node. The node has no
  *  transport of its own, so vid/pid are 0 (it's reached through the dongle). */
-function nodeDeviceInfo(shortId: number, raw: RawDeviceInfo): DeviceInfo {
+function nodeDeviceInfo(
+    shortId: number,
+    raw: RawDeviceInfo,
+    what = 'Node',
+): DeviceInfo {
     return {
-        name: `Remappr Node ${hexId(shortId)}`,
+        name: `Remappr ${what} ${hexId(shortId)}`,
         firmware: 'remappr',
         firmwareVersion: `${raw.fwMajor}.${raw.fwMinor}.${raw.fwPatch}`,
         vid: 0,
         pid: 0,
     }
+}
+
+// pattern-check: skip — one more read-only view variant beside open()'s keyboard one
+/** A read-only view of a mouse behind the dongle: its settings and motion state
+ *  read through the relay; saving and live changes need the mouse on USB. */
+function openMouseView(
+    rpc: RemapprRpc,
+    id: number,
+    discovery: DiscoveryResult,
+): KeyboardService {
+    const deviceInfo = nodeDeviceInfo(id, discovery.deviceInfo, 'Mouse')
+    return new RemapprKeyboardService({
+        rpc,
+        deviceInfo,
+        config: makeKeylessConfig(deviceInfo.name),
+        configVersion: discovery.deviceInfo.configVersion,
+        layouts: [],
+        activeLayoutId: 0,
+        maxLayers: 0,
+        limits: discovery.limits,
+        readOnly: true,
+        sharesTransport: true,
+        kind: 'mouse',
+        device: buildDeviceConfigApi(rpc, {
+            personality: 'mouse',
+            targetNode: id,
+            name: deviceInfo.name,
+            writable: false,
+        }),
+        motion: buildMouseMotionApi(rpc, { targetNode: id, writable: false }),
+    })
 }
 
 /**
@@ -72,6 +110,9 @@ export function buildNodesApi(rpc: RemapprRpc): NodesApi {
             // Relayed discovery + config read, all addressed by the node short-id
             // (§6.2 universal COMMON relay). HW-proven read path.
             const discovery = await discover(rpc, { targetNode: id })
+            if (discovery.personality?.personality === Personality.mouse) {
+                return openMouseView(rpc, id, discovery)
+            }
             const loaded = await loadDeviceConfig(rpc, discovery, {
                 targetNode: id,
             })

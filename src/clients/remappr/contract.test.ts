@@ -128,10 +128,10 @@ const limitsBytes = (): Uint8Array =>
         ...le16(0x003f), // feature_bitmask lo (§7.4.1 Phase-2 features)
         ...le16(0x0000), // feature_bitmask hi
     ])
-const personalityBytes = (): Uint8Array =>
+const personalityBytes = (personality = 1): Uint8Array =>
     Uint8Array.from([
         0, // role NODE
-        1, // personality KEYBOARD_NODE
+        personality, // KEYBOARD_NODE by default
         2, // proto_major
         1, // ns_count
         Namespace.COMMON,
@@ -171,7 +171,9 @@ interface FakeRemappr {
     getCommitted: () => Uint8Array | null
 }
 
-function makeFakeRemappr(opts: { protoMax?: number } = {}): FakeRemappr {
+function makeFakeRemappr(
+    opts: { protoMax?: number; personality?: number } = {},
+): FakeRemappr {
     const protoMax = opts.protoMax ?? 1
     let controller!: ReadableStreamDefaultController<Uint8Array>
     const readable = new ReadableStream<Uint8Array>({
@@ -241,7 +243,8 @@ function makeFakeRemappr(opts: { protoMax?: number } = {}): FakeRemappr {
             const seq = frame[1 + UCH_LEN + 1]
             let data: Uint8Array | null = null
             if (uch.namespace === Namespace.COMMON) {
-                if (verb === CommonVerb.GET_PERSONALITY_MAP) data = personalityBytes()
+                if (verb === CommonVerb.GET_PERSONALITY_MAP)
+                    data = personalityBytes(opts.personality)
                 else if (verb === CommonVerb.GET_LIMITS) data = limitsBytes()
             } else if (uch.namespace === Namespace.KEYBOARD) {
                 if (verb === KeyboardVerb.GET_KEYMAP_BOUNDS) {
@@ -560,6 +563,23 @@ describe('RemapprAdapter — dongle connect (lands on the node roster)', () => {
         expect(svc.capabilities.readOnly).toBe(true)
         // A dongle is never handshaken (§7.2): the §19 BEGIN/FINISH never ran.
         expect(dongle.sawAuth()).toBe(false)
+        // No GET_LIMITS (older dongle firmware): no config store, no settings.
+        expect(svc.device).toBeUndefined()
+        await svc.disconnect()
+    })
+})
+
+describe('RemapprAdapter — mouse connect (lands on the mouse page)', () => {
+    it('detects a mouse by personality and exposes its settings', async () => {
+        const fake = makeFakeRemappr({ protoMax: 2, personality: 2 })
+        const svc = await connectFake(fake)
+        expect(svc.kind).toBe('mouse')
+        expect(svc.deviceInfo.name).toBe('Remappr Mouse')
+        expect(svc.capabilities.readOnly).toBe(true)
+        expect(svc.nodes).toBeUndefined()
+        expect(svc.device?.personality).toBe('mouse')
+        expect(svc.device?.writable).toBe(true)
+        expect(svc.motion?.writable).toBe(true)
         await svc.disconnect()
     })
 })

@@ -52,6 +52,7 @@ export type {
     ConfigClusterNode,
     ConfigLinkProfile,
     ConfigLinkProfileOverride,
+    ConfigMouse,
     ConfigRadioSettings,
     DiodeDirection,
     GpioSpec,
@@ -159,6 +160,19 @@ export {
     withLinkOverride,
     linkProfileError,
 } from './editorFields'
+export {
+    type DeviceNumberField,
+    type DongleNumberKey,
+    type RadioNumberKey,
+    DONGLE_FIELDS,
+    RADIO_FIELDS,
+    RADIO_AUTO_PAIR_DEFAULT,
+    MOUSE_SCROLL_DIVISOR_FIELD,
+    MOUSE_ACCEL_POINTS_MAX,
+    MOUSE_BUTTON_NAMES,
+    MOUSE_BUTTON_MAP_IDENTITY,
+    compactSection,
+} from './deviceFields'
 export {
     type DerivedMatrix,
     deriveMatrix,

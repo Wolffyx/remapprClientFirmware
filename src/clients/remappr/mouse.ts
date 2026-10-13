@@ -18,6 +18,7 @@ import {
     type MotionConfig,
 } from './protocol'
 import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
+import type { MouseMotionApi } from '../../service'
 
 export type { MotionConfig }
 
@@ -87,4 +88,38 @@ export async function setScrollMode(
     )
     if (reply.status !== Status.OK)
         throw new Error(`SET_SCROLL_MODE → ${statusName(reply.status)}`)
+}
+
+// pattern-check: skip — facade object over the wrappers above, like buildNodesApi
+/** The `service.motion` facade for a mouse. `writable` false (a node reached
+ *  through the dongle) keeps the reads and rejects every SET_*. */
+export function buildMouseMotionApi(
+    rpc: RemapprRpc,
+    opts: { targetNode?: number; writable: boolean },
+): MouseMotionApi {
+    const node = opts.targetNode ?? 0
+    const guard = (): void => {
+        if (!opts.writable) {
+            throw new Error(
+                'Read-only node view: live mouse changes through the dongle are ' +
+                    'not supported yet. Connect the mouse over USB.',
+            )
+        }
+    }
+    return {
+        writable: opts.writable,
+        getConfig: () => getMotionConfig(rpc, node),
+        async setDpi(dpi) {
+            guard()
+            await setDpi(rpc, dpi, node)
+        },
+        async setAccelProfile(profile) {
+            guard()
+            await setAccelProfile(rpc, profile, node)
+        },
+        async setScrollMode(mode) {
+            guard()
+            await setScrollMode(rpc, mode, node)
+        },
+    }
 }

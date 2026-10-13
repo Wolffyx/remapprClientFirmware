@@ -320,6 +320,24 @@ above) and the radio block (as `node.radio`):
 - The mouse's DPI range is the board's; the device refuses a `cpi` outside it.
 - The MOUSE verbs (`SET_DPI`, `SET_ACCEL_PROFILE`, `SET_SCROLL_MODE`) are live
   tweaks that stand until a different config becomes active.
+- The mouse firmware holds at most 8 curve points (`MOUSE_ACCEL_POINTS_MAX`)
+  and refuses a config with more at VALIDATE.
+
+From a connected service (the app's dongle and mouse pages):
+
+- `service.device` reads the active document back (`read()`; a device with no
+  stored config reads as a document with no settings) and pushes a new one
+  (`write(config)`: validated, then WRITE / VALIDATE / COMMIT as universal
+  frames at the next config_version). Present on a dongle or mouse with a
+  config store.
+- `service.motion` holds the live MOUSE verbs and `getConfig()` (DPI range and
+  the values in force). Present on a mouse.
+- A mouse connected over USB comes up as `kind: 'mouse'`. A mouse opened from
+  the dongle's roster is a read-only view: both facades read through the relay
+  and every write rejects.
+- `DONGLE_FIELDS`, `RADIO_FIELDS`, `MOUSE_SCROLL_DIVISOR_FIELD` and
+  `MOUSE_BUTTON_NAMES` (`src/config/deviceFields.ts`) give editors each
+  setting's range, unit and firmware default.
 
 ## Reserved / planned sections
 
