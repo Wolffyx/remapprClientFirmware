@@ -10,6 +10,7 @@ import { buildRemapprBlob } from '../../config/compilers/remappr'
 import { buildNodesApi } from './nodeView'
 import {
     Cmd,
+    CommonVerb,
     DongleVerb,
     Namespace,
     NODE_RECORD_LEN,
@@ -95,7 +96,9 @@ interface FakeRpc {
     closeCalls: number
 }
 
-function makeRpc(opts: { roster?: Uint8Array } = {}): FakeRpc {
+function makeRpc(
+    opts: { roster?: Uint8Array; personality?: number } = {},
+): FakeRpc {
     const state: FakeRpc = {
         targets: [],
         closed: false,
@@ -123,6 +126,14 @@ function makeRpc(opts: { roster?: Uint8Array } = {}): FakeRpc {
             state.targets.push(target)
             if (namespace === Namespace.COMMON && verb === Cmd.GET_DEVICE_INFO) {
                 return ok(deviceInfoBytes())
+            }
+            if (
+                namespace === Namespace.COMMON &&
+                verb === CommonVerb.GET_PERSONALITY_MAP &&
+                opts.personality !== undefined
+            ) {
+                // role NODE, personality, proto 2, no namespaces, hw caps 0.
+                return ok(new Uint8Array([0, opts.personality, 2, 0, 0, 0, 0, 0]))
             }
             if (namespace === Namespace.COMMON && verb === Cmd.READ_CONFIG_CHUNK) {
                 const dv = new DataView(arg.buffer, arg.byteOffset, arg.byteLength)
@@ -245,5 +256,23 @@ describe('buildNodesApi.open (read-only node view)', () => {
         await svc.disconnect()
         expect(fake.closeCalls).toBe(0) // never tears down the shared transport
         expect(fake.closed).toBe(false)
+    })
+})
+
+describe('buildNodesApi.open (mouse node)', () => {
+    it('opens a mouse as a read-only mouse view, not a keymap', async () => {
+        const fake = makeRpc({ roster: ROSTER, personality: 2 })
+        const svc = await buildNodesApi(fake.rpc).open(0x0007)
+
+        expect(svc.kind).toBe('mouse')
+        expect(svc.deviceInfo.name).toBe('Remappr Mouse 0x0007')
+        expect(svc.capabilities.readOnly).toBe(true)
+        expect(svc.device?.personality).toBe('mouse')
+        expect(svc.device?.writable).toBe(false)
+        expect(svc.motion?.writable).toBe(false)
+        // Discovery only: no keymap read, no geometry fetch.
+        expect(fake.targets.every((t) => t === 0x0007)).toBe(true)
+        await svc.disconnect()
+        expect(fake.closeCalls).toBe(0)
     })
 })

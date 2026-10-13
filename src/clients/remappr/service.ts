@@ -9,10 +9,12 @@ import type { KeyCatalog } from '../../catalog/types'
 import type {
     Capabilities,
     ClusterApi,
+    DeviceConfigApi,
     DynamicEntriesApi,
     KeyboardService,
     KeyTestApi,
     MacroApi,
+    MouseMotionApi,
     NodesApi,
     UnicodeApi,
 } from '../../service'
@@ -107,8 +109,14 @@ export interface RemapprServiceDeps {
      *  False/omitted for a service that owns its transport (a direct keyboard or
      *  the dongle itself), which closes it on disconnect. */
     sharesTransport?: boolean
-    /** Device class surfaced to the renderer (`'dongle'` lands on the roster). */
-    kind?: 'keyboard' | 'dongle'
+    /** Device class surfaced to the renderer (`'dongle'` lands on the roster,
+     *  `'mouse'` on the mouse page). */
+    kind?: 'keyboard' | 'dongle' | 'mouse'
+    /** Device-document config facade — set on a dongle or mouse with a config
+     *  store; omitted on a keyboard (its config is the keymap). */
+    device?: DeviceConfigApi
+    /** Live mouse controls — set on a mouse. */
+    motion?: MouseMotionApi
     /** Behind-dongle roster facade — set on the dongle's own service, omitted on a
      *  node view (no nesting). */
     nodes?: NodesApi
@@ -134,8 +142,13 @@ export class RemapprKeyboardService
 {
     public readonly deviceInfo: DeviceInfo
     public readonly capabilities: Capabilities
-    /** `'dongle'` for the dongle's own service; `'keyboard'` (default) otherwise. */
-    public readonly kind: 'keyboard' | 'dongle'
+    /** `'dongle'` for the dongle's own service, `'mouse'` for a mouse;
+     *  `'keyboard'` (default) otherwise. */
+    public readonly kind: 'keyboard' | 'dongle' | 'mouse'
+    /** Device-document config (dongle / mouse); omitted on a keyboard. */
+    public readonly device?: DeviceConfigApi
+    /** Live mouse controls; present on a mouse. */
+    public readonly motion?: MouseMotionApi
     public readonly codec = remapprCodec
     /** Live matrix readout — direct devices only; a node's relayed input plane is
      *  unsupported, so read-only views omit it. */
@@ -223,6 +236,8 @@ export class RemapprKeyboardService
         this.readOnly = deps.readOnly ?? false
         this.sharesTransport = deps.sharesTransport ?? false
         this.kind = deps.kind ?? 'keyboard'
+        this.device = deps.device
+        this.motion = deps.motion
         this.nodes = deps.nodes
         this.cluster = deps.cluster
         this.unicode = deps.unicode

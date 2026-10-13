@@ -9,14 +9,16 @@ import type {
     Probe,
     ProbeHint,
 } from '../../adapter'
-import type { ConfigKeymap } from '../../config'
 import { TransportError } from '../../errors'
 import type { KeyboardService } from '../../service'
 import { readTransportIds, type Transport } from '../../transport'
 import type { DeviceInfo } from '../../types'
 import { loadOrCreateIdentity, RemapprSession } from './auth'
-import { loadDeviceConfig } from './configRead'
+import { Personality } from '../../config/compilers/remappr/blobWriter'
+import { loadDeviceConfig, makeKeylessConfig } from './configRead'
+import { buildDeviceConfigApi } from './deviceConfig'
 import { discover, type DiscoveryResult } from './discovery'
+import { buildMouseMotionApi } from './mouse'
 import { warmRemapprIdentity } from './identity'
 import { buildClusterApi } from './clusterView'
 import { buildNodesApi } from './nodeView'
@@ -66,19 +68,28 @@ interface ProbedRemappr {
     capBits: number | null
     /** The device self-identified (or was detected) as a ROLE_DONGLE hub. */
     isDongle: boolean
+    /** The device is a mouse (personality MOUSE_NODE): no keymap, a device
+     *  document config and live motion controls. */
+    isMouse: boolean
 }
 
 const probedSessions = new WeakMap<Transport, ProbedRemappr>()
+
+const DEVICE_NAMES = {
+    keyboard: 'Remappr Keyboard',
+    dongle: 'Remappr Dongle',
+    mouse: 'Remappr Mouse',
+} as const
 
 /** Map the raw 16-byte GET_DEVICE_INFO record onto the client DeviceInfo. */
 function toClientDeviceInfo(
     raw: RawDeviceInfo,
     transport: Transport,
-    isDongle = false,
+    kind: keyof typeof DEVICE_NAMES,
 ): DeviceInfo {
     const ids = readTransportIds(transport)
     return {
-        name: isDongle ? 'Remappr Dongle' : 'Remappr Keyboard',
+        name: DEVICE_NAMES[kind],
         firmware: 'remappr',
         firmwareVersion: `${raw.fwMajor}.${raw.fwMinor}.${raw.fwPatch}`,
         vid: ids.vid,
@@ -112,16 +123,48 @@ async function probeDongleFallback(rpc: RemapprRpc): Promise<DiscoveryResult> {
     }
 }
 
-/** A minimal empty keymap for the dongle's own service — it has no config store,
- *  and the renderer lands on the node roster rather than the editor. */
-function makeDongleConfig(): ConfigKeymap {
-    return {
-        schemaVersion: 1,
-        kind: 'remappr.keymap',
-        meta: { name: 'Remappr Dongle', target: null },
-        keyboard: { id: 'remappr-dongle', name: 'Remappr Dongle', keys: [] },
-        layers: [],
-    }
+/** The device has a config store (GET_LIMITS max_config_bytes > 0). A dongle on
+ *  firmware from before the device config has none. */
+function hasConfigStore(discovery: DiscoveryResult): boolean {
+    return (discovery.limits?.maxConfigBytes ?? 0) > 0
+}
+
+// pattern-check: skip — builds one more variant of the service this adapter
+// already constructs; plain construction, no new abstraction.
+/** The service for a keyless device on this transport: the dongle (roster +
+ *  its own settings) or a mouse (motion + settings). Neither holds a §19
+ *  session; each owns its transport and rejects keymap edits. */
+function buildDeviceService(
+    rpc: RemapprRpc,
+    probed: ProbedRemappr,
+    kind: 'dongle' | 'mouse',
+): RemapprKeyboardService {
+    const { discovery, deviceInfo } = probed
+    const device = hasConfigStore(discovery)
+        ? buildDeviceConfigApi(rpc, {
+              personality: kind,
+              name: deviceInfo.name,
+              writable: true,
+          })
+        : undefined
+    return new RemapprKeyboardService({
+        rpc,
+        deviceInfo,
+        config: makeKeylessConfig(deviceInfo.name),
+        configVersion: discovery.deviceInfo.configVersion,
+        layouts: [],
+        activeLayoutId: 0,
+        maxLayers: 0,
+        limits: discovery.limits,
+        readOnly: true,
+        kind,
+        device,
+        nodes: kind === 'dongle' ? buildNodesApi(rpc) : undefined,
+        motion:
+            kind === 'mouse'
+                ? buildMouseMotionApi(rpc, { writable: true })
+                : undefined,
+    })
 }
 
 /** Open an RPC and negotiate the device. Returns null (releasing the stream
@@ -139,11 +182,13 @@ async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null>
             discovery = await probeDongleFallback(rpc)
         }
         const isDongle = discovery.role === Role.DONGLE
+        const isMouse =
+            !isDongle && discovery.personality?.personality === Personality.mouse
 
         // GET_CAPABILITIES is a keyboard verb on the legacy path; a dongle drops
-        // it (and would cost a probe-timeout), so skip it for a dongle.
+        // it (and would cost a probe-timeout), and a mouse has no use for it.
         let capBits: number | null = null
-        if (!isDongle) {
+        if (!isDongle && !isMouse) {
             try {
                 const caps = await rpc.callPlain(
                     Cmd.GET_CAPABILITIES,
@@ -162,10 +207,11 @@ async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null>
             deviceInfo: toClientDeviceInfo(
                 discovery.deviceInfo,
                 transport,
-                isDongle,
+                isDongle ? 'dongle' : isMouse ? 'mouse' : 'keyboard',
             ),
             capBits,
             isDongle,
+            isMouse,
         }
     } catch {
         await rpc.close({ abortTransport: true }).catch(() => undefined)
@@ -225,7 +271,8 @@ export const remapprAdapter: FirmwareAdapter = {
                 throw new TransportError('Remappr probe failed during connect')
             }
         }
-        const { rpc, discovery, deviceInfo, isDongle, capBits } = probed
+        const { rpc, discovery, deviceInfo, isDongle, isMouse, capBits } =
+            probed
 
         if (signal.aborted) {
             await rpc.close({ abortTransport: true }).catch(() => undefined)
@@ -240,25 +287,11 @@ export const remapprAdapter: FirmwareAdapter = {
         )
 
         try {
-            if (isDongle) {
-                // A dongle has no auth session or config of its own (§7.2): skip
-                // the §19 handshake and config load, and surface the node roster.
-                // The service owns the transport (closes it on disconnect) but
-                // rejects edits (no keymap) and lands on the roster (kind).
-                return new RemapprKeyboardService({
-                    rpc,
-                    deviceInfo,
-                    config: makeDongleConfig(),
-                    configVersion: 0,
-                    layouts: [],
-                    activeLayoutId: 0,
-                    maxLayers: 0,
-                    limits: discovery.limits,
-                    readOnly: true,
-                    kind: 'dongle',
-                    nodes: buildNodesApi(rpc),
-                })
-            }
+            // A dongle or a mouse has no auth session and no keymap (§7.2): skip
+            // the §19 handshake and keymap load. The dongle surfaces its node
+            // roster, the mouse its motion controls, both their own settings.
+            if (isDongle) return buildDeviceService(rpc, probed, 'dongle')
+            if (isMouse) return buildDeviceService(rpc, probed, 'mouse')
 
             // §19 is capability-gated: a dev/no-auth firmware (CAP_AUTH clear)
             // takes plaintext writes, so skip the handshake entirely there. A

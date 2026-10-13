@@ -4,6 +4,7 @@ import type { LightingCatalog } from './lighting'
 import type {
     ClusterDiag,
     Limits,
+    MotionConfig,
     RoleEvent,
     UnicodeModeState,
 } from './clients/remappr/protocol'
@@ -30,6 +31,7 @@ import type {
 
 import type { SideloadApi } from './sideload'
 import type { ConfigKeymap } from './config'
+import type { ConfigDevice } from './config/device'
 
 // pattern-check: skip optional behavior-flags field added to existing Capabilities DTO — feature gate per firmware
 export interface FirmwareBehaviorFlags {
@@ -546,6 +548,55 @@ export interface UnicodeApi {
     setMode(mode: number): Promise<void>
 }
 
+// pattern-check: skip — DTO + facade interfaces beside NodesApi / UnicodeApi; the
+// remappr adapter is the Facade that backs them.
+/** A device config read back from the device (DeviceConfigApi.read). */
+export interface DeviceConfigSnapshot {
+    /** The active config as a device document; a device with no stored config
+     *  reads as a document with no settings (every field on its default). */
+    config: ConfigDevice
+    /** The active config_version (0 when none is stored). */
+    configVersion: number
+    /** A pushed config is stored and active (false: running on defaults). */
+    stored: boolean
+}
+
+/** The config of a device that is not a keyboard (a dongle or a mouse), read and
+ *  pushed as a `remappr.device` document. */
+export interface DeviceConfigApi {
+    /** Which device this is; a pushed document must name the same one. */
+    readonly personality: ConfigDevice['personality']
+    /** False on a node reached through a dongle: the app does not write through
+     *  the relay yet, so `write` rejects there. */
+    readonly writable: boolean
+    /** Read the active config back from the device. */
+    read(): Promise<DeviceConfigSnapshot>
+    /** Validate, compile and push `config` (write, validate, commit). The device
+     *  applies it at once and drops any live override (SET_NKRO, SET_DPI, …)
+     *  made under the previous config. Resolves to the new config_version. */
+    write(config: ConfigDevice): Promise<number>
+}
+
+/** Re-exported with MouseMotionApi so a consumer imports the facade and its wire
+ *  DTO from one entry point. */
+export type { MotionConfig } from './clients/remappr/protocol'
+
+/** A mouse's live motion controls (MOUSE namespace). A live change holds until
+ *  the next pushed config, and survives a reboot until then. */
+export interface MouseMotionApi {
+    /** False on a node reached through a dongle (read-only view). */
+    readonly writable: boolean
+    /** The sensor's DPI range and step, and the DPI, acceleration profile and
+     *  scroll mode in force. */
+    getConfig(): Promise<MotionConfig>
+    /** Set the DPI; the device refuses one outside its range. */
+    setDpi(dpi: number): Promise<void>
+    /** 0 = flat, 1 = the config's acceleration curve. */
+    setAccelProfile(profile: number): Promise<void>
+    /** 0 = normal, 1 = inverted wheel. */
+    setScrollMode(mode: number): Promise<void>
+}
+
 export interface KeyboardService {
     readonly deviceInfo: DeviceInfo
     readonly capabilities: Capabilities
@@ -555,9 +606,15 @@ export interface KeyboardService {
      *  other firmwares and pre-limits devices. */
     readonly limits?: Limits
     /** Device class for the renderer's landing decision. `'dongle'` lands on the
-     *  node roster (no keymap of its own); omitted/`'keyboard'` opens the editor.
-     *  A behind-dongle node view is a keyboard, not a dongle. */
-    readonly kind?: 'keyboard' | 'dongle'
+     *  node roster (no keymap of its own), `'mouse'` on the mouse settings page;
+     *  omitted/`'keyboard'` opens the editor. A behind-dongle node view takes the
+     *  node's own kind (keyboard or mouse), never `'dongle'`. */
+    readonly kind?: 'keyboard' | 'dongle' | 'mouse'
+    /** Config of a device that is not a keyboard (dongle, mouse): read it back and
+     *  push a new one. Present when the device has a config store. */
+    readonly device?: DeviceConfigApi
+    /** Live mouse controls; present on a mouse. */
+    readonly motion?: MouseMotionApi
 
     getLockState(): Promise<LockState>
 
