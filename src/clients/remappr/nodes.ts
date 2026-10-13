@@ -12,6 +12,7 @@ import {
     Cmd,
     CommonVerb,
     DongleVerb,
+    ENTER_BOOTLOADER_ARG,
     Namespace,
     NODE_RECORD_LEN,
     parseClusterDiag,
@@ -169,6 +170,20 @@ export async function getPipeTable(rpc: RemapprRpc): Promise<PipeTable> {
     if (reply.status !== Status.OK)
         throw new Error(`GET_PIPE_TABLE → ${statusName(reply.status)}`)
     return parsePipeTable(reply.data)
+}
+
+/** Reboot the dongle into its own bootloader (DONGLE.ENTER_BOOTLOADER) so new
+ *  firmware can be loaded over the bootloader's USB DFU. The dongle drops off
+ *  USB ~200 ms after the reply. Throws ERR_CMD on a board that has no
+ *  software way into its bootloader. */
+export async function enterDongleBootloader(rpc: RemapprRpc): Promise<void> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.ENTER_BOOTLOADER,
+        ENTER_BOOTLOADER_ARG,
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`ENTER_BOOTLOADER → ${statusName(reply.status)}`)
 }
 
 /** Read a device's §20 error counters (COMMON.GET_ERROR_COUNTERS): radio MIC

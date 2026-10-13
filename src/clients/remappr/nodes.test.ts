@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import {
     clearAllBonds,
+    enterDongleBootloader,
     forgetNode,
     getErrorCounters,
     getLinkStats,
@@ -476,6 +477,30 @@ describe('error counters (COMMON.GET_ERROR_COUNTERS)', () => {
         }))
         await expect(getErrorCounters(noSource)).rejects.toThrow(
             /GET_ERROR_COUNTERS/,
+        )
+    })
+})
+
+describe('enter bootloader (DONGLE.ENTER_BOOTLOADER)', () => {
+    it('sends the "DFU!" confirmation on the DONGLE namespace', async () => {
+        let seen: { ns: number; verb: number; arg?: Uint8Array } | undefined
+        const rpc = fakeRpc(async (ns, verb, arg) => {
+            seen = { ns, verb, arg }
+            return { status: Status.OK, data: new Uint8Array() }
+        })
+        await enterDongleBootloader(rpc)
+        expect(seen?.ns).toBe(Namespace.DONGLE)
+        expect(seen?.verb).toBe(DongleVerb.ENTER_BOOTLOADER)
+        expect(new TextDecoder().decode(seen?.arg)).toBe('DFU!')
+    })
+
+    it('throws when the board has no way into its bootloader', async () => {
+        const rpc = fakeRpc(async () => ({
+            status: Status.ERR_CMD,
+            data: new Uint8Array(),
+        }))
+        await expect(enterDongleBootloader(rpc)).rejects.toThrow(
+            /ENTER_BOOTLOADER/,
         )
     })
 })
