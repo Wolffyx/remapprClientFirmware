@@ -13,7 +13,7 @@ import type {
 } from '@firmware/devices/types'
 import type { Capabilities, ControlsApi, WirelessApi } from '@firmware/service'
 import type { DeviceInfo, ExportedFile } from '@firmware/types'
-import { DEMO_CATALOG } from './catalog'
+import { demoCatalog } from './catalog'
 import { LiveInputSim } from './liveSim'
 import type { DemoDeviceDef, ProfileOverrides } from './types'
 
@@ -155,7 +155,7 @@ export class MockDeviceService extends KeylessServiceBase {
     private readControls(): ControlsApi {
         return {
             getModel: () => Promise.resolve(this.def.model),
-            getCatalog: () => Promise.resolve(DEMO_CATALOG),
+            getCatalog: () => Promise.resolve(demoCatalog(this.def.model.form)),
             getProfiles: () =>
                 Promise.resolve({
                     profiles: [...this.profiles],

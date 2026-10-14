@@ -6,6 +6,7 @@
 import type {
     ActionId,
     ControlOption,
+    DeviceForm,
     ControlsCatalog,
     DeviceAction,
     DeviceActionCategory,
@@ -234,4 +235,14 @@ export const DEMO_CATALOG: ControlsCatalog = {
             { id: 'high', label: 'High' },
         ],
     },
+}
+
+/** The demo catalog as a device of `form` honours it: a mouse button has no
+ *  turbo or latch, a controller's does. */
+export function demoCatalog(form: DeviceForm): ControlsCatalog {
+    if (form !== 'mouse') return DEMO_CATALOG
+    return {
+        ...DEMO_CATALOG,
+        fields: { ...DEMO_CATALOG.fields, button: ['a', 'hold'] },
+    }
 }
