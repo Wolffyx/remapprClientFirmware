@@ -127,6 +127,42 @@ export const Cap = {
     UNICODE: 1 << 14, // unicode input-method ops wired (§5.2-E)
 } as const
 
+/** enum remappr_capability (include/remappr/capabilities.h) — the hardware
+ *  bits GET_PERSONALITY_MAP's trailing u32 `hw_caps` carries. Every image fills
+ *  it from its devicetree and build (input-layout plan §1); older firmware sends
+ *  0 there, so 0 means "not reported", not "nothing". */
+export const HwCap = {
+    USB: 1 << 0,
+    USB_HID: 1 << 1,
+    RADIO_2G4: 1 << 2,
+    BLE: 1 << 3,
+    BUTTONS: 1 << 4,
+    MATRIX: 1 << 5,
+    ENCODERS: 1 << 6,
+    SLIDERS: 1 << 7,
+    TOUCH: 1 << 8,
+    POINTER: 1 << 9,
+    IMU: 1 << 10,
+    RGB: 1 << 11,
+    LEDS: 1 << 12,
+    DISPLAY: 1 << 13,
+    HAPTIC: 1 << 14,
+    BATTERY: 1 << 15,
+    FLASH_STORAGE: 1 << 16,
+    ANALOG_AXES: 1 << 17,
+    HID_GAMEPAD: 1 << 24,
+} as const
+
+/** Whether `hwCaps` reports `cap`; undefined when the device reported none
+ *  (0 or absent), so a caller keeps its default. */
+export function reportsHwCap(
+    hwCaps: number | undefined,
+    cap: number,
+): boolean | undefined {
+    if (!hwCaps) return undefined
+    return (hwCaps & cap) !== 0
+}
+
 /* ── universal (proto-v2) ───────────────────────────────────────────────── */
 
 export const UCH_VERSION = 2

@@ -21,7 +21,12 @@ import type {
     SensorBinding,
     WheelBinding,
 } from '../../devices/types'
-import type { MotionConfig, RateLimits } from './protocol'
+import {
+    HwCap,
+    reportsHwCap,
+    type MotionConfig,
+    type RateLimits,
+} from './protocol'
 
 /** Control id → HID button index (bit of the button report). */
 export const BUTTON_INDEX: Readonly<Record<string, number>> = {
@@ -48,13 +53,14 @@ const ACTION_LABELS = [
     ...MOUSE_BUTTON_NAMES.slice(3),
 ]
 
-/** The mouse as controls: eight buttons (the middle one is the wheel), the
- *  sensor. */
-export function mouseModel(name: string): DeviceModel {
+/** The mouse as controls: eight buttons (the middle one is the wheel), and the
+ *  sensor unless the device reports it has no pointer (`hwCaps`, GET_PERSONALITY_MAP;
+ *  0 / absent = not reported, keep it). */
+export function mouseModel(name: string, hwCaps?: number): DeviceModel {
     return defaultLayout('mouse', name, {
         buttons: 8,
         wheel: true,
-        sensor: true,
+        sensor: reportsHwCap(hwCaps, HwCap.POINTER) ?? true,
     })
 }
 

@@ -194,6 +194,7 @@ function buildMouseService(
             set: (hz) => setReportRate(rpc, hz),
         },
         writable: true,
+        hwCaps: discovery.personality?.hwCaps,
         onTransportClosed: (cb) => rpc.onClosed(cb),
         closeTransport: () =>
             rpc.close({ abortTransport: true }).catch(() => undefined),

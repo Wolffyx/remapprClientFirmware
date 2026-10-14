@@ -4,10 +4,12 @@ import { describe, expect, it } from 'vitest'
 
 import {
     EVT_ROLE,
+    HwCap,
     parseClusterDiag,
     parseKeyLayoutChunk,
     parseRoleEvent,
     parseUchEvent,
+    reportsHwCap,
 } from './protocol'
 
 /** Build a GET_KEY_LAYOUT chunk: [total u16][start u16][count u8][entries×16].
@@ -114,5 +116,21 @@ describe('parseUchEvent + parseRoleEvent (§N4b-3)', () => {
         const role = parseRoleEvent(evt.payload)
         expect(role.coordinator).toBe(true)
         expect(role.term).toBe(5)
+    })
+})
+
+describe('HwCap', () => {
+    it('matches the firmware capability bits', () => {
+        // include/remappr/capabilities.h — a wire ABI, append-only.
+        expect(HwCap.FLASH_STORAGE).toBe(1 << 16)
+        expect(HwCap.ANALOG_AXES).toBe(1 << 17)
+        expect(HwCap.HID_GAMEPAD).toBe(1 << 24)
+    })
+
+    it('treats 0 as not reported', () => {
+        expect(reportsHwCap(0, HwCap.POINTER)).toBeUndefined()
+        expect(reportsHwCap(undefined, HwCap.POINTER)).toBeUndefined()
+        expect(reportsHwCap(HwCap.POINTER, HwCap.POINTER)).toBe(true)
+        expect(reportsHwCap(HwCap.USB, HwCap.POINTER)).toBe(false)
     })
 })

@@ -45,6 +45,8 @@ export interface MouseServiceDeps {
     rate?: { get(): Promise<RateLimits>; set(hz: number): Promise<number> }
     /** False for a mouse seen through the dongle. */
     writable: boolean
+    /** GET_PERSONALITY_MAP hw_caps (0 / absent = not reported). */
+    hwCaps?: number
     onTransportClosed?: (cb: (reason?: unknown) => void) => void
     /** Close an owned transport; absent when it is borrowed (node view). */
     closeTransport?: () => Promise<void>
@@ -95,13 +97,16 @@ export class RemapprMouseService extends KeylessServiceBase {
         this.motion = deps.motion
         // The firmware does not report positions; a layout drawn in the Builder
         // is remembered per mouse.
-        this.layout = createLayoutOverride(mouseModel(deps.deviceInfo.name), {
-            key: `remappr:mouse:${deps.deviceInfo.serialNumber || deps.deviceInfo.name}`,
-            onChanged: () => {
-                const change: ControlsChange = { type: 'model' }
-                for (const cb of [...this.changeListeners]) cb(change)
+        this.layout = createLayoutOverride(
+            mouseModel(deps.deviceInfo.name, deps.hwCaps),
+            {
+                key: `remappr:mouse:${deps.deviceInfo.serialNumber || deps.deviceInfo.name}`,
+                onChanged: () => {
+                    const change: ControlsChange = { type: 'model' }
+                    for (const cb of [...this.changeListeners]) cb(change)
+                },
             },
-        })
+        )
         this.capabilities = {
             lock: 'none',
             rename: false,
@@ -237,7 +242,12 @@ export class RemapprMouseService extends KeylessServiceBase {
             this.rates && this.stagedRate !== null
                 ? { ...this.rates, currentHz: this.stagedRate }
                 : this.rates
-        return mouseBindings(this.draft?.mouse, this.motionCfg, rates)
+        const all = mouseBindings(this.draft?.mouse, this.motionCfg, rates)
+        // Only the controls the mouse has (no sensor when it reports none).
+        const ids = new Set(this.layout.model().controls.map((c) => c.id))
+        return Object.fromEntries(
+            Object.entries(all).filter(([id]) => ids.has(id)),
+        )
     }
 
     // --- facades -------------------------------------------------------------

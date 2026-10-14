@@ -5,7 +5,7 @@ import type { ConfigDevice } from '../../config/device'
 import type { DeviceConfigApi, MouseMotionApi } from '../../service'
 import { RemapprMouseService, type MouseServiceDeps } from './mouseService'
 import { applyMouseBinding, mouseBindings } from './mouseControls'
-import type { MotionConfig, RateLimits } from './protocol'
+import { HwCap, type MotionConfig, type RateLimits } from './protocol'
 
 const DOC: ConfigDevice = {
     schemaVersion: 1,
@@ -67,6 +67,9 @@ function make(over: Partial<MouseServiceDeps> = {}) {
 }
 
 runControlsContractSuite('Remappr mouse', { makeService: () => make().svc })
+runControlsContractSuite('Remappr mouse without a pointer', {
+    makeService: () => make({ hwCaps: HwCap.USB | HwCap.BUTTONS }).svc,
+})
 runControlsContractSuite('Remappr mouse (through the dongle)', {
     makeService: () => make({ writable: false }).svc,
 })
@@ -202,6 +205,29 @@ describe('RemapprMouseService', () => {
         expect(writes[0]!.mouse).toBeUndefined()
         expect(writes[0]!.radio).toBeUndefined()
         expect(writes[0]!.personality).toBe('mouse')
+    })
+
+    it('draws a sensor only when the mouse reports a pointer', async () => {
+        const ids = async (hwCaps?: number) => {
+            const { svc } = make({ hwCaps })
+            const model = await svc.controls.getModel()
+            const bindings = await svc.controls.getBindings('p0')
+            return {
+                model: model.controls.some((c) => c.id === 'sensor'),
+                bound: 'sensor' in bindings,
+            }
+        }
+        // 0 / absent: older firmware that does not report its hardware.
+        expect(await ids(undefined)).toEqual({ model: true, bound: true })
+        expect(await ids(0)).toEqual({ model: true, bound: true })
+        expect(await ids(HwCap.USB | HwCap.POINTER)).toEqual({
+            model: true,
+            bound: true,
+        })
+        expect(await ids(HwCap.USB | HwCap.BUTTONS)).toEqual({
+            model: false,
+            bound: false,
+        })
     })
 
     it('is read-only through the dongle', () => {
