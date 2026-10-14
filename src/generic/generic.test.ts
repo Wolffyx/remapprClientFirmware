@@ -100,6 +100,13 @@ describe('parseGamepadId', () => {
         )
     })
 
+    it('collapses the spaces drivers pad names with', () => {
+        expect(
+            parseGamepadId('USB   Gamepad     (Vendor: 0079 Product: 0011)')
+                .name,
+        ).toBe('USB Gamepad')
+    })
+
     it('keeps the name of an id without USB ids', () => {
         expect(
             parseGamepadId('Xbox 360 Controller (XInput STANDARD GAMEPAD)'),
@@ -225,6 +232,7 @@ describe('listGamepads', () => {
         expect(found[1]).toMatchObject({
             id: `gamepad:1:${raw.id}`,
             name: 'Generic USB Joystick',
+            usb: '0079:0006',
             form: 'gamepad',
         })
         expect(found[1]!.preview.model.defaulted).toBe(true)
@@ -306,6 +314,7 @@ describe('hidMouseDevice', () => {
         expect(d).toMatchObject({
             id: 'mouse:046D:C53F:ABC',
             form: 'mouse',
+            usb: '046D:C53F',
             summary: 'Mouse · 046D:C53F',
         })
         expect(d.preview.model.hidSummary).toBe('HID mouse · 046D:C53F')

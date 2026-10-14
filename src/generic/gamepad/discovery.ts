@@ -26,12 +26,14 @@ export function gamepadProfile(gp: GamepadLike): GamepadProfile {
 }
 
 /** Where a re-drawn layout is remembered: per model (USB ids), else name. */
+function usbOf(gp: GamepadLike): string | undefined {
+    const { vendorId, productId } = parseGamepadId(gp.id)
+    if (vendorId === undefined || productId === undefined) return undefined
+    return usbIds(vendorId, productId)
+}
+
 function layoutKey(gp: GamepadLike): string {
-    const { name, vendorId, productId } = parseGamepadId(gp.id)
-    const model =
-        vendorId !== undefined && productId !== undefined
-            ? usbIds(vendorId, productId)
-            : name
+    const model = usbOf(gp) ?? parseGamepadId(gp.id).name
     return genericLayoutKey(`gamepad:${model}`)
 }
 
@@ -74,6 +76,7 @@ function inputDevice(gp: GamepadLike, env: GamepadEnv): GenericInputDevice {
         form: profile.model.form,
         preview,
         summary: profile.model.hidSummary ?? 'Standard gamepad',
+        ...(usbOf(gp) ? { usb: usbOf(gp) } : {}),
         connect: () => Promise.resolve(connectGamepad(gp, env)),
     }
 }

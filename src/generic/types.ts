@@ -39,5 +39,8 @@ export interface GenericInputDevice {
     readonly preview: NativeProfile
     /** One line about it: "Standard gamepad", "12 buttons · 6 axes". */
     readonly summary: string
+    /** "VVVV:PPPP" when known — lets the app hide a device it already lists
+     *  through a firmware client. */
+    readonly usb?: string
     connect(): Promise<KeyboardService>
 }

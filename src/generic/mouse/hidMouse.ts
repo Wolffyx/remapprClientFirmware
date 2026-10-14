@@ -99,6 +99,7 @@ export function hidMouseDevice(info: HidMouseInfo): GenericInputDevice {
         form: 'mouse',
         preview: withRememberedLayout(profile, layoutKey(info)),
         summary: `Mouse · ${ids}`,
+        usb: ids,
         connect: () => Promise.resolve(connectHidMouse(info)),
     }
 }

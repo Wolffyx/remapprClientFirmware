@@ -59,12 +59,16 @@ const TRAILING_NOTE = /\s*\([^()]*\)$/
 
 const hex = (s: string): number => parseInt(s, 16)
 
+/** Drivers pad product names with runs of spaces. */
+const tidy = (name: string): string =>
+    name.replace(/\s+/g, ' ').trim() || 'Gamepad'
+
 /** The product name and USB ids in a Gamepad API `id` string. */
 export function parseGamepadId(id: string): GamepadIdentity {
     const chromium = CHROMIUM_ID.exec(id)
     if (chromium) {
         return {
-            name: chromium[1]!.trim() || 'Gamepad',
+            name: tidy(chromium[1]!),
             vendorId: hex(chromium[2]!),
             productId: hex(chromium[3]!),
         }
@@ -72,10 +76,10 @@ export function parseGamepadId(id: string): GamepadIdentity {
     const firefox = FIREFOX_ID.exec(id)
     if (firefox) {
         return {
-            name: firefox[3]!.trim(),
+            name: tidy(firefox[3]!),
             vendorId: hex(firefox[1]!),
             productId: hex(firefox[2]!),
         }
     }
-    return { name: id.replace(TRAILING_NOTE, '').trim() || 'Gamepad' }
+    return { name: tidy(id.replace(TRAILING_NOTE, '')) }
 }
