@@ -180,6 +180,9 @@ export const Namespace = {
     PROFILES: 0x06,
     DONGLE: 0x07,
     RADIO: 0x08,
+    /** Personality-neutral input verbs: the layout of any device (input-layout
+     *  plan §2). Listed in the personality map once the firmware serves it. */
+    INPUT: 0x09,
 } as const
 
 export const UchFlag = {
@@ -243,6 +246,127 @@ export const MouseVerb = {
     /** Arg: u8 scroll mode id (sealed, mutating). */
     SET_SCROLL_MODE: 0x04,
 } as const
+
+/** INPUT-namespace verbs (input-layout plan §2) — namespace-scoped, 0xE2-only. */
+export const InputVerb = {
+    /** Arg: u16 start (absent = 0). Reply: one page, see parseInputLayoutPage.
+     *  Plaintext-open read; re-issue with start += count until start >= total. */
+    GET_INPUT_LAYOUT: 0x01,
+} as const
+
+/** What an input is (enum remappr_input_class) — a wire enum, append-only. */
+export const InputClass = {
+    KEY: 0,
+    BUTTON: 1,
+    ENCODER: 2,
+    WHEEL: 3,
+    SENSOR: 4,
+    STICK: 5,
+    TRIGGER: 6,
+    HAT: 7,
+    AXIS: 8,
+    SLIDER: 9,
+} as const
+
+/** Draw hint (enum remappr_input_shape); 0 = the class default. Append-only.
+ *  Same order as the app's ControlShape. */
+export const InputShape = {
+    AUTO: 0,
+    KEY: 1,
+    ROUND: 2,
+    PILL: 3,
+    STICK: 4,
+    DPAD: 5,
+    HAT: 6,
+    TRIGGER: 7,
+    TRIGGER_SIDE: 8,
+    WHEEL: 9,
+    RING: 10,
+    KNOB: 11,
+    SENSOR: 12,
+    MOUSE_LEFT: 13,
+    MOUSE_RIGHT: 14,
+} as const
+
+/** Device form (enum remappr_input_form); 0 = derive it from the personality. */
+export const InputForm = {
+    PERSONALITY: 0,
+    KEYBOARD: 1,
+    MACROPAD: 2,
+    MOUSE: 3,
+    GAMEPAD: 4,
+    FLIGHTSTICK: 5,
+} as const
+
+/** `position` of an input that is not bound by position; also the `inputId`
+ *  of one past the 256th of its class. */
+export const INPUT_NONE = 0xffff
+
+/** One input from GET_INPUT_LAYOUT. Geometry in 1/100 key-unit, top-left;
+ *  `rot` in signed 1/100 degree, clockwise, about (`rotx`, `roty`). */
+export interface InputLayoutEntry {
+    cls: number
+    shape: number
+    inputId: number
+    position: number
+    x: number
+    y: number
+    w: number
+    h: number
+    rot: number
+    rotx: number
+    roty: number
+}
+
+export interface InputLayoutPage {
+    version: number
+    form: number
+    total: number
+    start: number
+    entries: InputLayoutEntry[]
+}
+
+const INPUT_LAYOUT_HDR = 7
+const INPUT_LAYOUT_ENTRY = 20
+
+/** Decode one GET_INPUT_LAYOUT page: `u8 version | u8 form | u16 total |
+ *  u16 start | u8 count` + count × 20-B entries. Throws on a truncated page (a
+ *  relayed FRAG chain that lost a fragment) so the caller re-reads it. */
+export function parseInputLayoutPage(d: Uint8Array): InputLayoutPage {
+    if (d.length < INPUT_LAYOUT_HDR)
+        throw new Error(`input layout page too short (${d.length} B)`)
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const count = d[6]
+    if (d.length < INPUT_LAYOUT_HDR + count * INPUT_LAYOUT_ENTRY) {
+        throw new Error(
+            `input layout page truncated: ${d.length - INPUT_LAYOUT_HDR} B for ${count} entries`,
+        )
+    }
+    const entries: InputLayoutEntry[] = []
+    for (let i = 0; i < count; i++) {
+        const o = INPUT_LAYOUT_HDR + i * INPUT_LAYOUT_ENTRY
+        entries.push({
+            cls: d[o],
+            shape: d[o + 1],
+            inputId: dv.getUint16(o + 2, true),
+            position: dv.getUint16(o + 4, true),
+            x: dv.getUint16(o + 6, true),
+            y: dv.getUint16(o + 8, true),
+            w: dv.getUint16(o + 10, true),
+            h: dv.getUint16(o + 12, true),
+            rot: dv.getInt16(o + 14, true),
+            rotx: dv.getUint16(o + 16, true),
+            roty: dv.getUint16(o + 18, true),
+        })
+    }
+    return {
+        version: d[0],
+        form: d[1],
+        total: dv.getUint16(2, true),
+        start: dv.getUint16(4, true),
+        entries,
+    }
+}
 
 /** KEYBOARD-namespace verbs (proto-v2, chunked). */
 export const KeyboardVerb = {

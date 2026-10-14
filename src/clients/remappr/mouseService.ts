@@ -32,6 +32,7 @@ import {
     mouseCatalog,
     mouseModel,
 } from './mouseControls'
+import type { InputLayout } from './inputLayout'
 import type { Limits, MotionConfig, RateLimits } from './protocol'
 
 export interface MouseServiceDeps {
@@ -47,6 +48,8 @@ export interface MouseServiceDeps {
     writable: boolean
     /** GET_PERSONALITY_MAP hw_caps (0 / absent = not reported). */
     hwCaps?: number
+    /** Where the controls sit, when the firmware reports it (GET_INPUT_LAYOUT). */
+    layout?: InputLayout
     onTransportClosed?: (cb: (reason?: unknown) => void) => void
     /** Close an owned transport; absent when it is borrowed (node view). */
     closeTransport?: () => Promise<void>
@@ -95,10 +98,10 @@ export class RemapprMouseService extends KeylessServiceBase {
         this.deviceInfo = deps.deviceInfo
         this.limits = deps.limits
         this.motion = deps.motion
-        // The firmware does not report positions; a layout drawn in the Builder
-        // is remembered per mouse.
+        // Drawn as the mouse reports itself, else generic; a layout drawn in
+        // the Builder is remembered per mouse and wins while it fits.
         this.layout = createLayoutOverride(
-            mouseModel(deps.deviceInfo.name, deps.hwCaps),
+            mouseModel(deps.deviceInfo.name, deps.hwCaps, deps.layout),
             {
                 key: `remappr:mouse:${deps.deviceInfo.serialNumber || deps.deviceInfo.name}`,
                 onChanged: () => {

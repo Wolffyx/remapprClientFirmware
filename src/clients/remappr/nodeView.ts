@@ -13,6 +13,7 @@ import { buildDeviceConfigApi } from './deviceConfig'
 import { deviceKind } from './deviceKind'
 import { discover, type DiscoveryResult } from './discovery'
 import { buildMouseMotionApi } from './mouse'
+import { readInputLayout } from './inputLayout'
 import {
     clearAllBonds,
     forgetNode,
@@ -76,14 +77,20 @@ function nodeDeviceInfo(
 }
 
 // pattern-check: skip — one more read-only view variant beside open()'s keyboard one
-/** A read-only view of a mouse behind the dongle: its settings and motion state
- *  read through the relay; saving and live changes need the mouse on USB. */
-function openMouseView(
+/** A read-only view of a mouse behind the dongle: its settings, motion state
+ *  and layout read through the relay; saving and live changes need the mouse on
+ *  USB. */
+async function openMouseView(
     rpc: RemapprRpc,
     id: number,
     discovery: DiscoveryResult,
-): KeyboardService {
+): Promise<KeyboardService> {
     const deviceInfo = nodeDeviceInfo(id, discovery.deviceInfo, 'Mouse')
+    const layout = await readInputLayout(
+        rpc,
+        discovery.personality?.namespaces,
+        id,
+    )
     return new RemapprMouseService({
         deviceInfo,
         limits: discovery.limits,
@@ -95,6 +102,8 @@ function openMouseView(
         }),
         motion: buildMouseMotionApi(rpc, { targetNode: id, writable: false }),
         writable: false,
+        hwCaps: discovery.personality?.hwCaps,
+        layout,
         // The dongle's RPC: closing the view must not close it.
         onTransportClosed: (cb) => rpc.onClosed(cb),
     })

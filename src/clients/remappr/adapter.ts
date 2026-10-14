@@ -20,6 +20,7 @@ import { buildDeviceConfigApi } from './deviceConfig'
 import { deviceKind } from './deviceKind'
 import { discover, type DiscoveryResult } from './discovery'
 import { buildMouseMotionApi } from './mouse'
+import { readInputLayout } from './inputLayout'
 import { warmRemapprIdentity } from './identity'
 import { buildClusterApi } from './clusterView'
 import { buildNodesApi } from './nodeView'
@@ -170,12 +171,14 @@ export function servesMouse(discovery: DiscoveryResult): boolean {
     return !ns?.length || ns.some((n) => n.namespace === Namespace.MOUSE)
 }
 
-/** A mouse on its own transport: edited in the device editor. */
-function buildMouseService(
+/** A mouse on its own transport: edited in the device editor, drawn from its
+ *  own layout when it reports one. */
+async function buildMouseService(
     rpc: RemapprRpc,
     probed: ProbedRemappr,
-): RemapprMouseService {
+): Promise<RemapprMouseService> {
     const { discovery, deviceInfo } = probed
+    const layout = await readInputLayout(rpc, discovery.personality?.namespaces)
     return new RemapprMouseService({
         deviceInfo,
         limits: discovery.limits,
@@ -195,6 +198,7 @@ function buildMouseService(
         },
         writable: true,
         hwCaps: discovery.personality?.hwCaps,
+        layout,
         onTransportClosed: (cb) => rpc.onClosed(cb),
         closeTransport: () =>
             rpc.close({ abortTransport: true }).catch(() => undefined),
@@ -321,7 +325,7 @@ export const remapprAdapter: FirmwareAdapter = {
             // the §19 handshake and keymap load. The dongle surfaces its node
             // roster, the mouse its motion controls, both their own settings.
             if (kind === 'dongle') return buildDongleService(rpc, probed)
-            if (kind === 'mouse') return buildMouseService(rpc, probed)
+            if (kind === 'mouse') return await buildMouseService(rpc, probed)
 
             // §19 is capability-gated: a dev/no-auth firmware (CAP_AUTH clear)
             // takes plaintext writes, so skip the handshake entirely there. A
