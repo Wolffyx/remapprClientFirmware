@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import {
     connectDemoDevice,
+    connectMockDeviceWithModel,
     DEMO_DEVICES,
     demoDeviceModel,
     demoDevicePreview,
@@ -50,5 +51,33 @@ describe('demo devices', () => {
         expect(mouse.kind).toBe('mouse')
         expect(mouse.capabilities.demo).toBe(true)
         await Promise.all([deck.disconnect(), mouse.disconnect()])
+    })
+})
+
+describe('builder hand-off', () => {
+    it('opens a model from the Builder as an editable demo device', async () => {
+        const model = demoDeviceModel('apex-stick')
+        const svc = connectMockDeviceWithModel({ ...model, name: 'My stick' })
+        expect(svc.deviceInfo.name).toBe('My stick')
+        expect(svc.controls?.setBinding).toBeDefined()
+        expect((await svc.controls!.getModel()).controls).toHaveLength(
+            model.controls.length,
+        )
+        await svc.disconnect()
+    })
+
+    it('lets a demo device be re-drawn for the session', async () => {
+        const svc = await connectDemoDevice('generic-gamepad')
+        const changes: unknown[] = []
+        svc.controls!.onChanged((c) => changes.push(c))
+        const model = await svc.controls!.getModel()
+        const next = {
+            ...model,
+            controls: model.controls.map((c) => ({ ...c, x: c.x + 0.5 })),
+        }
+        await svc.controls!.layout!.apply(next)
+        expect((await svc.controls!.getModel()).defaulted).toBeUndefined()
+        expect(changes).toEqual([{ type: 'model' }])
+        await svc.disconnect()
     })
 })

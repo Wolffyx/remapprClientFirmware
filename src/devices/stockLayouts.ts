@@ -242,6 +242,20 @@ export const SHELL_ZONES: Readonly<
     plate: ['body', 'left', 'right'],
 }
 
+/** Shape and size of a control added by hand, per kind. */
+export const NEW_CONTROL: Readonly<
+    Record<ControlKind, { shape: ControlShape; w: number; h: number }>
+> = {
+    button: { shape: 'round', w: 0.75, h: 0.75 },
+    wheel: { shape: 'wheel', w: 0.75, h: 1.6 },
+    stick: { shape: 'stick', w: 1.7, h: 1.7 },
+    trigger: { shape: 'trigger', w: 2.2, h: 0.7 },
+    hat: { shape: 'hat', w: 1.15, h: 1.15 },
+    sensor: { shape: 'sensor', w: 1.4, h: 1.4 },
+    encoder: { shape: 'knob', w: 1.4, h: 1.4 },
+    axis: { shape: 'wheel', w: 1.4, h: 0.9 },
+}
+
 /** The controls of `layout` whose id is in `ids`, in `ids` order. */
 export function pickControls(
     layout: StockLayout,

@@ -8,11 +8,14 @@
 import type { ConfigDevice } from '../../config/device'
 import { ProtocolError } from '../../errors'
 import { KeylessServiceBase } from '../../devices/keylessService'
+import {
+    createLayoutOverride,
+    type LayoutOverride,
+} from '../../devices/layoutOverride'
 import type {
     ControlBinding,
     ControlsChange,
     DeviceBindings,
-    DeviceModel,
     SensorBinding,
 } from '../../devices/types'
 import type {
@@ -74,7 +77,7 @@ export class RemapprMouseService extends KeylessServiceBase {
     readonly device?: DeviceConfigApi
     readonly controls: ControlsApi
 
-    private readonly model: DeviceModel
+    private readonly layout: LayoutOverride
     private stored: ConfigDevice | null = null
     private draft: ConfigDevice | null = null
     private motionCfg: MotionConfig | null = null
@@ -90,7 +93,15 @@ export class RemapprMouseService extends KeylessServiceBase {
         this.deviceInfo = deps.deviceInfo
         this.limits = deps.limits
         this.motion = deps.motion
-        this.model = mouseModel(deps.deviceInfo.name)
+        // The firmware does not report positions; a layout drawn in the Builder
+        // is remembered per mouse.
+        this.layout = createLayoutOverride(mouseModel(deps.deviceInfo.name), {
+            key: `remappr:mouse:${deps.deviceInfo.serialNumber || deps.deviceInfo.name}`,
+            onChanged: () => {
+                const change: ControlsChange = { type: 'model' }
+                for (const cb of [...this.changeListeners]) cb(change)
+            },
+        })
         this.capabilities = {
             lock: 'none',
             rename: false,
@@ -246,7 +257,7 @@ export class RemapprMouseService extends KeylessServiceBase {
 
     private readControls(): ControlsApi {
         return {
-            getModel: () => Promise.resolve(this.model),
+            getModel: () => Promise.resolve(this.layout.model()),
             getCatalog: async () => {
                 await this.load()
                 return mouseCatalog(this.motionCfg, this.rates)
@@ -263,6 +274,7 @@ export class RemapprMouseService extends KeylessServiceBase {
                     this.changeListeners.delete(cb)
                 }
             },
+            layout: this.layout.api,
         }
     }
 

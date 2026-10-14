@@ -47,6 +47,7 @@ export type {
     DynamicEntriesApi,
     ConnectNotice,
     ControlsApi,
+    ControlsLayoutApi,
     EncoderApi,
     HsvColor,
     IndicatorConfig,
@@ -135,6 +136,7 @@ export type { MockServiceOptions } from './clients/mock/service'
 // generic gamepad): the app lists these and connects by id.
 export {
     connectDemoDevice,
+    connectMockDeviceWithModel,
     DEMO_DEVICES,
     demoDeviceModel,
     demoDevicePreview,

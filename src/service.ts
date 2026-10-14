@@ -664,6 +664,23 @@ export interface ControlsApi {
     /** Live input. The adapter starts reading on the first listener and stops
      *  after the last one leaves. Absent = no live readout. */
     onInput?(cb: (frame: ControlInputFrame) => void): () => void
+    /** The drawn layout can be replaced (and is remembered for this device).
+     *  Absent = the device's layout is fixed. */
+    readonly layout?: ControlsLayoutApi
+}
+
+// pattern-check: skip — interface of the layout-override facade, beside ControlsApi.
+/** Replace where a device's controls are drawn — for a device that reports its
+ *  inputs but not their positions. A layout may move, resize, rename and
+ *  reshape the controls; it must keep every control and its kind. Changing it
+ *  fires `onChanged({ type: 'model' })`. */
+export interface ControlsLayoutApi {
+    /** Use `model` as the layout from now on; rejects one that does not fit. */
+    apply(model: DeviceModel): Promise<void>
+    /** Back to the layout the device reported (or the generic one). */
+    reset(): Promise<void>
+    /** A layout was applied (so `reset` has something to undo). */
+    overridden(): boolean
 }
 
 export interface KeyboardService {

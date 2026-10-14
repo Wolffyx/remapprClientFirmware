@@ -4,6 +4,10 @@
 // session (saveMode 'none', like the demo keyboard); a definition marked not
 // editable stands in for a generic HID device and leaves the write methods out.
 import { KeylessServiceBase } from '@firmware/devices/keylessService'
+import {
+    createLayoutOverride,
+    type LayoutOverride,
+} from '@firmware/devices/layoutOverride'
 import type {
     ControlBinding,
     ControlsChange,
@@ -76,6 +80,7 @@ export class MockDeviceService extends KeylessServiceBase {
     private bindings: Map<string, DeviceBindings>
     private readonly changeListeners = new Set<(c: ControlsChange) => void>()
     private readonly sim: LiveInputSim
+    private readonly layout: LayoutOverride
 
     constructor(private readonly def: DemoDeviceDef) {
         super()
@@ -102,6 +107,10 @@ export class MockDeviceService extends KeylessServiceBase {
         this.bindings = s.bindings
         this.activeId = s.profiles[0]!.id
         this.sim = new LiveInputSim(def.model.controls)
+        // The demo keeps a re-drawn layout for the session only.
+        this.layout = createLayoutOverride(def.model, {
+            onChanged: () => this.changed({ type: 'model' }),
+        })
         this.wireless = demoWireless(def)
         this.controls = def.editable
             ? this.editableControls()
@@ -154,7 +163,7 @@ export class MockDeviceService extends KeylessServiceBase {
     /** The read half every demo device has. */
     private readControls(): ControlsApi {
         return {
-            getModel: () => Promise.resolve(this.def.model),
+            getModel: () => Promise.resolve(this.layout.model()),
             getCatalog: () => Promise.resolve(demoCatalog(this.def.model.form)),
             getProfiles: () =>
                 Promise.resolve({
@@ -169,6 +178,7 @@ export class MockDeviceService extends KeylessServiceBase {
                 }
             },
             onInput: (cb) => this.sim.subscribe(cb),
+            layout: this.layout.api,
         }
     }
 

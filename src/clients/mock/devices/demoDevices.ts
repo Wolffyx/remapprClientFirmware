@@ -139,6 +139,23 @@ export function demoDevicePreview(id: DemoDeviceId): DemoDevicePreview {
     return { model, bindings: e.bindings, catalog: demoCatalog(model.form) }
 }
 
+/** Builder "Open in editor": a session-only device drawn from `model`, every
+ *  control on its kind's default binding. */
+export function connectMockDeviceWithModel(
+    model: DeviceModel,
+): KeyboardService {
+    const { defaulted: _d, hidSummary: _h, ...own } = model
+    return new MockDeviceService({
+        id: 'builder',
+        model: own,
+        bindings: {},
+        profiles: ['Default'],
+        firmwareVersion: 'builder',
+        transport: 'usb',
+        editable: true,
+    })
+}
+
 /** Connect the demo device `id`. `opts` (a simulated lock …) applies to the
  *  demo keyboards. */
 export function connectDemoDevice(

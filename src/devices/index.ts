@@ -10,6 +10,7 @@ export {
 export { fromPhysicalLayout } from './fromPhysicalLayout'
 export {
     control,
+    NEW_CONTROL,
     pickControls,
     SHELL_ZONES,
     STOCK_FLIGHTSTICK,
@@ -18,3 +19,17 @@ export {
     type StockLayout,
 } from './stockLayouts'
 export { KeylessServiceBase } from './keylessService'
+export { clearLayout, loadLayout, saveLayout } from './layoutCache'
+export { createLayoutOverride, type LayoutOverride } from './layoutOverride'
+export {
+    CONTROL_KINDS,
+    CONTROL_SHAPES,
+    DEVICE_FORMS,
+    DeviceLayoutSchema,
+    layoutFits,
+    layoutFromModel,
+    modelFromLayout,
+    parseDeviceLayout,
+    type DeviceLayoutDoc,
+    type LayoutParse,
+} from './schema'
