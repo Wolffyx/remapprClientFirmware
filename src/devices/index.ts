@@ -17,3 +17,4 @@ export {
     STOCK_MOUSE,
     type StockLayout,
 } from './stockLayouts'
+export { KeylessServiceBase } from './keylessService'
