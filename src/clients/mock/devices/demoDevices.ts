@@ -55,6 +55,8 @@ export interface DemoDevicePreview {
 interface Entry extends DemoDevice {
     model(): DeviceModel
     bindings: DeviceBindings
+    /** Absent = the demo catalog of the model's form. */
+    catalog?: ControlsCatalog
     connect(opts?: MockServiceOptions): Promise<KeyboardService>
 }
 
@@ -94,6 +96,7 @@ function deviceEntry(id: DemoDeviceId, def: DemoDeviceDef): Entry {
         form: def.model.form,
         ready: !def.model.defaulted,
         bindings: def.bindings,
+        ...(def.catalog ? { catalog: def.catalog } : {}),
         model: () => def.model,
         connect: () => Promise.resolve(new MockDeviceService(def)),
     }
@@ -136,7 +139,11 @@ export function demoDeviceModel(id: DemoDeviceId): DeviceModel {
 export function demoDevicePreview(id: DemoDeviceId): DemoDevicePreview {
     const e = entry(id)
     const model = e.model()
-    return { model, bindings: e.bindings, catalog: demoCatalog(model.form) }
+    return {
+        model,
+        bindings: e.bindings,
+        catalog: e.catalog ?? demoCatalog(model.form),
+    }
 }
 
 /** Builder "Open in editor": a session-only device drawn from `model`, every

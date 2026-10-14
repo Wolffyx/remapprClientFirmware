@@ -4,6 +4,7 @@ import type {
     ActionId,
     ButtonBinding,
     ControlBinding,
+    ControlsCatalog,
     DeviceBindings,
     DeviceModel,
 } from '@firmware/devices/types'
@@ -18,6 +19,8 @@ export interface DemoDeviceDef {
     readonly model: DeviceModel
     /** The default profile's bindings. */
     readonly bindings: DeviceBindings
+    /** What the device can bind; absent = the demo catalog of its form. */
+    readonly catalog?: ControlsCatalog
     /** Profile names; index 0 uses `bindings` as is. */
     readonly profiles: readonly string[]
     /** Changes per profile index (index 0 is unused). */

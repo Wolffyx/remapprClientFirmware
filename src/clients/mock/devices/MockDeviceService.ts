@@ -164,7 +164,10 @@ export class MockDeviceService extends KeylessServiceBase {
     private readControls(): ControlsApi {
         return {
             getModel: () => Promise.resolve(this.layout.model()),
-            getCatalog: () => Promise.resolve(demoCatalog(this.def.model.form)),
+            getCatalog: () =>
+                Promise.resolve(
+                    this.def.catalog ?? demoCatalog(this.def.model.form),
+                ),
             getProfiles: () =>
                 Promise.resolve({
                     profiles: [...this.profiles],
