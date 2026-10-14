@@ -598,6 +598,7 @@ export const SemanticActionSchema = z.discriminatedUnion('kind', [
         sat: u8.optional(),
         val: u8.optional(),
     }),
+    z.object({ kind: z.literal('device'), action: u8, value: u16.optional() }),
 ])
 
 export const ActionBindingSchema = z
@@ -893,6 +894,19 @@ export const BoardSchema = z
         'Build-time board definition for the DT/Kconfig generator (never in the blob).',
     )
 
+// pattern-check: skip declarative zod schema for one mouse button action
+const DPI = z.number().int().min(1).max(0xffff)
+export const MouseButtonActionSchema = z
+    .object({
+        action: z.enum(['dpiCycle', 'dpiUp', 'dpiDown', 'dpiSet', 'sniper']),
+        dpi: DPI.optional(),
+    })
+    .refine((a) => a.dpi !== undefined || !['dpiSet', 'sniper'].includes(a.action), {
+        message: 'dpiSet and sniper need a dpi',
+        path: ['dpi'],
+    })
+    .describe('A DEVICE action on a mouse button (DPI stages, sniper).')
+
 export const MouseSchema = z
     .looseObject({
         cpi: z.number().int().min(0).max(0xffff).optional(),
@@ -926,11 +940,42 @@ export const MouseSchema = z
                 'Physical button i reports as buttonMap[i] (0..7), or null to ' +
                     'drop it.',
             ),
+        dpiStages: z
+            .array(z.number().int().min(1).max(0xffff))
+            .min(1)
+            .max(5)
+            .optional()
+            .describe('DPIs the DPI buttons step through (TBL_MOUSE v3).'),
+        dpiStage: z
+            .number()
+            .int()
+            .min(0)
+            .max(4)
+            .optional()
+            .describe('The stage the mouse starts on (index into dpiStages).'),
+        buttonActions: z
+            .array(MouseButtonActionSchema.nullable())
+            .length(8)
+            .optional()
+            .describe(
+                'Mouse image only: what physical button i does instead of what ' +
+                    'buttonMap says (TBL_ACTION_BINDING); null = the button map.',
+            ),
+    })
+    .superRefine((m, ctx) => {
+        if (m.dpiStage !== undefined && m.dpiStage >= (m.dpiStages?.length ?? 1)) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['dpiStage'],
+                message: 'dpiStage must index into dpiStages',
+            })
+        }
     })
     .describe(
         'Pointer/mouse-node settings (TBL_MOUSE, §4b): sensor cpi, auto-layer ' +
-            'timeout, an acceleration curve of [speedIn, multX100] points, and ' +
-            '(TBL_MOUSE v2) axis inverts / swap, scroll divisor and button map.',
+            'timeout, an acceleration curve of [speedIn, multX100] points, ' +
+            '(TBL_MOUSE v2) axis inverts / swap, scroll divisor and button map, ' +
+            '(v3) DPI stages, and a mouse image\'s button actions.',
     )
 
 // pattern-check: skip plain zod wire-DTO schema mirroring TBL_CLUSTER

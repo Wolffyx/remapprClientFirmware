@@ -184,6 +184,86 @@ describe('mouse device document (device-config plan, step 3)', () => {
         ).toThrow()
     })
 
+    describe('DPI stages and button actions (input-layout plan §3)', () => {
+        const STAGED = {
+            ...MOUSE_DOC,
+            mouse: {
+                dpiStages: [400, 800, 1600],
+                dpiStage: 1,
+                buttonActions: [
+                    null,
+                    null,
+                    null,
+                    { action: 'dpiCycle' },
+                    { action: 'sniper', dpi: 400 },
+                    null,
+                    null,
+                    null,
+                ],
+            },
+            radio: undefined,
+        }
+        // TBL_MOUSE v3 is the firmware golden (test_mouse_decode.c
+        // test_v3_golden); TBL_ACTION_BINDING matches make_mouse_blob.py
+        // --button-action 3:cycle --button-action 4:sniper=400.
+        // prettier-ignore
+        const STAGED_BODY = [
+            0x10, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+            0x08, 0x00, 0x03, 0x00, 0x1c, 0x00, 0x00, 0x00, // TBL_MOUSE v3, 28 B
+            0x20, 0x03, 0x00, 0x00, 0x00, 0x00,             // cpi 800 = stage 1
+            0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+            0x03, 0x01, 0x90, 0x01, 0x20, 0x03, 0x40, 0x06, 0x00, 0x00, 0x00, 0x00,
+            0x11, 0x00, 0x01, 0x00, 0x18, 0x00, 0x00, 0x00, // TBL_ACTION_BINDING
+            0x02, 0x00, 0x08, 0x00,                         // 2 records, 8 buttons
+            0x03, 0x00, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, // 3: cycle
+            0x04, 0x00, 0x07, 0x00, 0x05, 0x00, 0x90, 0x01, 0x00, 0x00, // 4: sniper 400
+        ]
+
+        it('encodes TBL_MOUSE v3 and the actions byte-for-byte', () => {
+            const blob = buildRemapprDeviceBlob(
+                parseDeviceConfig(JSON.stringify(STAGED)),
+                { configVersion: 6 },
+            )
+            expect(Array.from(blob.subarray(20))).toEqual(STAGED_BODY)
+        })
+
+        it('round-trips through the decoder', () => {
+            const cfg = parseDeviceConfig(JSON.stringify(STAGED))
+            const blob = buildRemapprDeviceBlob(cfg, { configVersion: 6 })
+            const r = decodeRemapprDeviceBlob(blob)
+            expect(r.code).toBe(DecodeCode.OK)
+            expect(r.mouse).toEqual(STAGED.mouse)
+            expect(
+                buildRemapprDeviceBlob({ ...cfg, mouse: r.mouse }, { configVersion: 6 }),
+            ).toEqual(blob)
+        })
+
+        it('writes no action table without actions, and v2 without stages', () => {
+            const blob = buildRemapprDeviceBlob(
+                parseDeviceConfig(
+                    JSON.stringify({ ...STAGED, mouse: { buttonMap: [1, 0, 2, 3, 4, 5, 6, 7] } }),
+                ),
+                { configVersion: 1 },
+            )
+            const r = decodeRemapprDeviceBlob(blob)
+            expect(r.mouse).toEqual({ buttonMap: [1, 0, 2, 3, 4, 5, 6, 7] })
+            expect(blob[34]).toBe(2) // TBL_MOUSE version
+            expect(blob.length).toBe(20 + 12 + 8 + 16)
+        })
+
+        it('refuses a stage past the list and a sniper without its DPI', () => {
+            const bad = (mouse: unknown) => () =>
+                parseDeviceConfig(JSON.stringify({ ...STAGED, mouse }))
+            expect(bad({ dpiStages: [400, 800], dpiStage: 2 })).toThrow()
+            expect(bad({ dpiStage: 1 })).toThrow()
+            expect(bad({ dpiStages: [400, 800, 1600, 3200, 6400, 12800] })).toThrow()
+            expect(bad({ dpiStages: [0] })).toThrow()
+            expect(
+                bad({ buttonActions: [{ action: 'sniper' }, null, null, null, null, null, null, null] }),
+            ).toThrow()
+        })
+    })
+
     it('tells a dongle blob from a mouse blob', () => {
         const dongle = buildRemapprDeviceBlob(parseDeviceConfig(JSON.stringify(DOC)), {
             configVersion: 1,

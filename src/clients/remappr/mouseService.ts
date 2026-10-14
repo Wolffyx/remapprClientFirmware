@@ -273,7 +273,11 @@ export class RemapprMouseService extends KeylessServiceBase {
             getModel: () => Promise.resolve(this.layout.model()),
             getCatalog: async () => {
                 await this.load()
-                return mouseCatalog(this.motionCfg, this.rates)
+                return mouseCatalog(
+                    this.motionCfg,
+                    this.rates,
+                    this.draft?.mouse,
+                )
             },
             getProfiles: () =>
                 Promise.resolve({ profiles: [PROFILE], activeId: PROFILE.id }),

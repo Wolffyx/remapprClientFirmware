@@ -4,7 +4,8 @@
 // TBL_PERSONALITY (which device it is for) and that device's own tables; no
 // keymap tables. The firmware refuses a blob whose personality is not its own,
 // so the personality is always emitted. The dongle reads TBL_DONGLE (id 25);
-// the mouse reads TBL_MOUSE (id 8) and TBL_RADIO (id 26). Byte layout mirrors
+// the mouse reads TBL_MOUSE (id 8), its button actions from TBL_ACTION_BINDING
+// (id 17) and TBL_RADIO (id 26). Byte layout mirrors
 // firmware include/remappr/config_blob.h, lib/config_blob/decode_dongle.c and
 // include/remappr/radio_settings.h.
 import type { ConfigDevice, DongleSettings } from '../../device'
@@ -26,7 +27,13 @@ import {
     readBlobFrames,
     type TableFrame,
 } from './decode'
-import { mouseRecord, readMouseTable } from './mouse'
+import {
+    MOUSE_ACTION_POSITIONS,
+    mouseActionRecords,
+    mouseRecord,
+    readMouseActions,
+    readMouseTable,
+} from './mouse'
 import { radioRecord, readRadio } from './radio'
 
 type DevicePersonality = ConfigDevice['personality']
@@ -70,6 +77,8 @@ export function buildRemapprDeviceBlob(
     if (config.dongle) addDongle(builder, config.dongle)
     const mouse = config.mouse ? mouseRecord(config.mouse) : undefined
     if (mouse) builder.mouseTable(mouse)
+    const actions = config.mouse ? mouseActionRecords(config.mouse) : []
+    if (actions.length) builder.actionBindingTable(MOUSE_ACTION_POSITIONS, actions)
     const radio = config.radio ? radioRecord(config.radio) : undefined
     if (radio) builder.radioTable(radio)
     return builder.finalize(
@@ -146,10 +155,17 @@ function decodeMouseTables(
     const out: DeviceTables = {}
     const mt = table(TableId.Mouse)
     if (mt) {
-        if (mt.version < 1 || mt.version > 2) return DecodeCode.TABLE_VER
+        if (mt.version < 1 || mt.version > 3) return DecodeCode.TABLE_VER
         const m = readMouseTable(bytes, mt.start, mt.end, mt.version)
         if (typeof m === 'string') return DecodeCode.TABLE_FRAME
         out.mouse = m
+    }
+    const at = table(TableId.ActionBinding)
+    if (at) {
+        if (at.version !== 1) return DecodeCode.TABLE_VER
+        const buttonActions = readMouseActions(bytes, at)
+        if (typeof buttonActions === 'string') return DecodeCode.TABLE_FRAME
+        if (buttonActions) out.mouse = { ...out.mouse, buttonActions }
     }
     const rt = table(TableId.Radio)
     if (rt) {

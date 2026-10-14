@@ -4,7 +4,7 @@ import { runControlsContractSuite } from '@firmware/__tests__/controlsContract'
 import type { ConfigDevice } from '../../config/device'
 import type { DeviceConfigApi, MouseMotionApi } from '../../service'
 import { RemapprMouseService, type MouseServiceDeps } from './mouseService'
-import { applyMouseBinding, mouseBindings } from './mouseControls'
+import { applyMouseBinding, mouseBindings, mouseCatalog } from './mouseControls'
 import { HwCap, type MotionConfig, type RateLimits } from './protocol'
 
 const DOC: ConfigDevice = {
@@ -94,6 +94,90 @@ describe('mouse controls mapping', () => {
         const back = applyMouseBinding(swapped, 'back', { a: 'btn:3' })
         expect(back.mouse?.buttonMap).toBeUndefined()
         expect(back.mouse).toEqual({ cpi: 1600, invertY: true })
+    })
+
+    const SENSOR = { poll: 1000, lod: '', snap: false, motionSync: false }
+
+    it('binds a DPI action instead of the button map, and gives it back', () => {
+        const cyc = applyMouseBinding(DOC, 'back', { a: 'dev:dpiCycle' })
+        expect(cyc.mouse?.buttonActions?.[3]).toEqual({ action: 'dpiCycle' })
+        expect(cyc.mouse?.buttonMap).toBeUndefined()
+        expect(mouseBindings(cyc.mouse, MOTION, null).back).toEqual({
+            a: 'dev:dpiCycle',
+        })
+
+        const snipe = applyMouseBinding(cyc, 'wheel', {
+            ...mouseBindings(cyc.mouse, MOTION, null).wheel!,
+            click: 'dev:sniper:400',
+        } as never)
+        expect(snipe.mouse?.buttonActions?.[2]).toEqual({
+            action: 'sniper',
+            dpi: 400,
+        })
+
+        const back = applyMouseBinding(snipe, 'back', { a: 'btn:4' })
+        expect(back.mouse?.buttonActions?.[3]).toBeNull()
+        expect(back.mouse?.buttonMap?.[3]).toBe(4)
+        const plain = applyMouseBinding(
+            applyMouseBinding(back, 'back', { a: 'btn:3' }),
+            'wheel',
+            {
+                ...mouseBindings(back.mouse, MOTION, null).wheel!,
+                click: 'btn:2',
+            } as never,
+        )
+        expect(plain.mouse).toEqual({ cpi: 1600, invertY: true })
+    })
+
+    it('writes more than one stage as DPI stages', () => {
+        const doc = applyMouseBinding(DOC, 'sensor', {
+            ...SENSOR,
+            stages: [400, 800, 1600],
+            active: 2,
+        })
+        expect(doc.mouse).toEqual({
+            invertY: true,
+            dpiStages: [400, 800, 1600],
+            dpiStage: 2,
+        })
+        expect(mouseBindings(doc.mouse, MOTION, null).sensor).toMatchObject({
+            stages: [400, 800, 1600],
+            active: 2,
+        })
+        const one = applyMouseBinding(doc, 'sensor', {
+            ...SENSOR,
+            stages: [900],
+            active: 0,
+        })
+        expect(one.mouse).toEqual({ invertY: true, cpi: 900 })
+    })
+
+    it('offers the DPI actions the sensor can do', () => {
+        const c = mouseCatalog(MOTION, null, {
+            buttonActions: [
+                null,
+                null,
+                null,
+                { action: 'sniper', dpi: 1234 },
+                null,
+                null,
+                null,
+                null,
+            ],
+        })
+        const dpi = c.actions.filter((a) => a.group === 'dpi').map((a) => a.id)
+        expect(dpi).toEqual([
+            'dev:dpiCycle',
+            'dev:dpiUp',
+            'dev:dpiDown',
+            'dev:sniper:200',
+            'dev:sniper:400',
+            'dev:sniper:800',
+            'dev:sniper:1234',
+        ])
+        expect(c.sensor?.maxStages).toBe(5)
+        const narrow = mouseCatalog({ ...MOTION, dpiMin: 400 }, null)
+        expect(narrow.actions.map((a) => a.id)).not.toContain('dev:sniper:200')
     })
 
     it('writes the sensor stage as the CPI', () => {

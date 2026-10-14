@@ -397,6 +397,8 @@ function lowerSemanticAction(a: CanonSemanticAction): {
                 arg0: a.hue ?? 0,
                 arg1: (a.sat ?? 0) | ((a.val ?? 0) << 8),
             }
+        case 'device':
+            return { kind: 7, code: a.action, arg0: a.value ?? 0, arg1: 0 }
     }
 }
 

@@ -721,6 +721,9 @@ export type CanonSemanticAction =
           sat?: number
           val?: number
       }
+    /** The device's own setting: `action` = enum remappr_device_action (DPI
+     *  stages, sniper); `value` = the DPI for DPI_SET / SNIPER. */
+    | { kind: 'device'; action: number; value?: number }
 
 /** One semantic action bound to a physical key POSITION (§F, TBL_ACTION_BINDING).
  *  A flat position-space with no layer dimension — matches the wire. ADDITIVE:
@@ -794,8 +797,25 @@ export interface ConfigMouse {
     /** Eight entries: physical button i reports as buttonMap[i] (0..7), or
      *  null to drop it. Omit to keep the buttons as wired. */
     buttonMap?: Array<number | null>
+    /* TBL_MOUSE version 3 (input-layout plan §3). */
+    /** 1..5 DPIs the DPI buttons step through; the mouse starts on
+     *  dpiStages[dpiStage] (written as cpi too). */
+    dpiStages?: number[]
+    /** The stage the mouse starts on, an index into dpiStages (default 0). */
+    dpiStage?: number
+    /** Mouse image only (TBL_ACTION_BINDING): eight entries, what physical
+     *  button i does instead of what buttonMap says; null = the button map. */
+    buttonActions?: Array<MouseButtonAction | null>
     /** Open shape, like the schema (MouseSchema is a loose object). */
     [k: string]: unknown
+}
+
+/** What a mouse button can do besides report a button (a DEVICE action,
+ *  firmware action.h enum remappr_device_action). `dpi` is required for
+ *  dpiSet and sniper. */
+export interface MouseButtonAction {
+    action: 'dpiCycle' | 'dpiUp' | 'dpiDown' | 'dpiSet' | 'sniper'
+    dpi?: number
 }
 
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_CLUSTER layout

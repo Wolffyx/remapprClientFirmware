@@ -482,6 +482,8 @@ export interface MouseTable {
     accel: Array<{ speedIn: number; multX100: number }>
     /** Version-2 tail (scroll divisor + button map); absent = a v1 table. */
     v2?: { scrollDivisor: number; buttonMap: number[] }
+    /** Version-3 tail (DPI stages; needs v2); absent = no stages. */
+    v3?: { stages: number[]; stage: number }
 }
 
 /** TBL_MOUSE v2 flag bits (firmware mouse.h REMAPPR_MOUSE_FLAG_*). */
@@ -496,6 +498,19 @@ export const MouseFlag = {
 export const MOUSE_BUTTON_OFF = 0xff
 export const MOUSE_TBL_HDR_LEN = 6
 export const MOUSE_TBL_V2_TAIL_LEN = 10
+export const MOUSE_TBL_V3_TAIL_LEN = 12
+export const MOUSE_DPI_STAGES_MAX = 5
+
+/** Action kind DEVICE and its codes (firmware action.h enum
+ *  remappr_device_action). */
+export const ACT_DEVICE = 7
+export const DeviceAction = {
+    dpiCycle: 1,
+    dpiUp: 2,
+    dpiDown: 3,
+    dpiSet: 4,
+    sniper: 5,
+} as const
 
 /** One action-binding record (10 bytes): an additive per-position action that
  *  sits alongside the keymap binding. `kind`/`code`/`arg0`/`arg1` are passed
@@ -732,11 +747,12 @@ export class BlobBuilder {
     // pattern-check: skip one more table-emit method on the existing Builder
     /** TBL_MOUSE (id 8, §4b): u16 cpi, u16 auto_layer_timeout_ms,
      *  u8 accel_point_count, u8 flags, then N × { u16 speed_in, u16 mult_x100 };
-     *  version 2 appends u8 scroll_divisor, u8 reserved, u8 button_map[8] —
-     *  matching firmware decode_mouse.c. Flags are written only in version 2
-     *  (version 1 reserves the byte). */
+     *  version 2 appends u8 scroll_divisor, u8 reserved, u8 button_map[8];
+     *  version 3 then u8 stage_count, u8 stage, u16 stages[5] — matching
+     *  firmware decode_mouse.c. Flags are written from version 2 (version 1
+     *  reserves the byte). */
     mouseTable(m: MouseTable): this {
-        this.tableBegin(TableId.Mouse, m.v2 ? 2 : 1)
+        this.tableBegin(TableId.Mouse, m.v3 ? 3 : m.v2 ? 2 : 1)
         this.w.u16(m.cpi)
         this.w.u16(m.autoLayerTimeoutMs)
         this.w.u8(m.accel.length)
@@ -749,6 +765,13 @@ export class BlobBuilder {
             this.w.u8(m.v2.scrollDivisor)
             this.w.u8(0) // reserved
             for (const to of m.v2.buttonMap) this.w.u8(to)
+        }
+        if (m.v2 && m.v3) {
+            this.w.u8(m.v3.stages.length)
+            this.w.u8(m.v3.stage)
+            for (let i = 0; i < MOUSE_DPI_STAGES_MAX; i++) {
+                this.w.u16(m.v3.stages[i] ?? 0)
+            }
         }
         this.tableEnd()
         return this

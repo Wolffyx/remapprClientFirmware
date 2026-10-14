@@ -1082,7 +1082,7 @@ function readMouse(
     t: TableFrame,
     diag: DiagnosticBag,
 ): ConfigMouse | undefined {
-    if (t.version < 1 || t.version > 2) {
+    if (t.version < 1 || t.version > 3) {
         diag.error(`mouse table version ${t.version} not supported`)
         return undefined
     }
@@ -1604,6 +1604,10 @@ function raiseSemanticAction(
             if (val !== 0) a.val = val
             return a
         }
+        case 7:
+            return arg0 !== 0
+                ? { kind: 'device', action: code, value: arg0 }
+                : { kind: 'device', action: code }
         default:
             return { kind: 'none' }
     }

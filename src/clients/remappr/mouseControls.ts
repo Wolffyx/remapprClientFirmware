@@ -2,20 +2,23 @@
 //
 // What the Remappr mouse firmware lets the app change, as controls:
 // - eight HID buttons, each re-mappable to report as another button or
-//   nothing (TBL_MOUSE `button_map`); button 3 (Middle) is the wheel click;
-// - the sensor resolution (TBL_MOUSE `cpi`), one stage — the firmware has no
-//   DPI stages;
+//   nothing (TBL_MOUSE `button_map`), or bound to a DPI action instead — DPI
+//   cycle / up / down or a held sniper DPI (TBL_ACTION_BINDING, kind DEVICE;
+//   input-layout plan §3); button 3 (Middle) is the wheel click;
+// - the sensor resolution: up to five DPI stages the DPI buttons step through
+//   (TBL_MOUSE v3), or one (`cpi`);
 // - the report rate, only when the firmware answers GET_RATE_LIMITS.
 // Where the controls sit comes from the mouse itself (GET_INPUT_LAYOUT) when
 // its firmware reports it; otherwise the layout is the generic mouse layout.
 import type { ConfigDevice } from '../../config/device'
-import type { ConfigMouse } from '../../config/types'
+import type { ConfigMouse, MouseButtonAction } from '../../config/types'
 import { MOUSE_BUTTON_NAMES } from '../../config/deviceFields'
 import { defaultLayout } from '../../devices/defaultLayout'
 import type {
     ButtonBinding,
     ControlBinding,
     ControlsCatalog,
+    DeviceAction,
     DeviceBindings,
     DeviceModel,
     SensorBinding,
@@ -59,6 +62,63 @@ const ACTION_LABELS = [
     'Middle click',
     ...MOUSE_BUTTON_NAMES.slice(3),
 ]
+
+// DPI actions (kind DEVICE): `dev:<action>` or `dev:<action>:<dpi>`.
+const DEV_PREFIX = 'dev:'
+const DEV_LABELS: Readonly<
+    Record<MouseButtonAction['action'], (dpi?: number) => string>
+> = {
+    dpiCycle: () => 'DPI cycle',
+    dpiUp: () => 'DPI up',
+    dpiDown: () => 'DPI down',
+    dpiSet: (dpi) => `DPI ${dpi}`,
+    sniper: (dpi) => `Sniper ${dpi} DPI (hold)`,
+}
+const STEPS: readonly MouseButtonAction[] = [
+    { action: 'dpiCycle' },
+    { action: 'dpiUp' },
+    { action: 'dpiDown' },
+]
+/** Sniper DPIs offered, where the sensor can do them. */
+const SNIPER_PRESETS = [200, 400, 800]
+/** DPI stages the firmware keeps (TBL_MOUSE v3). */
+const MAX_DPI_STAGES = 5
+
+const devId = (a: MouseButtonAction): string =>
+    `${DEV_PREFIX}${a.action}${a.dpi ? `:${a.dpi}` : ''}`
+
+/** A catalog id back to the button action, or null for any other id. */
+function devAction(id: string | null | undefined): MouseButtonAction | null {
+    if (!id?.startsWith(DEV_PREFIX)) return null
+    const [action, dpi] = id.slice(DEV_PREFIX.length).split(':')
+    if (!(action! in DEV_LABELS)) return null
+    const a = action as MouseButtonAction['action']
+    return dpi ? { action: a, dpi: Number(dpi) } : { action: a }
+}
+
+/** The DPI actions to offer: the steps, the sniper presets in range, and any
+ *  the document already binds (so a bound value always has a label). */
+function dpiActions(
+    min: number,
+    max: number,
+    mouse: ConfigMouse | undefined,
+): DeviceAction[] {
+    const sniper = SNIPER_PRESETS.filter((d) => d >= min && d <= max).map(
+        (dpi): MouseButtonAction => ({ action: 'sniper', dpi }),
+    )
+    const bound = (mouse?.buttonActions ?? []).filter(
+        (a): a is MouseButtonAction => !!a,
+    )
+    const byId = new Map(
+        [...STEPS, ...sniper, ...bound].map((a) => [devId(a), a] as const),
+    )
+    return [...byId].map(([id, a]) => ({
+        id,
+        label: DEV_LABELS[a.action](a.dpi),
+        group: 'dpi',
+        category: 'mouse' as const,
+    }))
+}
 
 /** HID button index → control id. */
 const ID_BY_INDEX: Readonly<Record<number, string>> = Object.fromEntries(
@@ -107,20 +167,30 @@ export function mouseModel(
     })
 }
 
-/** What the mouse can be set to: report-as-button actions and the CPI range. */
+/** What the mouse can be set to: report-as-button actions, DPI actions and
+ *  the CPI range. `mouse` is the document, for the DPI values it binds. */
 export function mouseCatalog(
     motion: MotionConfig | null,
     rates: RateLimits | null,
+    mouse?: ConfigMouse,
 ): ControlsCatalog {
     const poll = rates && rates.supported.length > 0
+    const dpiMin = motion?.dpiMin || 100
+    const dpiMax = motion?.dpiMax || 26000
     return {
-        groups: [{ id: 'mouse', label: 'Mouse buttons', category: 'mouse' }],
-        actions: ACTION_LABELS.map((label, i) => ({
-            id: `${ACTION_PREFIX}${i}`,
-            label,
-            group: 'mouse',
-            category: 'mouse',
-        })),
+        groups: [
+            { id: 'mouse', label: 'Mouse buttons', category: 'mouse' },
+            { id: 'dpi', label: 'DPI', category: 'mouse' },
+        ],
+        actions: [
+            ...ACTION_LABELS.map((label, i) => ({
+                id: `${ACTION_PREFIX}${i}`,
+                label,
+                group: 'mouse',
+                category: 'mouse' as const,
+            })),
+            ...dpiActions(dpiMin, dpiMax, mouse),
+        ],
         outputs: {},
         fields: {
             button: ['a'],
@@ -128,10 +198,10 @@ export function mouseCatalog(
             sensor: poll ? ['stages', 'poll'] : ['stages'],
         },
         sensor: {
-            dpiMin: motion?.dpiMin || 100,
-            dpiMax: motion?.dpiMax || 26000,
+            dpiMin,
+            dpiMax,
             dpiStep: motion?.dpiStep || 100,
-            maxStages: 1,
+            maxStages: MAX_DPI_STAGES,
             pollRates: poll ? rates.supported : [],
             lods: [],
         },
@@ -146,6 +216,15 @@ function mappedTo(mouse: ConfigMouse | undefined, i: number): number | null {
     return v === undefined ? i : v
 }
 
+/** Button `i`'s action id: its DPI action, else the button it reports as. */
+function buttonAction(
+    mouse: ConfigMouse | undefined,
+    i: number,
+): string | null {
+    const dev = mouse?.buttonActions?.[i]
+    return dev ? devId(dev) : actionOf(mappedTo(mouse, i))
+}
+
 /** The document's mouse section as control bindings. */
 export function mouseBindings(
     mouse: ConfigMouse | undefined,
@@ -155,12 +234,12 @@ export function mouseBindings(
     const out: Record<string, ControlBinding> = {}
     for (const [id, i] of Object.entries(BUTTON_INDEX)) {
         if (id === 'wheel') continue
-        out[id] = { a: actionOf(mappedTo(mouse, i)) } satisfies ButtonBinding
+        out[id] = { a: buttonAction(mouse, i) } satisfies ButtonBinding
     }
     out.wheel = {
         up: null,
         down: null,
-        click: actionOf(mappedTo(mouse, BUTTON_INDEX.wheel!)),
+        click: buttonAction(mouse, BUTTON_INDEX.wheel!),
         tl: null,
         tr: null,
         lines: mouse?.scrollDivisor ?? 1,
@@ -168,8 +247,8 @@ export function mouseBindings(
         freeSpin: false,
     } satisfies WheelBinding
     out.sensor = {
-        stages: [mouse?.cpi ?? motion?.dpi ?? 800],
-        active: 0,
+        stages: mouse?.dpiStages ?? [mouse?.cpi ?? motion?.dpi ?? 800],
+        active: mouse?.dpiStages ? (mouse.dpiStage ?? 0) : 0,
         poll: rates?.currentHz ?? 1000,
         lod: '',
         snap: false,
@@ -199,7 +278,34 @@ function compact(mouse: ConfigMouse): ConfigMouse | undefined {
     return Object.keys(out).length ? out : undefined
 }
 
-/** `doc` with control `id` bound to `binding`. Unknown controls are ignored. */
+/** `list` with button `i`'s action set (null = none); dropped when empty. */
+function withAction(
+    list: ConfigMouse['buttonActions'],
+    i: number,
+    a: MouseButtonAction | null,
+): ConfigMouse['buttonActions'] {
+    const next = [...(list ?? IDENTITY.map(() => null))]
+    next[i] = a
+    return next.some(Boolean) ? next : undefined
+}
+
+/** One stage is plain `cpi`; more are the DPI stages (TBL_MOUSE v3). */
+function sensorFields(b: SensorBinding): Partial<ConfigMouse> {
+    const stages = b.stages.slice(0, MAX_DPI_STAGES)
+    if (stages.length <= 1) {
+        return { cpi: stages[0], dpiStages: undefined, dpiStage: undefined }
+    }
+    const stage = Math.min(Math.max(b.active, 0), stages.length - 1)
+    return {
+        cpi: undefined,
+        dpiStages: [...stages],
+        dpiStage: stage || undefined,
+    }
+}
+
+/** `doc` with control `id` bound to `binding`. Unknown controls are ignored.
+ *  A DPI action leaves the button's map entry at the identity, so removing
+ *  the action later gives the button back. */
 export function applyMouseBinding(
     doc: ConfigDevice,
     id: string,
@@ -212,7 +318,7 @@ export function applyMouseBinding(
     if (id === 'sensor') {
         return withMouse({
             ...doc.mouse,
-            cpi: (binding as SensorBinding).stages[0],
+            ...sensorFields(binding as SensorBinding),
         })
     }
     const i = BUTTON_INDEX[id]
@@ -221,8 +327,10 @@ export function applyMouseBinding(
         id === 'wheel'
             ? (binding as WheelBinding).click
             : (binding as ButtonBinding).a
+    const dev = devAction(a)
     return withMouse({
         ...doc.mouse,
-        buttonMap: remap(doc.mouse?.buttonMap, i, indexOf(a)),
+        buttonActions: withAction(doc.mouse?.buttonActions, i, dev),
+        buttonMap: remap(doc.mouse?.buttonMap, i, dev ? i : indexOf(a)),
     })
 }
