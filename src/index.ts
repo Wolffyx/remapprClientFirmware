@@ -130,3 +130,12 @@ export {
     MOCK_TRANSPORT_LABEL,
 } from './clients/mock/adapter'
 export type { MockServiceOptions } from './clients/mock/service'
+// Try Demo's device list (keyboards, macro pad, mouse, gamepad, flight stick,
+// generic gamepad): the app lists these and connects by id.
+export {
+    connectDemoDevice,
+    DEMO_DEVICES,
+    demoDeviceModel,
+    type DemoDevice,
+    type DemoDeviceId,
+} from './clients/mock/devices/demoDevices'
