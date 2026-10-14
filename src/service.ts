@@ -396,8 +396,10 @@ export interface NodeView {
     id: number
     /** Adapter-formatted human label (e.g. "Node 0x0007"). */
     label: string
-    /** Firmware personality byte (board kind); 0 when unknown. */
+    /** Raw device-type byte of the roster record; 0 when unknown. */
     personality: number
+    /** What the node is, when the adapter can tell (see devices/types.ts). */
+    kind?: DeviceKind
     /** Link is up right now. */
     online: boolean
     /** Node is bonded to the dongle (vs. a transient sighting). */
@@ -585,6 +587,22 @@ export interface DeviceConfigApi {
      *  applies it at once and drops any live override (SET_NKRO, SET_DPI, …)
      *  made under the previous config. Resolves to the new config_version. */
     write(config: ConfigDevice): Promise<number>
+    /** Staged edits of the document, shared by every editor of this device (the
+     *  controls facade and the settings panels): `service.commit()` writes it,
+     *  `discardChanges()` drops it. Absent = edit through `write()` only (or a
+     *  read-only view). */
+    readonly draft?: DeviceConfigDraft
+}
+
+// pattern-check: skip — interface of the staged device document, beside DeviceConfigApi.
+/** The device document as it will be written by the next `commit()`. */
+export interface DeviceConfigDraft {
+    /** The staged document; null until the device has been read. */
+    get(): ConfigDevice | null
+    /** Stage `config` (validated when committed). */
+    set(config: ConfigDevice): void
+    /** The staged document changed (a set, a discard, a commit re-read). */
+    onChanged(cb: (config: ConfigDevice) => void): () => void
 }
 
 /** Re-exported with MouseMotionApi so a consumer imports the facade and its wire

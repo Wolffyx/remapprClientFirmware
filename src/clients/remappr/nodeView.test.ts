@@ -181,6 +181,7 @@ describe('buildNodesApi.list', () => {
             id: 0x0007,
             label: 'Node 0x0007',
             personality: 2,
+            kind: 'mouse',
             online: true,
             bonded: true,
             rssi: -40,
@@ -270,6 +271,10 @@ describe('buildNodesApi.open (mouse node)', () => {
         expect(svc.device?.personality).toBe('mouse')
         expect(svc.device?.writable).toBe(false)
         expect(svc.motion?.writable).toBe(false)
+        // Shown in the device editor, but nothing can be written through it.
+        expect(svc.controls).toBeDefined()
+        expect(svc.controls?.setBinding).toBeUndefined()
+        expect(svc.device?.draft).toBeUndefined()
         // Discovery only: no keymap read, no geometry fetch.
         expect(fake.targets.every((t) => t === 0x0007)).toBe(true)
         await svc.disconnect()

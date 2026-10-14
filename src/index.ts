@@ -42,6 +42,7 @@ export type {
     ClusterDiag,
     ClusterPeer,
     DeviceConfigApi,
+    DeviceConfigDraft,
     DeviceConfigSnapshot,
     DynamicEntriesApi,
     ConnectNotice,

@@ -5,9 +5,10 @@
 // the existing editor renders unchanged. The dongle's RPC is shared; node views
 // never seal and never tear it down.
 import type { NodesApi, NodeView, KeyboardService } from '../../service'
+import type { DeviceKind } from '../../devices/types'
 import type { DeviceInfo } from '../../types'
 
-import { loadDeviceConfig, makeKeylessConfig } from './configRead'
+import { loadDeviceConfig } from './configRead'
 import { buildDeviceConfigApi } from './deviceConfig'
 import { deviceKind } from './deviceKind'
 import { discover, type DiscoveryResult } from './discovery'
@@ -27,17 +28,28 @@ import {
 import type { DeviceInfo as RawDeviceInfo, NodeRecord } from './protocol'
 import type { RemapprRpc } from './rpc'
 import { RemapprKeyboardService } from './service'
+import { RemapprMouseService } from './mouseService'
 
 /** "0x0007"-style short-id, for labels and node device names. */
 const hexId = (shortId: number): string =>
     `0x${shortId.toString(16).padStart(4, '0')}`
 
 /** Map a wire node record onto the firmware-neutral UI view. */
+/** The roster's device-type byte is the radio's own enum (radio_proto.h:
+ *  NONE 0, KEYBOARD 1, MOUSE 2, CONFIG_TOOL 3), not the personality — 3 is a
+ *  config tool there, not a recovery image. */
+const KIND_BY_RADIO_TYPE: Readonly<Partial<Record<number, DeviceKind>>> = {
+    1: 'keyboard',
+    2: 'mouse',
+}
+
 function toNodeView(r: NodeRecord): NodeView {
+    const kind = KIND_BY_RADIO_TYPE[r.personality]
     return {
         id: r.shortId,
         label: `Node ${hexId(r.shortId)}`,
         personality: r.personality,
+        ...(kind ? { kind } : {}),
         online: r.online,
         bonded: r.bonded,
         rssi: r.rssi,
@@ -72,18 +84,9 @@ function openMouseView(
     discovery: DiscoveryResult,
 ): KeyboardService {
     const deviceInfo = nodeDeviceInfo(id, discovery.deviceInfo, 'Mouse')
-    return new RemapprKeyboardService({
-        rpc,
+    return new RemapprMouseService({
         deviceInfo,
-        config: makeKeylessConfig(deviceInfo.name),
-        configVersion: discovery.deviceInfo.configVersion,
-        layouts: [],
-        activeLayoutId: 0,
-        maxLayers: 0,
         limits: discovery.limits,
-        readOnly: true,
-        sharesTransport: true,
-        kind: 'mouse',
         device: buildDeviceConfigApi(rpc, {
             personality: 'mouse',
             targetNode: id,
@@ -91,6 +94,9 @@ function openMouseView(
             writable: false,
         }),
         motion: buildMouseMotionApi(rpc, { targetNode: id, writable: false }),
+        writable: false,
+        // The dongle's RPC: closing the view must not close it.
+        onTransportClosed: (cb) => rpc.onClosed(cb),
     })
 }
 

@@ -128,14 +128,17 @@ const limitsBytes = (): Uint8Array =>
         ...le16(0x003f), // feature_bitmask lo (§7.4.1 Phase-2 features)
         ...le16(0x0000), // feature_bitmask hi
     ])
-const personalityBytes = (personality = 1): Uint8Array =>
+// A mouse image also serves the MOUSE namespace (control.c lists it); a
+// fixture can say it does not, to check the motion facade follows the list.
+const personalityBytes = (personality = 1, mouseNs = personality === 2): Uint8Array =>
     Uint8Array.from([
         0, // role NODE
         personality, // KEYBOARD_NODE by default
         2, // proto_major
-        1, // ns_count
+        mouseNs ? 2 : 1, // ns_count
         Namespace.COMMON,
         ...le16(0x7e),
+        ...(mouseNs ? [Namespace.MOUSE, ...le16(0x1e)] : []),
         ...le32(0x0001a83f),
     ])
 const boundsBytes = (numPositions: number): Uint8Array =>
@@ -172,7 +175,7 @@ interface FakeRemappr {
 }
 
 function makeFakeRemappr(
-    opts: { protoMax?: number; personality?: number } = {},
+    opts: { protoMax?: number; personality?: number; mouseNs?: boolean } = {},
 ): FakeRemappr {
     const protoMax = opts.protoMax ?? 1
     let controller!: ReadableStreamDefaultController<Uint8Array>
@@ -244,7 +247,7 @@ function makeFakeRemappr(
             let data: Uint8Array | null = null
             if (uch.namespace === Namespace.COMMON) {
                 if (verb === CommonVerb.GET_PERSONALITY_MAP)
-                    data = personalityBytes(opts.personality)
+                    data = personalityBytes(opts.personality, opts.mouseNs)
                 else if (verb === CommonVerb.GET_LIMITS) data = limitsBytes()
             } else if (uch.namespace === Namespace.KEYBOARD) {
                 if (verb === KeyboardVerb.GET_KEYMAP_BOUNDS) {
@@ -569,17 +572,29 @@ describe('RemapprAdapter — dongle connect (lands on the node roster)', () => {
     })
 })
 
-describe('RemapprAdapter — mouse connect (lands on the mouse page)', () => {
+describe('RemapprAdapter — mouse connect (lands on the device editor)', () => {
     it('detects a mouse by personality and exposes its settings', async () => {
         const fake = makeFakeRemappr({ protoMax: 2, personality: 2 })
         const svc = await connectFake(fake)
         expect(svc.kind).toBe('mouse')
         expect(svc.deviceInfo.name).toBe('Remappr Mouse')
-        expect(svc.capabilities.readOnly).toBe(true)
+        // Editable over USB: the device editor stages edits, Save writes them.
+        expect(svc.capabilities.readOnly).toBeUndefined()
+        expect(svc.capabilities.saveMode).toBe('manual')
+        expect(svc.controls?.setBinding).toBeDefined()
+        expect(svc.device?.draft).toBeDefined()
         expect(svc.nodes).toBeUndefined()
         expect(svc.device?.personality).toBe('mouse')
         expect(svc.device?.writable).toBe(true)
         expect(svc.motion?.writable).toBe(true)
+        await svc.disconnect()
+    })
+
+    it('leaves the live controls out when the mouse does not serve MOUSE', async () => {
+        const fake = makeFakeRemappr({ protoMax: 2, personality: 2, mouseNs: false })
+        const svc = await connectFake(fake)
+        expect(svc.kind).toBe('mouse')
+        expect(svc.motion).toBeUndefined()
         await svc.disconnect()
     })
 })

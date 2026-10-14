@@ -156,6 +156,13 @@ export abstract class KeylessServiceBase implements KeyboardService {
         await this.close()
         emit(this.closedListeners, undefined)
     }
+    /** The device went away on its own (transport lost): tell the listeners
+     *  once, without running close(). */
+    protected closedBy(reason?: unknown): void {
+        if (this.closed) return
+        this.closed = true
+        emit(this.closedListeners, reason)
+    }
     /** Release the device (stop timers, close the transport). */
     protected close(): Promise<void> {
         return Promise.resolve()

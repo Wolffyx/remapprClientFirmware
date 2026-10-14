@@ -42,6 +42,8 @@ import {
 } from './protocol'
 import { createRemapprRpc, type RemapprRpc } from './rpc'
 import { RemapprKeyboardService } from './service'
+import { RemapprMouseService } from './mouseService'
+import { getRateLimits, setReportRate } from './reportRate'
 
 const PROBE_TIMEOUT_MS = 1000
 
@@ -129,20 +131,18 @@ function hasConfigStore(discovery: DiscoveryResult): boolean {
     return (discovery.limits?.maxConfigBytes ?? 0) > 0
 }
 
-// pattern-check: skip — builds one more variant of the service this adapter
-// already constructs; plain construction, no new abstraction.
-/** The service for a keyless device on this transport: the dongle (roster +
- *  its own settings) or a mouse (motion + settings). Neither holds a §19
- *  session; each owns its transport and rejects keymap edits. */
-function buildDeviceService(
+// pattern-check: skip — builds the two keyless service variants this adapter
+// constructs; plain construction, no new abstraction.
+/** The dongle's own service: its node roster and its settings. No §19 session;
+ *  it owns its transport and rejects keymap edits. */
+function buildDongleService(
     rpc: RemapprRpc,
     probed: ProbedRemappr,
-    kind: 'dongle' | 'mouse',
 ): RemapprKeyboardService {
     const { discovery, deviceInfo } = probed
     const device = hasConfigStore(discovery)
         ? buildDeviceConfigApi(rpc, {
-              personality: kind,
+              personality: 'dongle',
               name: deviceInfo.name,
               writable: true,
           })
@@ -157,13 +157,46 @@ function buildDeviceService(
         maxLayers: 0,
         limits: discovery.limits,
         readOnly: true,
-        kind,
+        kind: 'dongle',
         device,
-        nodes: kind === 'dongle' ? buildNodesApi(rpc) : undefined,
-        motion:
-            kind === 'mouse'
-                ? buildMouseMotionApi(rpc, { writable: true })
-                : undefined,
+        nodes: buildNodesApi(rpc),
+    })
+}
+
+/** True unless the device lists its namespaces and MOUSE is not among them
+ *  (firmware that predates the list serves it unconditionally). */
+export function servesMouse(discovery: DiscoveryResult): boolean {
+    const ns = discovery.personality?.namespaces
+    return !ns?.length || ns.some((n) => n.namespace === Namespace.MOUSE)
+}
+
+/** A mouse on its own transport: edited in the device editor. */
+function buildMouseService(
+    rpc: RemapprRpc,
+    probed: ProbedRemappr,
+): RemapprMouseService {
+    const { discovery, deviceInfo } = probed
+    return new RemapprMouseService({
+        deviceInfo,
+        limits: discovery.limits,
+        device: hasConfigStore(discovery)
+            ? buildDeviceConfigApi(rpc, {
+                  personality: 'mouse',
+                  name: deviceInfo.name,
+                  writable: true,
+              })
+            : undefined,
+        motion: servesMouse(discovery)
+            ? buildMouseMotionApi(rpc, { writable: true })
+            : undefined,
+        rate: {
+            get: () => getRateLimits(rpc),
+            set: (hz) => setReportRate(rpc, hz),
+        },
+        writable: true,
+        onTransportClosed: (cb) => rpc.onClosed(cb),
+        closeTransport: () =>
+            rpc.close({ abortTransport: true }).catch(() => undefined),
     })
 }
 
@@ -286,8 +319,8 @@ export const remapprAdapter: FirmwareAdapter = {
             // A dongle or a mouse has no auth session and no keymap (§7.2): skip
             // the §19 handshake and keymap load. The dongle surfaces its node
             // roster, the mouse its motion controls, both their own settings.
-            if (kind === 'dongle' || kind === 'mouse')
-                return buildDeviceService(rpc, probed, kind)
+            if (kind === 'dongle') return buildDongleService(rpc, probed)
+            if (kind === 'mouse') return buildMouseService(rpc, probed)
 
             // §19 is capability-gated: a dev/no-auth firmware (CAP_AUTH clear)
             // takes plaintext writes, so skip the handshake entirely there. A
