@@ -14,6 +14,7 @@ import {
     type StockLayout,
 } from './stockLayouts'
 import type {
+    ControlShape,
     DeviceControl,
     DeviceForm,
     DeviceKind,
@@ -146,6 +147,149 @@ const FLIGHTSTICK_IDS = [
     'b7',
 ] as const
 
+type Box = readonly [x: number, y: number, w: number, h: number]
+
+/** How the raw axes of a controller with no known mapping are drawn: the
+ *  first two pairs as sticks, every other axis on its own. */
+export function splitGamepadAxes(axes: number): {
+    sticks: (readonly [x: number, y: number])[]
+    singles: number[]
+} {
+    const pairs = Math.min(2, Math.floor(axes / 2))
+    const sticks = Array.from(
+        { length: pairs },
+        (_, k) => [2 * k, 2 * k + 1] as const,
+    )
+    const singles = Array.from(
+        { length: axes - 2 * pairs },
+        (_, i) => 2 * pairs + i,
+    )
+    return { sticks, singles }
+}
+
+const STICK_SEATS: readonly Box[] = [
+    [1.15, 2.33, 1.7, 1.7],
+    [6.03, 4.2, 1.7, 1.7],
+]
+/** The first two single axes sit where the triggers are. */
+const AXIS_SEATS: readonly Box[] = [
+    [0.7, 0, 2.5, 0.75],
+    [7.3, 0, 2.5, 0.75],
+]
+/** Seats for numbered buttons in index order: the face diamond (bottom, right,
+ *  left, top — how most pads number them), the bumpers, the centre cluster. */
+const BUTTON_SEATS: readonly { shape: ControlShape; box: Box; top?: true }[] = [
+    { shape: 'round', box: [8.13, 3.58, 0.75, 0.75] },
+    { shape: 'round', box: [8.93, 2.78, 0.75, 0.75] },
+    { shape: 'round', box: [7.33, 2.78, 0.75, 0.75] },
+    { shape: 'round', box: [8.13, 1.98, 0.75, 0.75] },
+    { shape: 'pill', box: [0.55, 0.9, 2.95, 0.55], top: true },
+    { shape: 'pill', box: [7.0, 0.9, 2.95, 0.55], top: true },
+    { shape: 'pill', box: [4.0, 2.5, 0.75, 0.38] },
+    { shape: 'pill', box: [5.75, 2.5, 0.75, 0.38] },
+    { shape: 'round', box: [4.88, 3.45, 0.75, 0.75] },
+]
+/** Buttons past the seats line up in rows under the body. */
+const ROW = { x: 2.4, y: 6.4, step: 0.85, perRow: 6, size: 0.7 } as const
+const HAT_BOX: Box = [2.73, 4.15, 1.8, 1.8]
+
+function rawButtons(count: number): DeviceControl[] {
+    return Array.from({ length: count }, (_, i) => {
+        const seat = BUTTON_SEATS[i]
+        const j = i - BUTTON_SEATS.length
+        const box: Box = seat
+            ? seat.box
+            : [
+                  ROW.x + (j % ROW.perRow) * ROW.step,
+                  ROW.y + Math.floor(j / ROW.perRow) * ROW.step,
+                  ROW.size,
+                  ROW.size,
+              ]
+        return control(
+            `btn${i}`,
+            `Button ${i + 1}`,
+            'button',
+            seat?.shape ?? 'round',
+            box,
+            { glyph: String(i + 1), ...(seat?.top ? { zone: 'top' } : {}) },
+        )
+    })
+}
+
+/** Single axes and extra hats, stacked under the button rows from `top`. */
+function rawExtras(
+    singles: readonly number[],
+    hats: number,
+    top: number,
+): DeviceControl[] {
+    const axes = singles.map((a, i) => {
+        const seat = AXIS_SEATS[i]
+        const box: Box = seat ?? [
+            3.0,
+            top + (i - AXIS_SEATS.length) * 0.65,
+            3.0,
+            0.45,
+        ]
+        return control(
+            `axis${a}`,
+            `Axis ${a + 1}`,
+            'axis',
+            seat ? 'trigger' : 'ring',
+            box,
+            { glyph: `A${a + 1}`, ...(seat ? { zone: 'top' } : {}) },
+        )
+    })
+    const below = top + Math.max(0, singles.length - AXIS_SEATS.length) * 0.65
+    const hatList = Array.from({ length: hats }, (_, h) =>
+        control(
+            `hat${h}`,
+            hats > 1 ? `Hat ${h + 1}` : 'Hat',
+            'hat',
+            'dpad',
+            h === 0 ? HAT_BOX : [3.0 + (h - 1) * 1.4, below, 1.15, 1.15],
+        ),
+    )
+    return [...axes, ...hatList]
+}
+
+/** A controller whose mapping is unknown: every reported button, axis and hat
+ *  under its raw number, seated on the gamepad body. */
+function rawGamepadLayout(counts: HidCounts): Built {
+    const buttons = counts.buttons ?? 0
+    const { sticks, singles } = splitGamepadAxes(counts.axes ?? 0)
+    const drawnSticks = sticks.map(([x], k) =>
+        control(
+            `stick${k}`,
+            `Stick ${k + 1}`,
+            'stick',
+            'stick',
+            STICK_SEATS[k]!,
+            {
+                glyph: `A${x + 1}`,
+            },
+        ),
+    )
+    const extraRows = Math.ceil(
+        Math.max(0, buttons - BUTTON_SEATS.length) / ROW.perRow,
+    )
+    const top = ROW.y + extraRows * ROW.step + 0.2
+    return {
+        shell: STOCK_GAMEPAD.shell,
+        controls: [
+            ...rawButtons(buttons),
+            ...drawnSticks,
+            ...rawExtras(singles, counts.hats ?? 0, top),
+        ],
+    }
+}
+
+/** Without any counts, the stock pad; with them, the raw controls. */
+function gamepadLayout(counts: HidCounts): Built {
+    if (counts.buttons === undefined && counts.axes === undefined)
+        return fromStock(STOCK_GAMEPAD, GAMEPAD_IDS)
+    return rawGamepadLayout(counts)
+}
+
 /** A plain ortholinear grid sized from the reported matrix. */
 function gridLayout(rows: number, cols: number): Built {
     const controls: DeviceControl[] = []
@@ -166,7 +310,7 @@ function gridLayout(rows: number, cols: number): Built {
 
 const BUILDERS: Readonly<Record<DeviceForm, (counts: HidCounts) => Built>> = {
     mouse: mouseLayout,
-    gamepad: () => fromStock(STOCK_GAMEPAD, GAMEPAD_IDS),
+    gamepad: gamepadLayout,
     flightstick: () => fromStock(STOCK_FLIGHTSTICK, FLIGHTSTICK_IDS),
     keyboard: (c) => gridLayout(c.rows ?? 4, c.cols ?? 12),
     macropad: (c) => gridLayout(c.rows ?? 3, c.cols ?? 3),

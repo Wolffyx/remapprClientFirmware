@@ -5,6 +5,7 @@ export {
     defaultLayout,
     FORM_KIND,
     formatHidSummary,
+    splitGamepadAxes,
     type HidCounts,
 } from './defaultLayout'
 export { fromPhysicalLayout } from './fromPhysicalLayout'

@@ -1,7 +1,11 @@
 // pattern-check: skip — unit tests for the device-controls helpers.
 import { describe, expect, it } from 'vitest'
 import { bindingOf, defaultBinding } from './defaults'
-import { defaultLayout, formatHidSummary } from './defaultLayout'
+import {
+    defaultLayout,
+    formatHidSummary,
+    splitGamepadAxes,
+} from './defaultLayout'
 import { fromPhysicalLayout } from './fromPhysicalLayout'
 import { STOCK_GAMEPAD } from './stockLayouts'
 import type { ControlsCatalog, SensorBinding } from './types'
@@ -40,6 +44,20 @@ describe('formatHidSummary', () => {
     })
 })
 
+describe('splitGamepadAxes', () => {
+    it('pairs the first four axes into sticks', () => {
+        expect(splitGamepadAxes(6)).toEqual({
+            sticks: [
+                [0, 1],
+                [2, 3],
+            ],
+            singles: [4, 5],
+        })
+        expect(splitGamepadAxes(3)).toEqual({ sticks: [[0, 1]], singles: [2] })
+        expect(splitGamepadAxes(0)).toEqual({ sticks: [], singles: [] })
+    })
+})
+
 describe('defaultLayout', () => {
     it('marks the model defaulted and maps form to personality', () => {
         const m = defaultLayout('gamepad', 'Generic pad', {
@@ -54,6 +72,44 @@ describe('defaultLayout', () => {
             hidSummary: '12 buttons · 6 axes · 1 hat',
         })
         expect(m.shell).toEqual(STOCK_GAMEPAD.shell)
+    })
+
+    it('draws an unmapped gamepad under its raw numbers', () => {
+        const m = defaultLayout('gamepad', 'Generic pad', {
+            buttons: 12,
+            axes: 6,
+            hats: 1,
+        })
+        expect(ids(m)).toEqual([
+            ...Array.from({ length: 12 }, (_, i) => `btn${i}`),
+            'stick0',
+            'stick1',
+            'axis4',
+            'axis5',
+            'hat0',
+        ])
+        const byId = new Map(m.controls.map((c) => [c.id, c]))
+        expect(byId.get('btn0')).toMatchObject({ name: 'Button 1', glyph: '1' })
+        expect(byId.get('btn4')).toMatchObject({ shape: 'pill', zone: 'top' })
+        // Buttons past the nine seats line up under the body.
+        expect(byId.get('btn9')).toMatchObject({ x: 2.4, y: 6.4 })
+        expect(byId.get('btn11')).toMatchObject({ x: 2.4 + 2 * 0.85, y: 6.4 })
+        expect(byId.get('axis4')).toMatchObject({
+            kind: 'axis',
+            shape: 'trigger',
+        })
+    })
+
+    it('stacks axes past the trigger seats under the button rows', () => {
+        const m = defaultLayout('gamepad', 'Pad', { buttons: 16, axes: 7 })
+        const axis6 = m.controls.find((c) => c.id === 'axis6')
+        expect(axis6).toMatchObject({ shape: 'ring' })
+        // Two rows of extra buttons (7 past the seats) push the axis below them.
+        expect(axis6!.y).toBeCloseTo(6.4 + 2 * 0.85 + 0.2)
+    })
+
+    it('keeps the stock pad when nothing was counted', () => {
+        const m = defaultLayout('gamepad', 'Pad')
         expect(ids(m)).toHaveLength(14)
         expect(ids(m)).not.toContain('lp')
     })
