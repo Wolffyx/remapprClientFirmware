@@ -12,11 +12,12 @@ import type {
 import { TransportError } from '../../errors'
 import type { KeyboardService } from '../../service'
 import { readTransportIds, type Transport } from '../../transport'
+import type { DeviceKind } from '../../devices/types'
 import type { DeviceInfo } from '../../types'
 import { loadOrCreateIdentity, RemapprSession } from './auth'
-import { Personality } from '../../config/compilers/remappr/blobWriter'
 import { loadDeviceConfig, makeKeylessConfig } from './configRead'
 import { buildDeviceConfigApi } from './deviceConfig'
+import { deviceKind } from './deviceKind'
 import { discover, type DiscoveryResult } from './discovery'
 import { buildMouseMotionApi } from './mouse'
 import { warmRemapprIdentity } from './identity'
@@ -66,26 +67,25 @@ interface ProbedRemappr {
     /** GET_CAPABILITIES bitmask, or null when the firmware predates the verb
      *  (capability unknown — assume features like auth are present). */
     capBits: number | null
-    /** The device self-identified (or was detected) as a ROLE_DONGLE hub. */
-    isDongle: boolean
-    /** The device is a mouse (personality MOUSE_NODE): no keymap, a device
-     *  document config and live motion controls. */
-    isMouse: boolean
+    /** What the device is (see deviceKind): a dongle hub, a mouse (no keymap,
+     *  a device document config and live motion controls) or a keyboard. */
+    kind: DeviceKind
 }
 
 const probedSessions = new WeakMap<Transport, ProbedRemappr>()
 
-const DEVICE_NAMES = {
+const DEVICE_NAMES: Readonly<Record<DeviceKind, string>> = {
     keyboard: 'Remappr Keyboard',
     dongle: 'Remappr Dongle',
     mouse: 'Remappr Mouse',
-} as const
+    joystick: 'Remappr Joystick',
+}
 
 /** Map the raw 16-byte GET_DEVICE_INFO record onto the client DeviceInfo. */
 function toClientDeviceInfo(
     raw: RawDeviceInfo,
     transport: Transport,
-    kind: keyof typeof DEVICE_NAMES,
+    kind: DeviceKind,
 ): DeviceInfo {
     const ids = readTransportIds(transport)
     return {
@@ -181,14 +181,12 @@ async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null>
             // probe LIST_NODES (throws here when it is not a dongle either).
             discovery = await probeDongleFallback(rpc)
         }
-        const isDongle = discovery.role === Role.DONGLE
-        const isMouse =
-            !isDongle && discovery.personality?.personality === Personality.mouse
+        const kind = deviceKind(discovery)
 
         // GET_CAPABILITIES is a keyboard verb on the legacy path; a dongle drops
         // it (and would cost a probe-timeout), and a mouse has no use for it.
         let capBits: number | null = null
-        if (!isDongle && !isMouse) {
+        if (kind === 'keyboard') {
             try {
                 const caps = await rpc.callPlain(
                     Cmd.GET_CAPABILITIES,
@@ -207,11 +205,10 @@ async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null>
             deviceInfo: toClientDeviceInfo(
                 discovery.deviceInfo,
                 transport,
-                isDongle ? 'dongle' : isMouse ? 'mouse' : 'keyboard',
+                kind,
             ),
             capBits,
-            isDongle,
-            isMouse,
+            kind,
         }
     } catch {
         await rpc.close({ abortTransport: true }).catch(() => undefined)
@@ -271,8 +268,7 @@ export const remapprAdapter: FirmwareAdapter = {
                 throw new TransportError('Remappr probe failed during connect')
             }
         }
-        const { rpc, discovery, deviceInfo, isDongle, isMouse, capBits } =
-            probed
+        const { rpc, discovery, deviceInfo, kind, capBits } = probed
 
         if (signal.aborted) {
             await rpc.close({ abortTransport: true }).catch(() => undefined)
@@ -290,8 +286,8 @@ export const remapprAdapter: FirmwareAdapter = {
             // A dongle or a mouse has no auth session and no keymap (§7.2): skip
             // the §19 handshake and keymap load. The dongle surfaces its node
             // roster, the mouse its motion controls, both their own settings.
-            if (isDongle) return buildDeviceService(rpc, probed, 'dongle')
-            if (isMouse) return buildDeviceService(rpc, probed, 'mouse')
+            if (kind === 'dongle' || kind === 'mouse')
+                return buildDeviceService(rpc, probed, kind)
 
             // §19 is capability-gated: a dev/no-auth firmware (CAP_AUTH clear)
             // takes plaintext writes, so skip the handshake entirely there. A

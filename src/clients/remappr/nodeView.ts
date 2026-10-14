@@ -7,9 +7,9 @@
 import type { NodesApi, NodeView, KeyboardService } from '../../service'
 import type { DeviceInfo } from '../../types'
 
-import { Personality } from '../../config/compilers/remappr/blobWriter'
 import { loadDeviceConfig, makeKeylessConfig } from './configRead'
 import { buildDeviceConfigApi } from './deviceConfig'
+import { deviceKind } from './deviceKind'
 import { discover, type DiscoveryResult } from './discovery'
 import { buildMouseMotionApi } from './mouse'
 import {
@@ -110,7 +110,7 @@ export function buildNodesApi(rpc: RemapprRpc): NodesApi {
             // Relayed discovery + config read, all addressed by the node short-id
             // (§6.2 universal COMMON relay). HW-proven read path.
             const discovery = await discover(rpc, { targetNode: id })
-            if (discovery.personality?.personality === Personality.mouse) {
+            if (deviceKind(discovery) === 'mouse') {
                 return openMouseView(rpc, id, discovery)
             }
             const loaded = await loadDeviceConfig(rpc, discovery, {

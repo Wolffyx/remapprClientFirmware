@@ -30,6 +30,7 @@ import type {
     LockState,
     PhysicalLayout,
 } from '../../types'
+import type { DeviceKind } from '../../devices/types'
 import { ProtocolError } from '../../errors'
 import {
     type CanonAutocorrectEntry,
@@ -111,7 +112,7 @@ export interface RemapprServiceDeps {
     sharesTransport?: boolean
     /** Device class surfaced to the renderer (`'dongle'` lands on the roster,
      *  `'mouse'` on the mouse page). */
-    kind?: 'keyboard' | 'dongle' | 'mouse'
+    kind?: DeviceKind
     /** Device-document config facade — set on a dongle or mouse with a config
      *  store; omitted on a keyboard (its config is the keymap). */
     device?: DeviceConfigApi
@@ -144,7 +145,7 @@ export class RemapprKeyboardService
     public readonly capabilities: Capabilities
     /** `'dongle'` for the dongle's own service, `'mouse'` for a mouse;
      *  `'keyboard'` (default) otherwise. */
-    public readonly kind: 'keyboard' | 'dongle' | 'mouse'
+    public readonly kind: DeviceKind
     /** Device-document config (dongle / mouse); omitted on a keyboard. */
     public readonly device?: DeviceConfigApi
     /** Live mouse controls; present on a mouse. */
