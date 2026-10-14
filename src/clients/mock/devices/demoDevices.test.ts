@@ -1,6 +1,11 @@
 // pattern-check: skip — unit tests for the demo device registry.
 import { describe, expect, it } from 'vitest'
-import { connectDemoDevice, DEMO_DEVICES, demoDeviceModel } from './demoDevices'
+import {
+    connectDemoDevice,
+    DEMO_DEVICES,
+    demoDeviceModel,
+    demoDevicePreview,
+} from './demoDevices'
 
 describe('demo devices', () => {
     it('offers every device form', () => {
@@ -27,6 +32,13 @@ describe('demo devices', () => {
     it('previews the Corne from the demo seed', () => {
         const m = demoDeviceModel('corne')
         expect(m.controls.filter((c) => c.shape === 'key')).toHaveLength(36)
+    })
+
+    it('previews a control device tinted by its default bindings', () => {
+        const p = demoDevicePreview('halo-m2')
+        expect(p.bindings.lmb).toEqual({ a: 'mouse:Left click' })
+        expect(p.catalog.fields.button).toEqual(['a', 'hold'])
+        expect(demoDevicePreview('corne').bindings).toEqual({})
     })
 
     it('connects keyboards to the keymap and the rest to controls', async () => {

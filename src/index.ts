@@ -136,6 +136,8 @@ export {
     connectDemoDevice,
     DEMO_DEVICES,
     demoDeviceModel,
+    demoDevicePreview,
     type DemoDevice,
     type DemoDeviceId,
+    type DemoDevicePreview,
 } from './clients/mock/devices/demoDevices'

@@ -8,6 +8,8 @@ import { parseKeymap } from '@firmware/config'
 import type { ConfigKeymap } from '@firmware/config'
 import { fromPhysicalLayout } from '@firmware/devices/fromPhysicalLayout'
 import type {
+    ControlsCatalog,
+    DeviceBindings,
     DeviceForm,
     DeviceKind,
     DeviceModel,
@@ -22,6 +24,7 @@ import deck9Source from './deck9.keymap.json?raw'
 import { GENERIC_GAMEPAD } from './genericGamepad'
 import { HALO_M2 } from './haloM2'
 import { MockDeviceService } from './MockDeviceService'
+import { demoCatalog } from './catalog'
 import type { DemoDeviceDef } from './types'
 import { VECTOR_PAD } from './vectorPad'
 
@@ -42,8 +45,16 @@ export interface DemoDevice {
     readonly ready: boolean
 }
 
+/** What a start-page tile draws: the layout, tinted by its default bindings. */
+export interface DemoDevicePreview {
+    readonly model: DeviceModel
+    readonly bindings: DeviceBindings
+    readonly catalog: ControlsCatalog
+}
+
 interface Entry extends DemoDevice {
     model(): DeviceModel
+    bindings: DeviceBindings
     connect(opts?: MockServiceOptions): Promise<KeyboardService>
 }
 
@@ -65,6 +76,7 @@ function keyboardEntry(
         kind: 'keyboard',
         form,
         ready: true,
+        bindings: {},
         model: () =>
             fromPhysicalLayout(configToPhysicalLayout(config()), {
                 name,
@@ -81,6 +93,7 @@ function deviceEntry(id: DemoDeviceId, def: DemoDeviceDef): Entry {
         kind: def.model.kind,
         form: def.model.form,
         ready: !def.model.defaulted,
+        bindings: def.bindings,
         model: () => def.model,
         connect: () => Promise.resolve(new MockDeviceService(def)),
     }
@@ -117,6 +130,13 @@ export const DEMO_DEVICES: readonly DemoDevice[] = ENTRIES.map(
 /** The demo device's layout as a device model (for previews). */
 export function demoDeviceModel(id: DemoDeviceId): DeviceModel {
     return entry(id).model()
+}
+
+/** The demo device's tile preview: layout, default bindings and catalog. */
+export function demoDevicePreview(id: DemoDeviceId): DemoDevicePreview {
+    const e = entry(id)
+    const model = e.model()
+    return { model, bindings: e.bindings, catalog: demoCatalog(model.form) }
 }
 
 /** Connect the demo device `id`. `opts` (a simulated lock …) applies to the
