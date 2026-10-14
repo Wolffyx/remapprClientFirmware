@@ -1,5 +1,15 @@
 import type { KeyCatalog } from './catalog/types'
 import type { KeycodeCodec } from './codec'
+import type {
+    ControlBinding,
+    ControlInputFrame,
+    ControlsCatalog,
+    ControlsChange,
+    DeviceBindings,
+    DeviceKind,
+    DeviceModel,
+    DeviceProfile,
+} from './devices/types'
 import type { LightingCatalog } from './lighting'
 import type {
     ClusterDiag,
@@ -597,6 +607,47 @@ export interface MouseMotionApi {
     setScrollMode(mode: number): Promise<void>
 }
 
+// Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as
+// EncoderApi / MouseMotionApi / SideloadApi above: one surface an adapter may
+// or may not implement, gated by presence.
+/** A device driven as a set of controls (buttons, sticks, triggers, a sensor …)
+ *  rather than a keymap: a mouse, a gamepad, a flight stick, an unknown HID
+ *  device. The app renders `getModel()` and edits through the rest.
+ *
+ *  Capability is presence: a method the adapter leaves out is a thing it cannot
+ *  do (no `setBinding` = read-only device; no `addProfile` = fixed profiles). */
+export interface ControlsApi {
+    /** Where the controls are and what they are. */
+    getModel(): Promise<DeviceModel>
+    /** The actions, outputs and binding fields this adapter honours. */
+    getCatalog(): Promise<ControlsCatalog>
+    /** At least one profile; a device without profiles reports one. */
+    getProfiles(): Promise<{
+        profiles: readonly DeviceProfile[]
+        activeId: string
+    }>
+    getBindings(profileId: string): Promise<DeviceBindings>
+    /** Absent = read-only (a generic HID device, a behind-dongle view). Follows
+     *  `capabilities.saveMode`: 'none' keeps the edit for the session, 'manual'
+     *  stages it until `commit()` (`discardChanges()` reverts it and fires
+     *  onChanged), 'automatic' writes it at once. Names the profile so an undo
+     *  lands on the profile it was made in. */
+    setBinding?(
+        profileId: string,
+        controlId: string,
+        binding: ControlBinding,
+    ): Promise<void>
+    selectProfile?(profileId: string): Promise<void>
+    addProfile?(name: string): Promise<DeviceProfile>
+    renameProfile?(profileId: string, name: string): Promise<void>
+    /** Changes not made through this client's setBinding (discard, reset, a
+     *  profile switched on the device). */
+    onChanged(cb: (change: ControlsChange) => void): () => void
+    /** Live input. The adapter starts reading on the first listener and stops
+     *  after the last one leaves. Absent = no live readout. */
+    onInput?(cb: (frame: ControlInputFrame) => void): () => void
+}
+
 export interface KeyboardService {
     readonly deviceInfo: DeviceInfo
     readonly capabilities: Capabilities
@@ -605,11 +656,17 @@ export interface KeyboardService {
      *  firmware-capability warnings (see config/capabilityWarnings). Undefined on
      *  other firmwares and pre-limits devices. */
     readonly limits?: Limits
-    /** Device class for the renderer's landing decision. `'dongle'` lands on the
-     *  node roster (no keymap of its own), `'mouse'` on the mouse settings page;
-     *  omitted/`'keyboard'` opens the editor. A behind-dongle node view takes the
-     *  node's own kind (keyboard or mouse), never `'dongle'`. */
-    readonly kind?: 'keyboard' | 'dongle' | 'mouse'
+    /** What the device is, in the firmware personality vocabulary (see
+     *  devices/types.ts). Omitted = keyboard. The app lands a device with
+     *  {@link controls} on the device editor; otherwise `'dongle'` lands on the
+     *  node roster, `'mouse'` on the mouse settings page and a keyboard on the
+     *  keymap editor. A behind-dongle node view takes the node's own kind, never
+     *  `'dongle'`. */
+    readonly kind?: DeviceKind
+    /** The device as a set of controls with per-control bindings — mice,
+     *  gamepads, flight sticks, generic HID devices. Present = the app opens the
+     *  device editor. */
+    readonly controls?: ControlsApi
     /** Config of a device that is not a keyboard (dongle, mouse): read it back and
      *  push a new one. Present when the device has a config store. */
     readonly device?: DeviceConfigApi

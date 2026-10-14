@@ -32,6 +32,10 @@ export type {
 
 export { isUnlocked } from './types'
 
+// Device-controls vocabulary (mice, gamepads, flight sticks, generic HID): the
+// model a ControlsApi serves. Also importable as `@firmware/devices`.
+export type * from './devices/types'
+
 export type {
     Capabilities,
     ClusterApi,
@@ -41,6 +45,7 @@ export type {
     DeviceConfigSnapshot,
     DynamicEntriesApi,
     ConnectNotice,
+    ControlsApi,
     EncoderApi,
     HsvColor,
     IndicatorConfig,
