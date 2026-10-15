@@ -193,7 +193,7 @@ describe('buildNodesApi.list', () => {
         expect(nodes).toHaveLength(2)
         expect(nodes[0]).toEqual({
             id: 0x0007,
-            label: 'Node 0x0007',
+            label: 'Mouse 0x0007',
             personality: 2,
             kind: 'mouse',
             online: true,
@@ -205,7 +205,7 @@ describe('buildNodesApi.list', () => {
         })
         expect(nodes[1]).toMatchObject({
             id: 0x0009,
-            label: 'Node 0x0009',
+            label: 'Joystick 0x0009',
             kind: 'joystick', // personality 5
             online: true,
             bonded: false,
@@ -225,6 +225,10 @@ describe('buildNodesApi.list', () => {
         const nodes = await buildNodesApi(rpc).list()
 
         expect(nodes.map((n) => n.kind)).toEqual([undefined, undefined])
+        expect(nodes.map((n) => n.label)).toEqual([
+            'Node 0x0003',
+            'Node 0x0004',
+        ])
     })
 
     it('returns [] for a directly-attached (non-dongle) device', async () => {
@@ -274,6 +278,13 @@ describe('buildNodesApi.open (read-only node view)', () => {
         await expect(svc.removeLayer(0)).rejects.toThrow(/read-only/i)
         await expect(svc.renameLayer(0, 'x')).rejects.toThrow(/read-only/i)
         await expect(svc.commit()).rejects.toThrow(/read-only/i)
+    })
+
+    it('names a node a keyboard only when it says it is one', async () => {
+        const { rpc } = makeRpc({ roster: ROSTER, personality: 1 })
+        const svc = await buildNodesApi(rpc).open(0x0007)
+
+        expect(svc.deviceInfo.name).toBe('Remappr Keyboard 0x0007')
     })
 
     it('disconnect leaves the shared dongle RPC intact', async () => {

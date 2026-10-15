@@ -49,12 +49,21 @@ const KIND_BY_NODE_PERSONALITY: Readonly<Partial<Record<number, DeviceKind>>> = 
     [Personality.joystick]: 'joystick',
 }
 
+/** The word a node goes by in the roster and in its device name; a node of no
+ *  known kind is a "Node". */
+const KIND_NAME: Readonly<Record<DeviceKind, string>> = {
+    keyboard: 'Keyboard',
+    mouse: 'Mouse',
+    joystick: 'Joystick',
+    dongle: 'Dongle',
+}
+
 /** Map a wire node record onto the firmware-neutral UI view. */
 function toNodeView(r: NodeRecord): NodeView {
     const kind = KIND_BY_NODE_PERSONALITY[r.personality]
     return {
         id: r.shortId,
-        label: `Node ${hexId(r.shortId)}`,
+        label: `${kind ? KIND_NAME[kind] : 'Node'} ${hexId(r.shortId)}`,
         personality: r.personality,
         ...(kind ? { kind } : {}),
         online: r.online,
@@ -91,7 +100,7 @@ async function openMouseView(
     id: number,
     discovery: DiscoveryResult,
 ): Promise<KeyboardService> {
-    const deviceInfo = nodeDeviceInfo(id, discovery.deviceInfo, 'Mouse')
+    const deviceInfo = nodeDeviceInfo(id, discovery.deviceInfo, KIND_NAME.mouse)
     const layout = await readInputLayout(
         rpc,
         discovery.personality?.namespaces,
@@ -126,7 +135,11 @@ async function openJoystickView(
     id: number,
     discovery: DiscoveryResult,
 ): Promise<KeyboardService> {
-    const deviceInfo = nodeDeviceInfo(id, discovery.deviceInfo, 'Joystick')
+    const deviceInfo = nodeDeviceInfo(
+        id,
+        discovery.deviceInfo,
+        KIND_NAME.joystick,
+    )
     const layout = await readInputLayout(
         rpc,
         discovery.personality?.namespaces,
@@ -185,10 +198,16 @@ export function buildNodesApi(rpc: RemapprRpc): NodesApi {
             const loaded = await loadDeviceConfig(rpc, discovery, {
                 targetNode: id,
             })
+            // Unknown kinds open as a keymap too; only a node that says it is a
+            // keyboard is named one.
+            const what =
+                discovery.personality?.personality === Personality.keyboard
+                    ? KIND_NAME.keyboard
+                    : undefined
 
             return new RemapprKeyboardService({
                 rpc,
-                deviceInfo: nodeDeviceInfo(id, discovery.deviceInfo),
+                deviceInfo: nodeDeviceInfo(id, discovery.deviceInfo, what),
                 config: loaded.config,
                 configVersion: loaded.configVersion,
                 layouts: loaded.layouts,

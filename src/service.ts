@@ -396,7 +396,8 @@ export interface RgbApi {
 export interface NodeView {
     /** Short-id used to address the node over the relay (stable per bond). */
     id: number
-    /** Adapter-formatted human label (e.g. "Node 0x0007"). */
+    /** Adapter-formatted human label (e.g. "Joystick 0x0007"; "Node 0x0007"
+     *  when the kind is unknown). */
     label: string
     /** Raw device-type byte of the roster record; 0 when unknown. */
     personality: number
