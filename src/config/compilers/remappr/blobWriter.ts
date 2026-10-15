@@ -539,6 +539,8 @@ export interface JoystickTable {
 }
 export const JOY_AXIS_OFF = 0xff
 export const JOY_FLAG_INVERT = 1 << 0
+/** TBL_JOYSTICK flags: with its partner input, one round stick. */
+export const JOY_FLAG_RADIAL = 1 << 1
 export const JOYSTICK_TBL_HDR_LEN = 2
 export const JOYSTICK_TBL_AXIS_LEN = 8
 

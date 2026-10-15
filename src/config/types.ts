@@ -831,6 +831,11 @@ export interface JoystickAxisConfig {
     /** The report axis it moves; null = it reports nowhere. */
     out: JoystickAxisId | null
     invert?: boolean
+    /** With its partner input (input ^ 1: the n-th stick reads inputs 2n and
+     *  2n + 1) one round stick: when both are radial, each takes its
+     *  deadzones and curve on the stick's distance from centre. An input with
+     *  no entry is radial when the device declares a stick over it. */
+    radial?: boolean
     /** Default linear. */
     curve?: JoystickCurve
     /** Centre deadzone and the edge band read as full, percent; together

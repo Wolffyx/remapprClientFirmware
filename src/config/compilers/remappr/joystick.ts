@@ -22,6 +22,7 @@ import {
     type ActionBindingRecord,
     JOY_AXIS_OFF,
     JOY_FLAG_INVERT,
+    JOY_FLAG_RADIAL,
     JOYSTICK_TBL_AXIS_LEN,
     JOYSTICK_TBL_HDR_LEN,
     type JoystickTable,
@@ -58,7 +59,9 @@ export function joystickRecord(j: ConfigJoystick): JoystickTable | undefined {
         axes: axes.map((a) => ({
             input: a.input,
             out: axisCode(a.out),
-            flags: a.invert ? JOY_FLAG_INVERT : 0,
+            flags:
+                (a.invert ? JOY_FLAG_INVERT : 0) |
+                (a.radial ? JOY_FLAG_RADIAL : 0),
             curve: CURVES.indexOf(a.curve ?? 'linear'),
             inner: a.inner ?? 0,
             outer: a.outer ?? 0,
@@ -79,6 +82,7 @@ function readAxis(r: ByteReader): JoystickAxisConfig {
         out: JOYSTICK_AXIS_IDS[out] ?? null,
     }
     if (flags & JOY_FLAG_INVERT) a.invert = true
+    if (flags & JOY_FLAG_RADIAL) a.radial = true
     if (curve) a.curve = CURVES[curve] ?? 'linear'
     if (inner) a.inner = inner
     if (outer) a.outer = outer

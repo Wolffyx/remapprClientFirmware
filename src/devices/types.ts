@@ -159,6 +159,10 @@ export interface StickBinding {
     /** Inner (dead) and outer (saturation) radius, percent. */
     readonly inner: number
     readonly outer: number
+    /** The deadzones act on the stick's distance from centre (a round dead
+     *  area, full at the same push every way), not on each axis alone.
+     *  Absent where the device has no such choice. */
+    readonly round?: boolean
     readonly curve: ResponseCurve
     readonly invY: boolean
     readonly click: ActionId | null

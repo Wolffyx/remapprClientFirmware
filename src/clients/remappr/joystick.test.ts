@@ -35,8 +35,12 @@ const STATE = new Uint8Array([
 const CONFIG = new Uint8Array([
     0x01, 0x08, 0x02,
     0x00, 0x00, 0x01, 0x08, 0x05, 0x64, 0x00, 0x00, 0x08, 0xa0, 0x0f,
-    0x01, 0x01, 0x00, 0x08, 0x05, 0x00, 0x00, 0xd0, 0x07, 0xff, 0x0f,
+    0x01, 0x03, 0x00, 0x08, 0x05, 0x00, 0x00, 0xd0, 0x07, 0xff, 0x0f,
+    0x0c, 0x01,
+    0xff, 0x00,
 ])
+/** The same from firmware before the noise filter: the entries only. */
+const CONFIG_V1_ENTRIES = CONFIG.subarray(0, 3 + 2 * 11)
 
 // The firmware golden (tests/control/src/test_control.c
 // test_joystick_finish_replies_the_suggestion): input 0 suggests inner 4 % /
@@ -85,19 +89,32 @@ describe('joystick wire (JOYSTICK namespace)', () => {
                     min: 100,
                     centre: 2048,
                     max: 4000,
+                    fuzz: 12,
+                    canUndo: true,
                 },
                 {
                     out: 1,
-                    flags: 1,
+                    flags: 3,
                     curve: 0,
                     inner: 8,
                     outer: 5,
                     min: 0,
                     centre: 2000,
                     max: 4095,
+                    fuzz: 255,
+                    canUndo: false,
                 },
             ],
         })
+    })
+
+    it('reads the noise filter and undo from the tail, when there is one', () => {
+        const [a, b] = parseAxisConfig(CONFIG).axes
+        expect([a?.fuzz, a?.canUndo]).toEqual([12, true])
+        expect([b?.fuzz, b?.canUndo]).toEqual([255, false])
+        const old = parseAxisConfig(CONFIG_V1_ENTRIES).axes[0]
+        expect(old).not.toHaveProperty('fuzz')
+        expect(old).not.toHaveProperty('canUndo')
     })
 
     it('refuses a short or unknown reply', () => {
@@ -127,12 +144,16 @@ describe('joystick wire (JOYSTICK namespace)', () => {
         const api = buildJoystickApi(rpc, { writable: true })
         await api.calibrate('finish')
         await api.calibrate('begin', 1)
-        await api.setAxisMap(1, null, true)
+        await api.calibrate('undo')
+        await api.setAxisMap(1, null, { invert: true })
+        await api.setAxisMap(0, 0, { invert: false, radial: true })
         await api.setDeadzone(0, 10, 5)
         expect(seen).toEqual([
             [JoystickVerb.CALIBRATE, [0xff, 2]],
             [JoystickVerb.CALIBRATE, [1, 0]],
+            [JoystickVerb.CALIBRATE, [0xff, 5]],
             [JoystickVerb.SET_AXIS_MAP, [1, 0xff, 1]],
+            [JoystickVerb.SET_AXIS_MAP, [0, 0, 2]],
             [JoystickVerb.SET_DEADZONE, [0, 10, 5]],
         ])
     })

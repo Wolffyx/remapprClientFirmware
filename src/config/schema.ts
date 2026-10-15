@@ -988,6 +988,13 @@ export const JoystickAxisSchema = z
         input: z.number().int().min(0).max(5),
         out: z.enum(JOYSTICK_AXES).nullable(),
         invert: z.boolean().optional(),
+        radial: z
+            .boolean()
+            .optional()
+            .describe(
+                'With its partner input (input ^ 1, the other axis of the stick): ' +
+                    'deadzones and curve on the stick\'s distance from centre.',
+            ),
         curve: z.enum(['linear', 'aggressive', 'relaxed', 'precise']).optional(),
         inner: z.number().int().min(0).max(99).optional(),
         outer: z.number().int().min(0).max(99).optional(),

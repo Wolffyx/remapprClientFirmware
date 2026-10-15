@@ -9,6 +9,7 @@
 
 import {
     JOY_CAL_ALL,
+    JoyAxisFlag,
     JoyCalStep,
     JoystickVerb,
     Namespace,
@@ -23,12 +24,17 @@ import {
 } from './protocol'
 import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
 import type { DiscoveryResult } from './discovery'
-import type { JoystickApi, JoystickCalStep } from '../../service'
+import type {
+    JoystickApi,
+    JoystickAxisFlags,
+    JoystickCalStep,
+} from '../../service'
 
 /** The JOYSTICK verbs as the wire has them: like JoystickApi, but calibrate
- *  resolves to what each analog input measured (the service maps that onto
- *  its controls). */
-export interface JoystickVerbs extends Omit<JoystickApi, 'calibrate'> {
+ *  resolves to what each analog input measured, and the sticks are the
+ *  service's to know (it maps both onto its controls). */
+export interface JoystickVerbs
+    extends Omit<JoystickApi, 'calibrate' | 'sticks'> {
     calibrate(step: JoystickCalStep, input?: number): Promise<CalSuggestion[]>
 }
 
@@ -41,6 +47,7 @@ const STEPS: Readonly<Record<JoystickCalStep, number>> = {
     finish: JoyCalStep.FINISH,
     cancel: JoyCalStep.CANCEL,
     reset: JoyCalStep.RESET,
+    undo: JoyCalStep.UNDO,
 }
 
 /** True when the device lists the JOYSTICK namespace (the verbs are
@@ -137,13 +144,16 @@ export async function setAxisMap(
     rpc: RemapprRpc,
     input: number,
     out: number | null,
-    invert: boolean,
+    flags: JoystickAxisFlags,
 ): Promise<void> {
+    const bits =
+        (flags.invert ? JoyAxisFlag.INVERT : 0) |
+        (flags.radial ? JoyAxisFlag.RADIAL : 0)
     await call(
         rpc,
         JoystickVerb.SET_AXIS_MAP,
         'SET_AXIS_MAP',
-        new Uint8Array([input, out ?? AXIS_OFF, invert ? 1 : 0]),
+        new Uint8Array([input, out ?? AXIS_OFF, bits]),
     )
 }
 
@@ -188,9 +198,9 @@ export function buildJoystickApi(
             guard()
             return calibrate(rpc, step, input)
         },
-        async setAxisMap(input, out, invert) {
+        async setAxisMap(input, out, flags) {
             guard()
-            await setAxisMap(rpc, input, out, invert)
+            await setAxisMap(rpc, input, out, flags)
         },
         async setDeadzone(input, inner, outer) {
             guard()

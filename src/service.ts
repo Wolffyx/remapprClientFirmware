@@ -635,9 +635,32 @@ export type {
     AxisState,
 } from './clients/remappr/protocol'
 
-/** A CALIBRATE step: begin (sweep the stick to its ends), centre (it rests),
- *  finish (apply and store), cancel, reset (the board default). */
-export type JoystickCalStep = 'begin' | 'centre' | 'finish' | 'cancel' | 'reset'
+/** A CALIBRATE step: begin (sweep the stick round its rim and let it go from
+ *  each side), centre (it rests), finish (apply and store), cancel, reset (the
+ *  board default), undo (back to the calibration the last finish, reset or
+ *  undo replaced, until the joystick restarts). */
+export type JoystickCalStep =
+    | 'begin'
+    | 'centre'
+    | 'finish'
+    | 'cancel'
+    | 'reset'
+    | 'undo'
+
+/** A stick and the two analog inputs it reads (X, then Y). */
+export interface JoystickStick {
+    readonly controlId: string
+    readonly name: string
+    readonly x: number
+    readonly y: number
+}
+
+/** How a live axis map moves an input: inverted, and radial (with its
+ *  partner input, one round stick). */
+export interface JoystickAxisFlags {
+    readonly invert: boolean
+    readonly radial?: boolean
+}
 
 /** Deadzones a finished calibration suggests for one control, in the device
  *  editor's units (StickBinding): inner = centre deadzone %, outer =
@@ -660,6 +683,8 @@ export interface JoystickApi {
     getState(): Promise<AxisState>
     /** Each analog input's axis, curve, deadzones and calibration. */
     getConfig(): Promise<AxisConfig>
+    /** The sticks the joystick declares, with the inputs each reads. */
+    sticks(): readonly JoystickStick[]
     /** One calibration step on one input, or on every input when `input` is
      *  omitted. Rejects a step out of turn (finish before a centre, too
      *  narrow a sweep). Finish resolves to the deadzones the capture
@@ -673,7 +698,7 @@ export interface JoystickApi {
     setAxisMap(
         input: number,
         out: number | null,
-        invert: boolean,
+        flags: JoystickAxisFlags,
     ): Promise<void>
     /** Live: the input's deadzones, percent (inner + outer < 100). */
     setDeadzone(input: number, inner: number, outer: number): Promise<void>

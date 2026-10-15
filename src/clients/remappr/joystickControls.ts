@@ -6,7 +6,8 @@
 //   reports gamepad button position + 1 by default, or any gamepad button, a
 //   hat direction, an axis held at a value, or nothing (TBL_ACTION_BINDING);
 // - a stick (the n-th reads analog inputs 2n and 2n + 1): the report axes it
-//   moves, its deadzones, curve and Y invert (TBL_JOYSTICK), and its click;
+//   moves, its deadzones (round on its distance from centre, or per axis),
+//   curve and Y invert (TBL_JOYSTICK), and its click;
 // - a hat (its position is up, then down, left, right): what each direction
 //   does, and 4- or 8-way.
 // Where the controls sit comes from the joystick itself (GET_INPUT_LAYOUT).
@@ -43,7 +44,7 @@ import {
     type CalSuggestion,
     type InputLayoutEntry,
 } from './protocol'
-import type { DeadzoneSuggestion } from '../../service'
+import type { DeadzoneSuggestion, JoystickStick } from '../../service'
 
 const FULL = 32767
 const AXIS_LABEL: Readonly<Record<JoystickAxisId, string>> = {
@@ -261,7 +262,7 @@ export function joystickCatalog(
         outputs: { stick: stickOutputs(j, inputs) },
         fields: {
             button: ['a'],
-            stick: ['out', 'inner', 'outer', 'curve', 'invY', 'click'],
+            stick: ['out', 'inner', 'outer', 'round', 'curve', 'invY', 'click'],
             hat: ['up', 'down', 'left', 'right', 'ways'],
         },
     }
@@ -274,11 +275,40 @@ const defaultAxis = (input: number): JoystickAxisConfig => ({
     out: JOYSTICK_AXIS_IDS[input] ?? null,
 })
 
+const entryOf = (
+    j: ConfigJoystick | undefined,
+    input: number,
+): JoystickAxisConfig | undefined => j?.axes?.find((a) => a.input === input)
+
 function axisOf(
     j: ConfigJoystick | undefined,
     input: number,
 ): JoystickAxisConfig {
-    return j?.axes?.find((a) => a.input === input) ?? defaultAxis(input)
+    return entryOf(j, input) ?? defaultAxis(input)
+}
+
+/** An input of a stick is radial when its entry says so; with no entry it
+ *  is, as the joystick makes a declared stick's inputs by default. */
+const radialOf = (j: ConfigJoystick | undefined, input: number): boolean => {
+    const e = entryOf(j, input)
+    return e ? !!e.radial : true
+}
+
+/** The sticks the joystick declares and the inputs each reads. */
+export function joystickSticks(
+    inputs: ReadonlyMap<string, InputLayoutEntry>,
+): JoystickStick[] {
+    return [...inputs.keys()]
+        .filter((id) => id.startsWith('stick:'))
+        .map((id) => {
+            const n = Number(id.slice(6))
+            return {
+                controlId: id,
+                name: STICK_NAMES[n] ?? `Stick ${n + 1}`,
+                x: 2 * n,
+                y: 2 * n + 1,
+            }
+        })
 }
 
 /** The n-th stick's X and Y inputs. */
@@ -370,11 +400,13 @@ const BINDINGS: Readonly<Record<string, BindingFor>> = {
         a: positionAction(j, e.position, hats),
     }),
     stick: (j, e, id, hats): StickBinding => {
-        const [x, y] = stickAxes(j, Number(id.slice(6)))
+        const n = Number(id.slice(6))
+        const [x, y] = stickAxes(j, n)
         return {
             out: outId(x.out, y.out),
             inner: x.inner ?? 0,
             outer: saturation(x.outer),
+            round: radialOf(j, 2 * n) && radialOf(j, 2 * n + 1),
             curve: x.curve ?? 'linear',
             invY: !!y.invert,
             click:
@@ -441,6 +473,9 @@ function withAction(
 function minimalAxis(a: JoystickAxisConfig): JoystickAxisConfig | null {
     const out: JoystickAxisConfig = { input: a.input, out: a.out }
     if (a.invert) out.invert = true
+    // Kept either way: an entry without it reads per axis, which differs
+    // from a stick input's default.
+    if (a.radial !== undefined) out.radial = a.radial
     if (a.curve && a.curve !== 'linear') out.curve = a.curve
     if (a.inner) out.inner = a.inner
     if (a.outer) out.outer = a.outer
@@ -474,12 +509,15 @@ const APPLY: Readonly<Record<string, ApplyFor>> = {
         withAction(j, e.position, (b as ButtonBinding).a, hats),
     stick: (j, e, id, b, hats) => {
         const s = b as StickBinding
-        const [x, y] = stickAxes(j, Number(id.slice(6)))
+        const n = Number(id.slice(6))
+        const [x, y] = stickAxes(j, n)
         const [xo, yo] = s.out.split(':')
         const shape = {
             curve: s.curve,
             inner: s.inner,
             outer: outerDeadzone(s.outer),
+            radial:
+                s.round ?? (radialOf(j, 2 * n) && radialOf(j, 2 * n + 1)),
         }
         const both = withAxis(
             withAxis(j, { ...x, ...shape, out: parseOut(xo) }),

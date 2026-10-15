@@ -13,6 +13,7 @@ import {
     joystickFrame,
     joystickInputs,
     joystickModel,
+    joystickSticks,
     parseActionId,
 } from './joystickControls'
 import {
@@ -144,6 +145,7 @@ describe('joystick controls mapping', () => {
             out: 'x:y',
             inner: 0,
             outer: 100,
+            round: true, // a declared stick's inputs are radial by default
             curve: 'linear',
             invY: false,
             click: 'pad:btn:5',
@@ -188,6 +190,7 @@ describe('joystick controls mapping', () => {
                 {
                     input: 0,
                     out: 'rx',
+                    radial: true,
                     curve: 'aggressive',
                     inner: 8,
                     outer: 5,
@@ -196,6 +199,7 @@ describe('joystick controls mapping', () => {
                     input: 1,
                     out: 'ry',
                     invert: true,
+                    radial: true,
                     curve: 'aggressive',
                     inner: 8,
                     outer: 5,
@@ -218,6 +222,42 @@ describe('joystick controls mapping', () => {
         // The inspector's outer is a saturation radius; the firmware's outer is
         // the deadzone off the edge: 95% of travel ⇄ a 5% outer deadzone.
         expect(back.outer).toBe(95)
+    })
+
+    it('keeps a stick round or per axis, as set', () => {
+        const stick: StickBinding = {
+            out: 'x:y',
+            inner: 8,
+            outer: 100,
+            round: false,
+            curve: 'linear',
+            invY: false,
+            click: 'pad:btn:5',
+        }
+        const square = applyJoystickBinding(DOC, INPUTS, 'stick:0', stick)
+        expect(square.joystick?.axes?.map((a) => a.radial)).toEqual([
+            false,
+            false,
+        ])
+        const read = (j: typeof square.joystick) =>
+            (joystickBindings(j, INPUTS)['stick:0'] as StickBinding).round
+        expect(read(square.joystick)).toBe(false)
+        const round = applyJoystickBinding(square, INPUTS, 'stick:0', {
+            ...stick,
+            round: true,
+        })
+        expect(read(round.joystick)).toBe(true)
+        // A config from before the flag has entries without it: per axis,
+        // as the firmware reads them.
+        expect(
+            read({ axes: [{ input: 0, out: 'x', inner: 8 }, { input: 1, out: 'y' }] }),
+        ).toBe(false)
+    })
+
+    it('lists the sticks and the inputs they read', () => {
+        expect(joystickSticks(INPUTS)).toEqual([
+            { controlId: 'stick:0', name: 'Left stick', x: 0, y: 1 },
+        ])
     })
 
     it('writes a hat to its four positions and its ways', () => {

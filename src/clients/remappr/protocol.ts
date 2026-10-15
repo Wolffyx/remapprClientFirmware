@@ -256,14 +256,15 @@ export const MouseVerb = {
 export const JoystickVerb = {
     /** No arg → see parseAxisState. Plaintext-open read. */
     GET_AXIS_STATE: 0x01,
-    /** Arg: u8 axis | u8 out_axis (0..5, 0xFF off) | u8 flags (bit0 invert).
+    /** Arg: u8 axis | u8 out_axis (0..5, 0xFF off) | u8 flags (JoyAxisFlag).
      *  Sealed, mutating; live until the next COMMIT, never stored. */
     SET_AXIS_MAP: 0x02,
     /** Arg: u8 axis | u8 inner_pct | u8 outer_pct. Sealed, mutating; live
      *  until the next COMMIT. */
     SET_DEADZONE: 0x03,
     /** Arg: u8 axis (0xFF = every input) | u8 step (JoyCalStep). Sealed,
-     *  mutating. ERR_STATE for a step out of turn or too narrow a sweep.
+     *  mutating. ERR_STATE for a step out of turn, too narrow a sweep or
+     *  nothing to undo.
      *  FINISH replies the deadzones the capture suggests (parseCalSuggestion);
      *  the other steps, and older firmware, reply nothing. */
     CALIBRATE: 0x04,
@@ -271,13 +272,23 @@ export const JoystickVerb = {
     GET_AXIS_CONFIG: 0x05,
 } as const
 
-/** CALIBRATE steps. */
+/** CALIBRATE steps. UNDO swaps back the calibration the last FINISH, RESET
+ *  or UNDO replaced (kept until the joystick restarts). */
 export const JoyCalStep = {
     BEGIN: 0,
     CENTRE: 1,
     FINISH: 2,
     CANCEL: 3,
     RESET: 4,
+    UNDO: 5,
+} as const
+
+/** SET_AXIS_MAP / TBL_JOYSTICK / GET_AXIS_CONFIG axis flags. RADIAL: with its
+ *  partner input (input ^ 1) one round stick, deadzones and curve on the
+ *  stick's distance from centre (both must carry it). */
+export const JoyAxisFlag = {
+    INVERT: 1 << 0,
+    RADIAL: 1 << 1,
 } as const
 
 /** CALIBRATE axis byte: every input at once. */
@@ -1287,7 +1298,9 @@ export function parseAxisState(d: Uint8Array): AxisState {
 
 /** One analog input's config and the unit's calibration of it
  *  (JOYSTICK.GET_AXIS_CONFIG). `out` 0..5 = X Y Z Rx Ry Rz, 0xFF off;
- *  `curve` 0 linear, 1 aggressive, 2 relaxed, 3 precise. */
+ *  `flags` JoyAxisFlag; `curve` 0 linear, 1 aggressive, 2 relaxed, 3
+ *  precise. `fuzz` (the noise filter, raw counts) and `canUndo` come from
+ *  firmware that has them, else they are absent. */
 export interface AxisConfigEntry {
     out: number
     flags: number
@@ -1297,6 +1310,8 @@ export interface AxisConfigEntry {
     min: number
     centre: number
     max: number
+    fuzz?: number
+    canUndo?: boolean
 }
 
 export interface AxisConfig {
@@ -1305,16 +1320,23 @@ export interface AxisConfig {
 }
 
 const AXIS_CONFIG_ENTRY_LEN = 11
+/** The per-input tail after the entries: u8 fuzz | u8 cal_flags. */
+const AXIS_CONFIG_CAL_LEN = 2
+const CAL_FLAG_UNDO = 1 << 0
 
+/** GET_AXIS_CONFIG reply: u8 version(=1) | u8 hat_ways | u8 n | n × 11-B
+ *  entries, then (newer firmware) n × {u8 fuzz | u8 cal_flags}. */
 export function parseAxisConfig(d: Uint8Array): AxisConfig {
     if (d.length < 3) throw new Error('axis-config reply too short')
     if (d[0] !== 1) throw new Error(`unknown axis-config version ${d[0]}`)
     const n = d[2]
-    if (d.length < 3 + AXIS_CONFIG_ENTRY_LEN * n)
-        throw new Error('axis-config reply too short')
+    const tail = 3 + AXIS_CONFIG_ENTRY_LEN * n
+    if (d.length < tail) throw new Error('axis-config reply too short')
+    const hasCal = d.length >= tail + AXIS_CONFIG_CAL_LEN * n
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
-    const axes = Array.from({ length: n }, (_, i) => {
+    const axes = Array.from({ length: n }, (_, i): AxisConfigEntry => {
         const o = 3 + AXIS_CONFIG_ENTRY_LEN * i
+        const c = tail + AXIS_CONFIG_CAL_LEN * i
         return {
             out: d[o],
             flags: d[o + 1],
@@ -1324,6 +1346,9 @@ export function parseAxisConfig(d: Uint8Array): AxisConfig {
             min: dv.getInt16(o + 5, true),
             centre: dv.getInt16(o + 7, true),
             max: dv.getInt16(o + 9, true),
+            ...(hasCal
+                ? { fuzz: d[c], canUndo: (d[c + 1] & CAL_FLAG_UNDO) !== 0 }
+                : {}),
         }
     })
     return { hatWays: d[1], axes }

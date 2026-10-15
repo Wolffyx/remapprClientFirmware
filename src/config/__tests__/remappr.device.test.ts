@@ -330,6 +330,20 @@ describe('joystick device config', () => {
         ).toEqual(blob)
     })
 
+    it('carries a radial stick in the axis flags (bit1)', () => {
+        const joystick = {
+            axes: [
+                { input: 0, out: 'x', radial: true },
+                { input: 1, out: 'y', invert: true, radial: true },
+            ],
+        }
+        const cfg = parseDeviceConfig(JSON.stringify({ ...JOY, joystick }))
+        const blob = buildRemapprDeviceBlob(cfg, { configVersion: 2 })
+        // flags of each 8-B entry (input, out, flags, ...) after the 2-B header.
+        expect([blob[32 + 8 + 2 + 2], blob[32 + 8 + 2 + 8 + 2]]).toEqual([0x02, 0x03])
+        expect(decodeRemapprDeviceBlob(blob).joystick).toEqual(joystick)
+    })
+
     it('writes no joystick tables for an empty section', () => {
         const blob = buildRemapprDeviceBlob(
             parseDeviceConfig(JSON.stringify({ ...JOY, joystick: {} })),

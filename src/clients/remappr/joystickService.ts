@@ -34,6 +34,7 @@ import {
     joystickFrame,
     joystickInputs,
     joystickModel,
+    joystickSticks,
     stickSuggestions,
 } from './joystickControls'
 import type { InputLayoutEntry, Limits } from './protocol'
@@ -252,12 +253,13 @@ export class RemapprJoystickService extends KeylessServiceBase {
     // --- facades -------------------------------------------------------------
 
     /** The JOYSTICK verbs, with what a calibration measured per analog input
-     *  put onto the controls that read them. */
+     *  put onto the controls that read them, and the sticks it declares. */
     private joystickApi(verbs: JoystickVerbs): JoystickApi {
         return {
             ...verbs,
             calibrate: async (step, input) =>
                 stickSuggestions(await verbs.calibrate(step, input), this.inputs),
+            sticks: () => joystickSticks(this.inputs),
         }
     }
 
