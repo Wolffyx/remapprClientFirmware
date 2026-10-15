@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { runControlsContractSuite } from '@firmware/__tests__/controlsContract'
 import type { ConfigDevice } from '../../config/device'
 import type { HatBinding, StickBinding } from '../../devices/types'
-import type { DeviceConfigApi, JoystickApi } from '../../service'
+import type { DeviceConfigApi } from '../../service'
 import type { InputLayout } from './inputLayout'
+import type { JoystickVerbs } from './joystick'
 import {
     applyJoystickBinding,
     joystickBindings,
@@ -91,11 +92,11 @@ const STATE: AxisState = {
     hat: 2,
 }
 
-const joystick: JoystickApi = {
+const joystick: JoystickVerbs = {
     writable: true,
     getState: () => Promise.resolve(STATE),
     getConfig: () => Promise.resolve({ hatWays: 8, axes: [] }),
-    calibrate: () => Promise.resolve(),
+    calibrate: () => Promise.resolve([]),
     setAxisMap: () => Promise.resolve(),
     setDeadzone: () => Promise.resolve(),
 }
@@ -309,6 +310,26 @@ describe('RemapprJoystickService', () => {
         await vi.advanceTimersByTimeAsync(100)
         expect(getState).not.toHaveBeenCalled()
         vi.useRealTimers()
+        await svc.disconnect()
+    })
+
+    it('puts what a calibration measured onto the stick that reads it', async () => {
+        const { svc } = make({
+            joystick: {
+                ...joystick,
+                // Input 0 (the stick's X) rests within 3 %, pushed to 94 %;
+                // input 1 (its Y) rests within 2 %, no end held.
+                calibrate: () =>
+                    Promise.resolve([
+                        { inner: 4, outer: 6 },
+                        { inner: 2, outer: null },
+                    ]),
+            },
+        })
+        expect(await svc.joystick!.calibrate('finish')).toEqual([
+            // The larger inner, and the saturation that keeps a 6 % edge band.
+            { controlId: 'stick:0', inner: 4, outer: 94 },
+        ])
         await svc.disconnect()
     })
 

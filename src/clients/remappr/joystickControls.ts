@@ -40,8 +40,10 @@ import {
     INPUT_NONE,
     InputClass,
     type AxisState,
+    type CalSuggestion,
     type InputLayoutEntry,
 } from './protocol'
+import type { DeadzoneSuggestion } from '../../service'
 
 const FULL = 32767
 const AXIS_LABEL: Readonly<Record<JoystickAxisId, string>> = {
@@ -285,6 +287,37 @@ function stickAxes(
     n: number,
 ): [JoystickAxisConfig, JoystickAxisConfig] {
     return [axisOf(j, 2 * n), axisOf(j, 2 * n + 1)]
+}
+
+/** The largest measured value, or undefined when none was. */
+function largest(values: readonly (number | null | undefined)[]): number | undefined {
+    const measured = values.filter((v): v is number => typeof v === 'number')
+    return measured.length ? Math.max(...measured) : undefined
+}
+
+/** What a calibration measured per analog input, onto the sticks that read
+ *  them (stick n: inputs 2n and 2n + 1), in the editor's units: the larger
+ *  inner of the two, and the saturation that keeps the larger edge band.
+ *  A stick nothing was measured for is left out. */
+export function stickSuggestions(
+    perInput: readonly CalSuggestion[],
+    inputs: ReadonlyMap<string, InputLayoutEntry>,
+): DeadzoneSuggestion[] {
+    const out: DeadzoneSuggestion[] = []
+    for (const id of inputs.keys()) {
+        if (!id.startsWith('stick:')) continue
+        const n = Number(id.slice(6))
+        const pair = [perInput[2 * n], perInput[2 * n + 1]]
+        const inner = largest(pair.map((p) => p?.inner))
+        const edge = largest(pair.map((p) => p?.outer))
+        if (inner === undefined && edge === undefined) continue
+        out.push({
+            controlId: id,
+            ...(inner === undefined ? {} : { inner }),
+            ...(edge === undefined ? {} : { outer: saturation(edge) }),
+        })
+    }
+    return out
 }
 
 /** What position `p` does by default: a hat direction for a hat's positions,

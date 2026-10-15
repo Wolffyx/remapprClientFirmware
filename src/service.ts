@@ -639,6 +639,16 @@ export type {
  *  finish (apply and store), cancel, reset (the board default). */
 export type JoystickCalStep = 'begin' | 'centre' | 'finish' | 'cancel' | 'reset'
 
+/** Deadzones a finished calibration suggests for one control, in the device
+ *  editor's units (StickBinding): inner = centre deadzone %, outer =
+ *  saturation % (100 = the whole travel). A field it measured nothing for is
+ *  absent. */
+export interface DeadzoneSuggestion {
+    readonly controlId: string
+    readonly inner?: number
+    readonly outer?: number
+}
+
 // Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as MouseMotionApi above.
 /** A joystick's live controls (JOYSTICK namespace, provisional). The axis map
  *  and deadzones set here are live tweaks: the next saved config replaces
@@ -652,8 +662,13 @@ export interface JoystickApi {
     getConfig(): Promise<AxisConfig>
     /** One calibration step on one input, or on every input when `input` is
      *  omitted. Rejects a step out of turn (finish before a centre, too
-     *  narrow a sweep). */
-    calibrate(step: JoystickCalStep, input?: number): Promise<void>
+     *  narrow a sweep). Finish resolves to the deadzones the capture
+     *  suggests, per control ([] for the other steps, or when the firmware
+     *  measures none). */
+    calibrate(
+        step: JoystickCalStep,
+        input?: number,
+    ): Promise<readonly DeadzoneSuggestion[]>
     /** Live: put `input` on report axis `out` (0..5, null = off). */
     setAxisMap(
         input: number,

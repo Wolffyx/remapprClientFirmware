@@ -263,7 +263,9 @@ export const JoystickVerb = {
      *  until the next COMMIT. */
     SET_DEADZONE: 0x03,
     /** Arg: u8 axis (0xFF = every input) | u8 step (JoyCalStep). Sealed,
-     *  mutating. ERR_STATE for a step out of turn or too narrow a sweep. */
+     *  mutating. ERR_STATE for a step out of turn or too narrow a sweep.
+     *  FINISH replies the deadzones the capture suggests (parseCalSuggestion);
+     *  the other steps, and older firmware, reply nothing. */
     CALIBRATE: 0x04,
     /** No arg → see parseAxisConfig. Plaintext-open read. */
     GET_AXIS_CONFIG: 0x05,
@@ -1325,6 +1327,32 @@ export function parseAxisConfig(d: Uint8Array): AxisConfig {
         }
     })
     return { hatWays: d[1], axes }
+}
+
+/** What a finished calibration measured for one analog input, in the
+ *  firmware's units: inner = centre deadzone %, outer = edge band that reads
+ *  as full %. null = nothing measured for it. */
+export interface CalSuggestion {
+    inner: number | null
+    outer: number | null
+}
+
+/** "Nothing measured" on the wire. */
+const CAL_SUGGEST_NONE = 0xff
+
+/** CALIBRATE FINISH reply: u8 version(=1) | u8 n | n × {u8 inner_pct, u8
+ *  outer_pct} (0xFF = none). Empty (other steps, older firmware) → []. */
+export function parseCalSuggestion(d: Uint8Array): CalSuggestion[] {
+    if (d.length === 0) return []
+    if (d.length < 2) throw new Error('calibrate reply too short')
+    if (d[0] !== 1) throw new Error(`unknown calibrate reply version ${d[0]}`)
+    const n = d[1]
+    if (d.length < 2 + 2 * n) throw new Error('calibrate reply too short')
+    const pct = (v: number): number | null => (v === CAL_SUGGEST_NONE ? null : v)
+    return Array.from({ length: n }, (_, i) => ({
+        inner: pct(d[2 + 2 * i]),
+        outer: pct(d[3 + 2 * i]),
+    }))
 }
 
 /** Standard HID report-rate steps (Hz), ascending — mirrors the firmware's

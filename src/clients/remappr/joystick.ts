@@ -14,14 +14,23 @@ import {
     Namespace,
     parseAxisConfig,
     parseAxisState,
+    parseCalSuggestion,
     Status,
     statusName,
     type AxisConfig,
     type AxisState,
+    type CalSuggestion,
 } from './protocol'
 import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
 import type { DiscoveryResult } from './discovery'
 import type { JoystickApi, JoystickCalStep } from '../../service'
+
+/** The JOYSTICK verbs as the wire has them: like JoystickApi, but calibrate
+ *  resolves to what each analog input measured (the service maps that onto
+ *  its controls). */
+export interface JoystickVerbs extends Omit<JoystickApi, 'calibrate'> {
+    calibrate(step: JoystickCalStep, input?: number): Promise<CalSuggestion[]>
+}
 
 /** Report axis "off" on the wire. */
 const AXIS_OFF = 0xff
@@ -107,18 +116,20 @@ export async function getAxisConfig(
     )
 }
 
-/** JOYSTICK.CALIBRATE one step on `input` (omitted = every input). */
+/** JOYSTICK.CALIBRATE one step on `input` (omitted = every input). Finish
+ *  resolves to what each input measured; the other steps to []. */
 export async function calibrate(
     rpc: RemapprRpc,
     step: JoystickCalStep,
     input?: number,
-): Promise<void> {
-    await call(
+): Promise<CalSuggestion[]> {
+    const data = await call(
         rpc,
         JoystickVerb.CALIBRATE,
         'CALIBRATE',
         new Uint8Array([input ?? JOY_CAL_ALL, STEPS[step]]),
     )
+    return parseCalSuggestion(data)
 }
 
 /** JOYSTICK.SET_AXIS_MAP (live): `input` onto report axis `out` (null off). */
@@ -157,7 +168,7 @@ export async function setDeadzone(
 export function buildJoystickApi(
     rpc: RemapprRpc,
     opts: { targetNode?: number; writable: boolean },
-): JoystickApi {
+): JoystickVerbs {
     const node = opts.targetNode ?? 0
     if (node && opts.writable) {
         throw new Error('A joystick behind the dongle can only be read.')
@@ -175,7 +186,7 @@ export function buildJoystickApi(
         getConfig: () => getAxisConfig(rpc, node),
         async calibrate(step, input) {
             guard()
-            await calibrate(rpc, step, input)
+            return calibrate(rpc, step, input)
         },
         async setAxisMap(input, out, invert) {
             guard()

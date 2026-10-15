@@ -6,6 +6,7 @@ import {
     Namespace,
     parseAxisConfig,
     parseAxisState,
+    parseCalSuggestion,
     Status,
 } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
@@ -37,7 +38,29 @@ const CONFIG = new Uint8Array([
     0x01, 0x01, 0x00, 0x08, 0x05, 0x00, 0x00, 0xd0, 0x07, 0xff, 0x0f,
 ])
 
+// The firmware golden (tests/control/src/test_control.c
+// test_joystick_finish_replies_the_suggestion): input 0 suggests inner 4 % /
+// outer 6 %, input 1 measured nothing.
+const SUGGEST = new Uint8Array([0x01, 0x02, 0x04, 0x06, 0xff, 0xff])
+
 describe('joystick wire (JOYSTICK namespace)', () => {
+    it('parses the FINISH suggestion byte for byte', () => {
+        expect(parseCalSuggestion(SUGGEST)).toEqual([
+            { inner: 4, outer: 6 },
+            { inner: null, outer: null },
+        ])
+        // The other steps, and older firmware, reply nothing.
+        expect(parseCalSuggestion(new Uint8Array())).toEqual([])
+        expect(() => parseCalSuggestion(SUGGEST.subarray(0, 4))).toThrow()
+        expect(() => parseCalSuggestion(new Uint8Array([2, 0]))).toThrow()
+    })
+
+    it('returns what FINISH measured', async () => {
+        const rpc = fakeRpc(async () => ({ status: Status.OK, data: SUGGEST }))
+        const api = buildJoystickApi(rpc, { writable: true })
+        expect(await api.calibrate('finish')).toHaveLength(2)
+    })
+
     it('parses GET_AXIS_STATE byte for byte', () => {
         expect(parseAxisState(STATE)).toEqual({
             inputs: [

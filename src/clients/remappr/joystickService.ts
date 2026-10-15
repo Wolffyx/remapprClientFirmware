@@ -26,6 +26,7 @@ import type {
 } from '../../service'
 import type { DeviceInfo, ExportedFile } from '../../types'
 import type { InputLayout } from './inputLayout'
+import type { JoystickVerbs } from './joystick'
 import {
     applyJoystickBinding,
     joystickBindings,
@@ -33,6 +34,7 @@ import {
     joystickFrame,
     joystickInputs,
     joystickModel,
+    stickSuggestions,
 } from './joystickControls'
 import type { InputLayoutEntry, Limits } from './protocol'
 
@@ -42,7 +44,7 @@ export interface JoystickServiceDeps {
     /** The settings document; absent when the firmware has no config store. */
     device?: DeviceConfigApi
     /** Live JOYSTICK verbs; absent when the firmware does not serve them. */
-    joystick?: JoystickApi
+    joystick?: JoystickVerbs
     /** False for a read-only view. */
     writable: boolean
     /** Where the controls sit (GET_INPUT_LAYOUT). */
@@ -99,8 +101,8 @@ export class RemapprJoystickService extends KeylessServiceBase {
         const editable = deps.writable && !!deps.device
         this.deviceInfo = deps.deviceInfo
         this.limits = deps.limits
-        this.joystick = deps.joystick
         this.inputs = joystickInputs(deps.layout)
+        this.joystick = deps.joystick && this.joystickApi(deps.joystick)
         this.layout = createLayoutOverride(
             joystickModel(deps.deviceInfo.name, deps.layout),
             {
@@ -248,6 +250,16 @@ export class RemapprJoystickService extends KeylessServiceBase {
     }
 
     // --- facades -------------------------------------------------------------
+
+    /** The JOYSTICK verbs, with what a calibration measured per analog input
+     *  put onto the controls that read them. */
+    private joystickApi(verbs: JoystickVerbs): JoystickApi {
+        return {
+            ...verbs,
+            calibrate: async (step, input) =>
+                stickSuggestions(await verbs.calibrate(step, input), this.inputs),
+        }
+    }
 
     private draftApi(): DeviceConfigDraft {
         return {
