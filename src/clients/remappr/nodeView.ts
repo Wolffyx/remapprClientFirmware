@@ -37,11 +37,13 @@ const hexId = (shortId: number): string =>
 
 /** Map a wire node record onto the firmware-neutral UI view. */
 /** The roster's device-type byte is the radio's own enum (radio_proto.h:
- *  NONE 0, KEYBOARD 1, MOUSE 2, CONFIG_TOOL 3), not the personality — 3 is a
- *  config tool there, not a recovery image. */
+ *  NONE 0, KEYBOARD 1, MOUSE 2, CONFIG_TOOL 3, JOYSTICK 4), not the
+ *  personality — 3 is a config tool there, not a recovery image, and 4 a
+ *  joystick, not a dongle. */
 const KIND_BY_RADIO_TYPE: Readonly<Partial<Record<number, DeviceKind>>> = {
     1: 'keyboard',
     2: 'mouse',
+    4: 'joystick',
 }
 
 function toNodeView(r: NodeRecord): NodeView {

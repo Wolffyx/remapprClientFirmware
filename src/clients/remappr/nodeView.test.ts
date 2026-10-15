@@ -192,6 +192,7 @@ describe('buildNodesApi.list', () => {
         expect(nodes[1]).toMatchObject({
             id: 0x0009,
             label: 'Node 0x0009',
+            kind: 'joystick', // radio device type 4
             online: true,
             bonded: false,
             rssi: -72,
