@@ -1398,9 +1398,9 @@ function encodeBlob(
             colors,
         })
     }
-    // TBL_PERSONALITY (§4c): the declared node identity. Only keyboard/mouse have
-    // a firmware personality today; joystick/dongle are reserved (dongle settings
-    // ride control verbs), so they warn instead of emitting a lossy identity.
+    // TBL_PERSONALITY (§4c): the declared node identity. Only keyboard/mouse take
+    // a keymap blob; a joystick or a dongle is configured by its device document
+    // (config/device.ts), so they warn instead of emitting a lossy identity.
     // pattern-check: skip — data-lowering emit of node identity/role/fwd + cluster
     // map, additive to the existing table emits; no new abstraction.
     // Emit TBL_PERSONALITY when the node declares ANY of a firmware personality
@@ -1414,7 +1414,7 @@ function encodeBlob(
         : undefined
     if (personality && personalityCode === undefined) {
         diag.warn(
-            `node personality '${personality}' has no firmware personality yet — not emitted`,
+            `node personality '${personality}' is configured by a device document, not a keymap — not emitted`,
             ['node', 'personality'],
         )
     }

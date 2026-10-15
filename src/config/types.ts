@@ -818,6 +818,50 @@ export interface MouseButtonAction {
     dpi?: number
 }
 
+/** A joystick report axis (HID X, Y, Z, Rx, Ry, Rz). */
+export type JoystickAxisId = 'x' | 'y' | 'z' | 'rx' | 'ry' | 'rz'
+
+/** A joystick response curve (TBL_JOYSTICK curve). */
+export type JoystickCurve = 'linear' | 'aggressive' | 'relaxed' | 'precise'
+
+/** What one analog input of a joystick does (a TBL_JOYSTICK entry). */
+export interface JoystickAxisConfig {
+    /** The analog input, 0..5, in the order the device lists them. */
+    input: number
+    /** The report axis it moves; null = it reports nowhere. */
+    out: JoystickAxisId | null
+    invert?: boolean
+    /** Default linear. */
+    curve?: JoystickCurve
+    /** Centre deadzone and the edge band read as full, percent; together
+     *  under 100. Default 0. */
+    inner?: number
+    outer?: number
+}
+
+/** What a joystick button can do (TBL_ACTION_BINDING, firmware action.h
+ *  GAMEPAD_* kinds): report gamepad button 1..32, hold a hat direction
+ *  (0 up, clockwise to 7), hold an axis at a value, or nothing. */
+export type JoystickButtonAction =
+    | { action: 'none' }
+    | { action: 'button'; button: number }
+    | { action: 'hat'; dir: number }
+    | { action: 'axis'; axis: JoystickAxisId; value: number }
+
+/** Joystick settings compiled to TBL_JOYSTICK + TBL_ACTION_BINDING
+ *  (input-layout plan §4). Calibration belongs to the unit and is never here. */
+export interface ConfigJoystick {
+    /** 4 or 8 (default 8): a 4-way hat reports a diagonal as its vertical. */
+    hatWays?: 4 | 8
+    /** One entry per analog input that differs from its default (input i on
+     *  axis i, linear, no deadzone). */
+    axes?: JoystickAxisConfig[]
+    /** By binding position (a button's place among the device's buttons):
+     *  what it does instead of its default (button position + 1; a d-pad
+     *  direction moves the hat). null = the default. */
+    buttonActions?: Array<JoystickButtonAction | null>
+}
+
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_CLUSTER layout
 /** One cluster node's address-space assignment, keyed by hardware UID (§N4c
  *  mode-A, TBL_CLUSTER). Mirrors the firmware struct remappr_cluster_node. */

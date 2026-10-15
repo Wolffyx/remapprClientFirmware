@@ -5,8 +5,9 @@
 // (`remappr.keymap`, schema.ts); a dongle has no keys or layers, so it gets this
 // small document instead. It compiles to an RMBC blob holding TBL_PERSONALITY
 // plus the device's own tables (compilers/remappr/device.ts): the dongle's
-// TBL_DONGLE, or the mouse's TBL_MOUSE and TBL_RADIO (firmware
-// docs/device-config-plan.md).
+// TBL_DONGLE, the mouse's TBL_MOUSE and TBL_RADIO (firmware
+// docs/device-config-plan.md), or the joystick's TBL_JOYSTICK and button
+// actions (input-layout plan §4).
 //
 //   {
 //     "schemaVersion": 1,
@@ -25,12 +26,20 @@
 //     "radio": { "keepaliveMs": 60 }
 //   }
 //
+//   {
+//     "schemaVersion": 1,
+//     "kind": "remappr.device",
+//     "meta": { "name": "Bench stick" },
+//     "personality": "joystick",
+//     "joystick": { "hatWays": 4, "axes": [{ "input": 1, "out": "y", "invert": true }] }
+//   }
+//
 // Every field is optional: one left out keeps the firmware's default. The
 // ranges mirror the firmware decoders (config_blob.h, radio_settings.h), so a
 // config that passes here is never refused for a range. A mouse's DPI must also
 // sit inside its board's range, which only the device knows (GET_MOTION_CONFIG).
 import { z } from 'zod'
-import { MouseSchema, RadioSettingsSchema } from './schema'
+import { JoystickSchema, MouseSchema, RadioSettingsSchema } from './schema'
 
 export const DongleSettingsSchema = z
     .object({
@@ -115,19 +124,21 @@ export const DeviceConfigSchema = z
             description: z.string().optional(),
         }),
         personality: z
-            .enum(['dongle', 'mouse'])
+            .enum(['dongle', 'mouse', 'joystick'])
             .describe('Which device this config is for; the device refuses any other.'),
         dongle: DongleSettingsSchema.optional(),
         mouse: MouseSchema.optional(),
         radio: RadioSettingsSchema.optional(),
+        joystick: JoystickSchema.optional(),
     })
     .superRefine((d, ctx) => {
         // A section another device reads would be silently ignored: refuse it.
         const own: Record<string, string[]> = {
             dongle: ['dongle'],
             mouse: ['mouse', 'radio'],
+            joystick: ['joystick'],
         }
-        for (const key of ['dongle', 'mouse', 'radio'] as const) {
+        for (const key of ['dongle', 'mouse', 'radio', 'joystick'] as const) {
             if (d[key] !== undefined && !own[d.personality].includes(key)) {
                 ctx.addIssue({
                     code: 'custom',

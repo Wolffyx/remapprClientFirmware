@@ -46,6 +46,8 @@ export const TableId = {
     Autocorrect: 24, // on-device autocorrect dictionary (§5.2-E)
     Dongle: 25, // 2.4 GHz dongle settings (device-config plan)
     Radio: 26, // a node's own 2.4 GHz link settings (device-config plan)
+    // 27 is promised to TBL_UPDATE.
+    Joystick: 28, // joystick axes + hat (input-layout plan §4)
 } as const
 
 /** enum remappr_personality (firmware include/remappr/role.h). */
@@ -55,6 +57,7 @@ export const Personality = {
     mouse: 2,
     recovery: 3,
     dongle: 4,
+    joystick: 5,
 } as const
 
 /** TBL_DONGLE `set` bits (config_blob.h REMAPPR_DONGLE_SET_*): which fields the
@@ -512,6 +515,33 @@ export const DeviceAction = {
     sniper: 5,
 } as const
 
+/** Gamepad action kinds (firmware action.h): a button 1..32, a hat direction
+ *  0..7, an axis 0..5 held at an i16 value (arg0). */
+export const ACT_NONE = 0
+export const ACT_GAMEPAD_BUTTON = 16
+export const ACT_GAMEPAD_HAT = 17
+export const ACT_GAMEPAD_AXIS = 18
+
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_JOYSTICK layout
+/** TBL_JOYSTICK (id 28) v1: the hat ways (0 = 8) and one 8-byte entry per
+ *  analog input it configures. */
+export interface JoystickTable {
+    hatWays: number
+    axes: Array<{
+        input: number
+        /** Report axis 0..5, or JOY_AXIS_OFF. */
+        out: number
+        flags: number
+        curve: number
+        inner: number
+        outer: number
+    }>
+}
+export const JOY_AXIS_OFF = 0xff
+export const JOY_FLAG_INVERT = 1 << 0
+export const JOYSTICK_TBL_HDR_LEN = 2
+export const JOYSTICK_TBL_AXIS_LEN = 8
+
 /** One action-binding record (10 bytes): an additive per-position action that
  *  sits alongside the keymap binding. `kind`/`code`/`arg0`/`arg1` are passed
  *  through verbatim (the firmware resolver interprets them). */
@@ -772,6 +802,24 @@ export class BlobBuilder {
             for (let i = 0; i < MOUSE_DPI_STAGES_MAX; i++) {
                 this.w.u16(m.v3.stages[i] ?? 0)
             }
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_JOYSTICK (id 28) v1: u8 hat_ways, u8 axis_count, then per entry
+     *  u8 input, u8 out_axis, u8 flags, u8 curve, u8 inner_pct, u8 outer_pct,
+     *  u16 reserved — matching firmware decode_joystick.c. */
+    joystickTable(j: JoystickTable): this {
+        this.tableBegin(TableId.Joystick, 1)
+        this.w.u8(j.hatWays)
+        this.w.u8(j.axes.length)
+        for (const a of j.axes) {
+            for (const v of [a.input, a.out, a.flags, a.curve, a.inner, a.outer]) {
+                this.w.u8(v)
+            }
+            this.w.u16(0) // reserved
         }
         this.tableEnd()
         return this

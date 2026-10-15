@@ -5,11 +5,16 @@
 // keymap tables. The firmware refuses a blob whose personality is not its own,
 // so the personality is always emitted. The dongle reads TBL_DONGLE (id 25);
 // the mouse reads TBL_MOUSE (id 8), its button actions from TBL_ACTION_BINDING
-// (id 17) and TBL_RADIO (id 26). Byte layout mirrors
+// (id 17) and TBL_RADIO (id 26); the joystick reads TBL_JOYSTICK (id 28) and
+// its button actions from TBL_ACTION_BINDING. Byte layout mirrors
 // firmware include/remappr/config_blob.h, lib/config_blob/decode_dongle.c and
 // include/remappr/radio_settings.h.
 import type { ConfigDevice, DongleSettings } from '../../device'
-import type { ConfigMouse, ConfigRadioSettings } from '../../types'
+import type {
+    ConfigJoystick,
+    ConfigMouse,
+    ConfigRadioSettings,
+} from '../../types'
 import {
     BLOB_READER_VERSION,
     BlobBuilder,
@@ -35,6 +40,13 @@ import {
     readMouseTable,
 } from './mouse'
 import { radioRecord, readRadio } from './radio'
+import {
+    JOYSTICK_ACTION_POSITIONS,
+    joystickActionRecords,
+    joystickRecord,
+    readJoystickActions,
+    readJoystickTable,
+} from './joystick'
 
 type DevicePersonality = ConfigDevice['personality']
 
@@ -62,6 +74,15 @@ function addDongle(builder: BlobBuilder, d: DongleSettings): void {
     })
 }
 
+function addJoystick(builder: BlobBuilder, j: ConfigJoystick): void {
+    const table = joystickRecord(j)
+    if (table) builder.joystickTable(table)
+    const actions = joystickActionRecords(j)
+    if (actions.length) {
+        builder.actionBindingTable(JOYSTICK_ACTION_POSITIONS, actions)
+    }
+}
+
 /**
  * Device config -> RMBC blob. `configVersion` must be above the device's active
  * one (the firmware refuses a stale commit). The config is assumed validated
@@ -81,6 +102,7 @@ export function buildRemapprDeviceBlob(
     if (actions.length) builder.actionBindingTable(MOUSE_ACTION_POSITIONS, actions)
     const radio = config.radio ? radioRecord(config.radio) : undefined
     if (radio) builder.radioTable(radio)
+    if (config.joystick) addJoystick(builder, config.joystick)
     return builder.finalize(
         config.schemaVersion,
         BLOB_READER_VERSION,
@@ -98,6 +120,9 @@ export interface DeviceDecodeResult {
     mouse?: ConfigMouse
     /** The mouse's radio settings (a mouse blob that carries TBL_RADIO). */
     radio?: ConfigRadioSettings
+    /** The joystick's settings (a joystick blob with TBL_JOYSTICK or button
+     *  actions). */
+    joystick?: ConfigJoystick
     /** The blob's config_version, present on OK. */
     configVersion?: number
 }
@@ -132,10 +157,14 @@ function readDongle(bytes: Uint8Array, start: number): DongleSettings {
 const PERSONALITY_BY_CODE: Record<number, DevicePersonality> = {
     [Personality.dongle]: 'dongle',
     [Personality.mouse]: 'mouse',
+    [Personality.joystick]: 'joystick',
 }
 
 type Frames = (id: number) => TableFrame | undefined
-type DeviceTables = Pick<DeviceDecodeResult, 'dongle' | 'mouse' | 'radio'>
+type DeviceTables = Pick<
+    DeviceDecodeResult,
+    'dongle' | 'mouse' | 'radio' | 'joystick'
+>
 
 function decodeDongleTables(
     bytes: Uint8Array,
@@ -176,12 +205,35 @@ function decodeMouseTables(
     return out
 }
 
+function decodeJoystickTables(
+    bytes: Uint8Array,
+    table: Frames,
+): DeviceTables | DecodeCodeValue {
+    let joystick: ConfigJoystick | undefined
+    const jt = table(TableId.Joystick)
+    if (jt) {
+        if (jt.version !== 1) return DecodeCode.TABLE_VER
+        const j = readJoystickTable(bytes, jt.start, jt.end)
+        if (typeof j === 'string') return DecodeCode.TABLE_FRAME
+        joystick = j
+    }
+    const at = table(TableId.ActionBinding)
+    if (at) {
+        if (at.version !== 1) return DecodeCode.TABLE_VER
+        const buttonActions = readJoystickActions(bytes, at)
+        if (typeof buttonActions === 'string') return DecodeCode.TABLE_FRAME
+        if (buttonActions) joystick = { ...joystick, buttonActions }
+    }
+    return joystick ? { joystick } : {}
+}
+
 const TABLES_BY_PERSONALITY: Record<
     DevicePersonality,
     (bytes: Uint8Array, table: Frames) => DeviceTables | DecodeCodeValue
 > = {
     dongle: decodeDongleTables,
     mouse: decodeMouseTables,
+    joystick: decodeJoystickTables,
 }
 
 /**

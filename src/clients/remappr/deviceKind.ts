@@ -14,6 +14,7 @@ const KIND_BY_PERSONALITY: Readonly<Partial<Record<number, DeviceKind>>> = {
     [Personality.keyboard]: 'keyboard',
     [Personality.mouse]: 'mouse',
     [Personality.dongle]: 'dongle',
+    [Personality.joystick]: 'joystick',
 }
 
 /** The device's kind. The DONGLE role wins (an older dongle reports no

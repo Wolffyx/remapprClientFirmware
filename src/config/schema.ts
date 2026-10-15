@@ -978,6 +978,81 @@ export const MouseSchema = z
             '(v3) DPI stages, and a mouse image\'s button actions.',
     )
 
+// pattern-check: skip declarative zod schemas mirroring TBL_JOYSTICK and the gamepad actions
+const JOYSTICK_AXES = ['x', 'y', 'z', 'rx', 'ry', 'rz'] as const
+/** Binding positions a joystick takes (firmware JOYSTICK_POSITIONS_MAX). */
+export const JOYSTICK_POSITIONS = 40
+
+export const JoystickAxisSchema = z
+    .object({
+        input: z.number().int().min(0).max(5),
+        out: z.enum(JOYSTICK_AXES).nullable(),
+        invert: z.boolean().optional(),
+        curve: z.enum(['linear', 'aggressive', 'relaxed', 'precise']).optional(),
+        inner: z.number().int().min(0).max(99).optional(),
+        outer: z.number().int().min(0).max(99).optional(),
+    })
+    .refine((a) => (a.inner ?? 0) + (a.outer ?? 0) < 100, {
+        message: 'inner + outer must stay under 100',
+        path: ['outer'],
+    })
+    .describe('What one analog input does: its axis, invert, curve, deadzones.')
+
+export const JoystickButtonActionSchema = z
+    .discriminatedUnion('action', [
+        z.object({ action: z.literal('none') }),
+        z.object({
+            action: z.literal('button'),
+            button: z.number().int().min(1).max(32),
+        }),
+        z.object({ action: z.literal('hat'), dir: z.number().int().min(0).max(7) }),
+        z.object({
+            action: z.literal('axis'),
+            axis: z.enum(JOYSTICK_AXES),
+            value: z.number().int().min(-32767).max(32767),
+        }),
+    ])
+    .describe('A gamepad action on a joystick button.')
+
+export const JoystickSchema = z
+    .object({
+        hatWays: z
+            .union([z.literal(4), z.literal(8)])
+            .optional()
+            .describe('4 or 8 (default 8); a 4-way hat reports a diagonal as its vertical.'),
+        axes: z
+            .array(JoystickAxisSchema)
+            .max(6)
+            .optional()
+            .describe('One entry per analog input that differs from its default.'),
+        buttonActions: z
+            .array(JoystickButtonActionSchema.nullable())
+            .max(JOYSTICK_POSITIONS)
+            .optional()
+            .describe(
+                'By binding position: what the button does instead of its ' +
+                    'default (TBL_ACTION_BINDING); null = the default.',
+            ),
+    })
+    .superRefine((j, ctx) => {
+        const seen = new Set<number>()
+        for (const [i, a] of (j.axes ?? []).entries()) {
+            if (seen.has(a.input)) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: ['axes', i, 'input'],
+                    message: `input ${a.input} is listed twice`,
+                })
+            }
+            seen.add(a.input)
+        }
+    })
+    .describe(
+        'Joystick settings (TBL_JOYSTICK, input-layout plan §4): hat ways, ' +
+            'per-input axis mapping, curve and deadzones, and button actions. ' +
+            'Calibration stays on the device.',
+    )
+
 // pattern-check: skip plain zod wire-DTO schema mirroring TBL_CLUSTER
 export const ClusterNodeSchema = z
     .object({

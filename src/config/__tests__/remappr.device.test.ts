@@ -272,3 +272,85 @@ describe('mouse device document (device-config plan, step 3)', () => {
         expect(decodeRemapprDeviceBlob(dongle).mouse).toBeUndefined()
     })
 })
+
+describe('joystick device config', () => {
+    const JOY = {
+        schemaVersion: 1,
+        kind: 'remappr.device',
+        meta: { name: 'Bench stick' },
+        personality: 'joystick',
+        joystick: {
+            hatWays: 4,
+            axes: [
+                { input: 0, out: 'x', curve: 'aggressive', inner: 8, outer: 5 },
+                { input: 1, out: 'y', invert: true, inner: 8, outer: 5 },
+            ],
+            buttonActions: [
+                null,
+                { action: 'axis', axis: 'z', value: 32767 },
+                null,
+                null,
+                { action: 'button', button: 10 },
+            ],
+        },
+    }
+    // TBL_JOYSTICK is the firmware golden (test_joystick_decode.c test_golden);
+    // both tables match make_joystick_blob.py --hat-ways 4
+    // --axis 0:x:aggressive:8:5 --axis 1:y:linear:8:5:invert
+    // --button-action 1:axis=z@32767 --button-action 4:button=10.
+    // prettier-ignore
+    const TABLES = [
+        0x1c, 0x00, 0x01, 0x00, 0x12, 0x00, 0x00, 0x00, // TBL_JOYSTICK v1, 18 B
+        0x04, 0x02,
+        0x00, 0x00, 0x00, 0x01, 0x08, 0x05, 0x00, 0x00,
+        0x01, 0x01, 0x01, 0x00, 0x08, 0x05, 0x00, 0x00,
+        0x11, 0x00, 0x01, 0x00, 0x18, 0x00, 0x00, 0x00, // TBL_ACTION_BINDING
+        0x02, 0x00, 0x28, 0x00,                         // 2 records, 40 positions
+        0x01, 0x00, 0x12, 0x00, 0x02, 0x00, 0xff, 0x7f, 0x00, 0x00, // 1: Z +
+        0x04, 0x00, 0x10, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, // 4: button 10
+    ]
+
+    it('encodes TBL_PERSONALITY 5, TBL_JOYSTICK and the actions', () => {
+        const blob = buildRemapprDeviceBlob(parseDeviceConfig(JSON.stringify(JOY)), {
+            configVersion: 2,
+        })
+        expect(blob[28]).toBe(Personality.joystick)
+        expect(Array.from(blob.subarray(32))).toEqual(TABLES)
+    })
+
+    it('round-trips through the decoder', () => {
+        const cfg = parseDeviceConfig(JSON.stringify(JOY))
+        const blob = buildRemapprDeviceBlob(cfg, { configVersion: 2 })
+        const r = decodeRemapprDeviceBlob(blob)
+        expect(r.code).toBe(DecodeCode.OK)
+        expect(r.personality).toBe('joystick')
+        expect(r.joystick).toEqual(JOY.joystick)
+        expect(
+            buildRemapprDeviceBlob({ ...cfg, joystick: r.joystick }, { configVersion: 2 }),
+        ).toEqual(blob)
+    })
+
+    it('writes no joystick tables for an empty section', () => {
+        const blob = buildRemapprDeviceBlob(
+            parseDeviceConfig(JSON.stringify({ ...JOY, joystick: {} })),
+            { configVersion: 1 },
+        )
+        expect(blob.length).toBe(20 + 12)
+        expect(decodeRemapprDeviceBlob(blob).joystick).toBeUndefined()
+    })
+
+    it('refuses what the firmware would refuse', () => {
+        const bad = (joystick: unknown) => () =>
+            parseDeviceConfig(JSON.stringify({ ...JOY, joystick }))
+        expect(bad({ hatWays: 6 })).toThrow()
+        expect(bad({ axes: [{ input: 6, out: 'x' }] })).toThrow()
+        expect(bad({ axes: [{ input: 0, out: 'x' }, { input: 0, out: 'y' }] })).toThrow()
+        expect(bad({ axes: [{ input: 0, out: 'x', inner: 60, outer: 40 }] })).toThrow()
+        expect(bad({ buttonActions: [{ action: 'button', button: 33 }] })).toThrow()
+        expect(bad({ buttonActions: [{ action: 'hat', dir: 8 }] })).toThrow()
+        expect(bad({ buttonActions: Array(41).fill(null) })).toThrow()
+        expect(() =>
+            parseDeviceConfig(JSON.stringify({ ...JOY, mouse: { cpi: 800 } })),
+        ).toThrow()
+    })
+})

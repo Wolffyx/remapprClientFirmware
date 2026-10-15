@@ -125,6 +125,7 @@ export const Cap = {
     PAIRING: 1 << 7,
     CLUSTER_DIAG: 1 << 12, // GET_CLUSTER_DIAG source wired (§N4b-3)
     UNICODE: 1 << 14, // unicode input-method ops wired (§5.2-E)
+    JOYSTICK: 1 << 15, // JOYSTICK-namespace ops wired (input-layout plan §4)
 } as const
 
 /** enum remappr_capability (include/remappr/capabilities.h) — the hardware
@@ -246,6 +247,39 @@ export const MouseVerb = {
     /** Arg: u8 scroll mode id (sealed, mutating). */
     SET_SCROLL_MODE: 0x04,
 } as const
+
+/** JOYSTICK-namespace verbs (input-layout plan §4) — namespace-scoped,
+ *  0xE2-only, PROVISIONAL (the manifest lists the namespace at ns_version 0).
+ *  `axis` in an argument is the analog input index (0..5), not the report
+ *  axis it maps to. Each verb is manifest-gated on its wired op; wiring any
+ *  raises CAP_JOYSTICK (1<<15). */
+export const JoystickVerb = {
+    /** No arg → see parseAxisState. Plaintext-open read. */
+    GET_AXIS_STATE: 0x01,
+    /** Arg: u8 axis | u8 out_axis (0..5, 0xFF off) | u8 flags (bit0 invert).
+     *  Sealed, mutating; live until the next COMMIT, never stored. */
+    SET_AXIS_MAP: 0x02,
+    /** Arg: u8 axis | u8 inner_pct | u8 outer_pct. Sealed, mutating; live
+     *  until the next COMMIT. */
+    SET_DEADZONE: 0x03,
+    /** Arg: u8 axis (0xFF = every input) | u8 step (JoyCalStep). Sealed,
+     *  mutating. ERR_STATE for a step out of turn or too narrow a sweep. */
+    CALIBRATE: 0x04,
+    /** No arg → see parseAxisConfig. Plaintext-open read. */
+    GET_AXIS_CONFIG: 0x05,
+} as const
+
+/** CALIBRATE steps. */
+export const JoyCalStep = {
+    BEGIN: 0,
+    CENTRE: 1,
+    FINISH: 2,
+    CANCEL: 3,
+    RESET: 4,
+} as const
+
+/** CALIBRATE axis byte: every input at once. */
+export const JOY_CAL_ALL = 0xff
 
 /** INPUT-namespace verbs (input-layout plan §2) — namespace-scoped, 0xE2-only. */
 export const InputVerb = {
@@ -1220,6 +1254,77 @@ export function buildDpiArg(dpi: number): Uint8Array {
     const out = new Uint8Array(2)
     new DataView(out.buffer).setUint16(0, dpi, true)
     return out
+}
+
+/** A joystick's live state (JOYSTICK.GET_AXIS_STATE): per analog input its
+ *  raw ADC count and the value it puts on its report axis (-32767..32767),
+ *  the report's buttons (bit i = button i + 1) and its hat (0..7 from up,
+ *  clockwise; 8 centred). */
+export interface AxisState {
+    inputs: Array<{ raw: number; value: number }>
+    buttons: number
+    hat: number
+}
+
+export function parseAxisState(d: Uint8Array): AxisState {
+    if (d.length < 2) throw new Error('axis-state reply too short')
+    if (d[0] !== 1) throw new Error(`unknown axis-state version ${d[0]}`)
+    const n = d[1]
+    if (d.length < 2 + 4 * n + 5) throw new Error('axis-state reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const inputs = Array.from({ length: n }, (_, i) => ({
+        raw: dv.getInt16(2 + 4 * i, true),
+        value: dv.getInt16(4 + 4 * i, true),
+    }))
+    return {
+        inputs,
+        buttons: dv.getUint32(2 + 4 * n, true),
+        hat: d[6 + 4 * n],
+    }
+}
+
+/** One analog input's config and the unit's calibration of it
+ *  (JOYSTICK.GET_AXIS_CONFIG). `out` 0..5 = X Y Z Rx Ry Rz, 0xFF off;
+ *  `curve` 0 linear, 1 aggressive, 2 relaxed, 3 precise. */
+export interface AxisConfigEntry {
+    out: number
+    flags: number
+    curve: number
+    inner: number
+    outer: number
+    min: number
+    centre: number
+    max: number
+}
+
+export interface AxisConfig {
+    hatWays: number
+    axes: AxisConfigEntry[]
+}
+
+const AXIS_CONFIG_ENTRY_LEN = 11
+
+export function parseAxisConfig(d: Uint8Array): AxisConfig {
+    if (d.length < 3) throw new Error('axis-config reply too short')
+    if (d[0] !== 1) throw new Error(`unknown axis-config version ${d[0]}`)
+    const n = d[2]
+    if (d.length < 3 + AXIS_CONFIG_ENTRY_LEN * n)
+        throw new Error('axis-config reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const axes = Array.from({ length: n }, (_, i) => {
+        const o = 3 + AXIS_CONFIG_ENTRY_LEN * i
+        return {
+            out: d[o],
+            flags: d[o + 1],
+            curve: d[o + 2],
+            inner: d[o + 3],
+            outer: d[o + 4],
+            min: dv.getInt16(o + 5, true),
+            centre: dv.getInt16(o + 7, true),
+            max: dv.getInt16(o + 9, true),
+        }
+    })
+    return { hatWays: d[1], axes }
 }
 
 /** Standard HID report-rate steps (Hz), ascending — mirrors the firmware's

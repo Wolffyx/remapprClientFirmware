@@ -12,6 +12,8 @@ import type {
 } from './devices/types'
 import type { LightingCatalog } from './lighting'
 import type {
+    AxisConfig,
+    AxisState,
     ClusterDiag,
     Limits,
     MotionConfig,
@@ -625,6 +627,43 @@ export interface MouseMotionApi {
     setScrollMode(mode: number): Promise<void>
 }
 
+/** Re-exported with JoystickApi so a consumer imports the facade and its wire
+ *  DTOs from one entry point. */
+export type {
+    AxisConfig,
+    AxisConfigEntry,
+    AxisState,
+} from './clients/remappr/protocol'
+
+/** A CALIBRATE step: begin (sweep the stick to its ends), centre (it rests),
+ *  finish (apply and store), cancel, reset (the board default). */
+export type JoystickCalStep = 'begin' | 'centre' | 'finish' | 'cancel' | 'reset'
+
+// Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as MouseMotionApi above.
+/** A joystick's live controls (JOYSTICK namespace, provisional). The axis map
+ *  and deadzones set here are live tweaks: the next saved config replaces
+ *  them. Calibration belongs to the unit and stays across configs. */
+export interface JoystickApi {
+    /** False on a node reached through a dongle (read-only view). */
+    readonly writable: boolean
+    /** Each analog input's raw count and report value, the buttons, the hat. */
+    getState(): Promise<AxisState>
+    /** Each analog input's axis, curve, deadzones and calibration. */
+    getConfig(): Promise<AxisConfig>
+    /** One calibration step on one input, or on every input when `input` is
+     *  omitted. Rejects a step out of turn (finish before a centre, too
+     *  narrow a sweep). */
+    calibrate(step: JoystickCalStep, input?: number): Promise<void>
+    /** Live: put `input` on report axis `out` (0..5, null = off). */
+    setAxisMap(
+        input: number,
+        out: number | null,
+        invert: boolean,
+    ): Promise<void>
+    /** Live: the input's deadzones, percent (inner + outer < 100). */
+    setDeadzone(input: number, inner: number, outer: number): Promise<void>
+}
+
 // Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as
 // EncoderApi / MouseMotionApi / SideloadApi above: one surface an adapter may
 // or may not implement, gated by presence.
@@ -707,6 +746,8 @@ export interface KeyboardService {
     readonly device?: DeviceConfigApi
     /** Live mouse controls; present on a mouse. */
     readonly motion?: MouseMotionApi
+    /** Live joystick controls and calibration; present on a joystick. */
+    readonly joystick?: JoystickApi
 
     getLockState(): Promise<LockState>
 

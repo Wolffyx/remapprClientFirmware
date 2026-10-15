@@ -32,6 +32,9 @@ describe('deviceKind', () => {
         expect(deviceKind(discovery(Role.NODE, Personality.mouse))).toBe(
             'mouse',
         )
+        expect(deviceKind(discovery(Role.NODE, Personality.joystick))).toBe(
+            'joystick',
+        )
     })
 
     it('treats the DONGLE role as a dongle whatever the personality says', () => {

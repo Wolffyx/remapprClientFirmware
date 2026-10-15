@@ -20,6 +20,7 @@ import { buildDeviceConfigApi } from './deviceConfig'
 import { deviceKind } from './deviceKind'
 import { discover, type DiscoveryResult } from './discovery'
 import { buildMouseMotionApi } from './mouse'
+import { buildJoystickApi } from './joystick'
 import { readInputLayout } from './inputLayout'
 import { warmRemapprIdentity } from './identity'
 import { buildClusterApi } from './clusterView'
@@ -44,6 +45,7 @@ import {
 import { createRemapprRpc, type RemapprRpc } from './rpc'
 import { RemapprKeyboardService } from './service'
 import { RemapprMouseService } from './mouseService'
+import { RemapprJoystickService } from './joystickService'
 import { getRateLimits, setReportRate } from './reportRate'
 
 const PROBE_TIMEOUT_MS = 1000
@@ -205,6 +207,42 @@ async function buildMouseService(
     })
 }
 
+/** True when the device lists the JOYSTICK namespace (the verbs are
+ *  provisional, so an unlisted namespace is never assumed). */
+export function servesJoystick(discovery: DiscoveryResult): boolean {
+    const ns = discovery.personality?.namespaces
+    return !!ns?.some((n) => n.namespace === Namespace.JOYSTICK)
+}
+
+/** A joystick on its own transport: edited in the device editor, drawn from
+ *  its own layout, with live calibration. */
+async function buildJoystickService(
+    rpc: RemapprRpc,
+    probed: ProbedRemappr,
+): Promise<RemapprJoystickService> {
+    const { discovery, deviceInfo } = probed
+    const layout = await readInputLayout(rpc, discovery.personality?.namespaces)
+    return new RemapprJoystickService({
+        deviceInfo,
+        limits: discovery.limits,
+        device: hasConfigStore(discovery)
+            ? buildDeviceConfigApi(rpc, {
+                  personality: 'joystick',
+                  name: deviceInfo.name,
+                  writable: true,
+              })
+            : undefined,
+        joystick: servesJoystick(discovery)
+            ? buildJoystickApi(rpc, { writable: true })
+            : undefined,
+        writable: true,
+        layout,
+        onTransportClosed: (cb) => rpc.onClosed(cb),
+        closeTransport: () =>
+            rpc.close({ abortTransport: true }).catch(() => undefined),
+    })
+}
+
 /** Open an RPC and negotiate the device. Returns null (releasing the stream
  *  locks) when the transport is not a Remappr node. */
 async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null> {
@@ -321,11 +359,15 @@ export const remapprAdapter: FirmwareAdapter = {
         )
 
         try {
-            // A dongle or a mouse has no auth session and no keymap (§7.2): skip
-            // the §19 handshake and keymap load. The dongle surfaces its node
-            // roster, the mouse its motion controls, both their own settings.
+            // A dongle, a mouse or a joystick has no auth session and no keymap
+            // (§7.2): skip the §19 handshake and keymap load. The dongle
+            // surfaces its node roster, the mouse its motion controls, the
+            // joystick its axes and calibration, each its own settings.
             if (kind === 'dongle') return buildDongleService(rpc, probed)
             if (kind === 'mouse') return await buildMouseService(rpc, probed)
+            if (kind === 'joystick') {
+                return await buildJoystickService(rpc, probed)
+            }
 
             // §19 is capability-gated: a dev/no-auth firmware (CAP_AUTH clear)
             // takes plaintext writes, so skip the handshake entirely there. A
