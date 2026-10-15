@@ -55,6 +55,10 @@ export interface JoystickServiceDeps {
 
 const PROFILE = { id: 'p0', name: 'Default' } as const
 
+/** Failed reads in a row that end the live readout. One is a busy moment (a
+ *  calibration step writing flash); a run of them is a device gone away. */
+const MAX_FAILED_READS = 5
+
 /** JSON with sorted keys, so two equal documents compare equal. */
 function stableJson(v: unknown): string {
     return JSON.stringify(v, (_k, x: unknown) =>
@@ -216,17 +220,22 @@ export class RemapprJoystickService extends KeylessServiceBase {
         const api = this.deps.joystick
         if (this.poll || !api) return
         let busy = false
+        let failed = 0
         this.poll = setInterval(() => {
             if (busy) return
             busy = true
             api.getState()
                 .then((state) => {
+                    failed = 0
                     const frame = joystickFrame(state, this.bindings())
                     for (const cb of [...this.inputListeners]) cb(frame)
                 })
-                // A failed read ends the readout (the device went away or
-                // refused); listeners keep their last frame.
-                .catch(() => this.stopPolling())
+                // A run of failed reads ends the readout (the device went
+                // away or refuses); listeners keep their last frame.
+                .catch(() => {
+                    failed += 1
+                    if (failed >= MAX_FAILED_READS) this.stopPolling()
+                })
                 .finally(() => {
                     busy = false
                 })

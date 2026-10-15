@@ -312,6 +312,40 @@ describe('RemapprJoystickService', () => {
         await svc.disconnect()
     })
 
+    it('keeps the live readout through a failed read', async () => {
+        vi.useFakeTimers()
+        const getState = vi
+            .fn<() => Promise<typeof STATE>>()
+            .mockRejectedValueOnce(new Error('busy'))
+            .mockResolvedValue(STATE)
+        const { svc } = make({
+            joystick: { ...joystick, getState },
+            pollMs: 20,
+        })
+        const frames = vi.fn()
+        const off = svc.controls.onInput!(frames)
+        await vi.advanceTimersByTimeAsync(100)
+        expect(frames).toHaveBeenCalled()
+        off()
+        vi.useRealTimers()
+        await svc.disconnect()
+    })
+
+    it('ends the live readout after a run of failed reads', async () => {
+        vi.useFakeTimers()
+        const getState = vi.fn(() => Promise.reject(new Error('gone')))
+        const { svc } = make({
+            joystick: { ...joystick, getState },
+            pollMs: 20,
+        })
+        const off = svc.controls.onInput!(() => undefined)
+        await vi.advanceTimersByTimeAsync(500)
+        expect(getState).toHaveBeenCalledTimes(5)
+        off()
+        vi.useRealTimers()
+        await svc.disconnect()
+    })
+
     it('has no live readout without the JOYSTICK verbs', async () => {
         const { svc } = make({ joystick: undefined })
         expect(svc.controls.onInput).toBeUndefined()
