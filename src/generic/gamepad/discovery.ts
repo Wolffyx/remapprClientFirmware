@@ -84,6 +84,17 @@ function inputDevice(gp: GamepadLike, env: GamepadEnv): GenericInputDevice {
 /** Whether this window can see controllers at all. */
 export const gamepadsSupported = (): boolean => browserGamepadEnv() !== null
 
+/** pid.codes, the USB vendor id Remappr hardware uses. */
+const REMAPPR_USB_VID = 0x1209
+
+/** A Remappr joystick, or a Remappr dongle relaying one, has its own card
+ *  that speaks its protocol; its gamepad interface is not listed again as a
+ *  generic controller. Other pid.codes devices still are. */
+function ownedByRemappr(gp: GamepadLike): boolean {
+    const { vendorId, name } = parseGamepadId(gp.id)
+    return vendorId === REMAPPR_USB_VID && /\bremappr\b/i.test(name)
+}
+
 /** The controllers this window sees right now (each needs a button pressed
  *  once before the browser lists it). */
 export function listGamepads(
@@ -92,7 +103,9 @@ export function listGamepads(
     if (!env) return []
     return env
         .getGamepads()
-        .flatMap((gp) => (gp?.connected ? [inputDevice(gp, env)] : []))
+        .flatMap((gp) =>
+            gp?.connected && !ownedByRemappr(gp) ? [inputDevice(gp, env)] : [],
+        )
 }
 
 /** Calls `cb` when a controller appears or goes away; returns a stop. */

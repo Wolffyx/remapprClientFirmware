@@ -238,6 +238,21 @@ describe('listGamepads', () => {
         expect(found[1]!.preview.model.defaulted).toBe(true)
     })
 
+    it("leaves out a Remappr joystick's or dongle's own gamepad", () => {
+        const dongle = pad({
+            index: 1,
+            id: 'Remappr Remappr Dongle (Vendor: 1209 Product: 0002)',
+            mapping: '',
+        })
+        const otherPidCodes = pad({
+            index: 2,
+            id: 'Open Stick (Vendor: 1209 Product: 2302)',
+            mapping: '',
+        })
+        const { env } = fakeEnv([dongle, otherPidCodes])
+        expect(listGamepads(env).map((d) => d.name)).toEqual(['Open Stick'])
+    })
+
     it('is empty without a Gamepad API', () => {
         expect(listGamepads(null)).toEqual([])
     })
