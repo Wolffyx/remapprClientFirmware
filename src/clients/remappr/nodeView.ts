@@ -13,6 +13,7 @@ import { buildDeviceConfigApi } from './deviceConfig'
 import { deviceKind } from './deviceKind'
 import { discover, type DiscoveryResult } from './discovery'
 import { buildMouseMotionApi } from './mouse'
+import { buildJoystickApi, servesJoystick } from './joystick'
 import { readInputLayout } from './inputLayout'
 import {
     clearAllBonds,
@@ -30,6 +31,7 @@ import type { DeviceInfo as RawDeviceInfo, NodeRecord } from './protocol'
 import type { RemapprRpc } from './rpc'
 import { RemapprKeyboardService } from './service'
 import { RemapprMouseService } from './mouseService'
+import { RemapprJoystickService } from './joystickService'
 
 /** "0x0007"-style short-id, for labels and node device names. */
 const hexId = (shortId: number): string =>
@@ -111,6 +113,55 @@ async function openMouseView(
     })
 }
 
+/** Live readout period through the relay: each read is a radio round trip. */
+const RELAY_POLL_MS = 250
+
+// pattern-check: skip — the joystick twin of openMouseView
+/** A read-only view of a joystick behind the dongle: its settings, live state
+ *  and layout read through the relay; saving and calibration need it on USB. */
+async function openJoystickView(
+    rpc: RemapprRpc,
+    id: number,
+    discovery: DiscoveryResult,
+): Promise<KeyboardService> {
+    const deviceInfo = nodeDeviceInfo(id, discovery.deviceInfo, 'Joystick')
+    const layout = await readInputLayout(
+        rpc,
+        discovery.personality?.namespaces,
+        id,
+    )
+    return new RemapprJoystickService({
+        deviceInfo,
+        limits: discovery.limits,
+        device: buildDeviceConfigApi(rpc, {
+            personality: 'joystick',
+            targetNode: id,
+            name: deviceInfo.name,
+            writable: false,
+        }),
+        joystick: servesJoystick(discovery)
+            ? buildJoystickApi(rpc, { targetNode: id, writable: false })
+            : undefined,
+        writable: false,
+        layout,
+        pollMs: RELAY_POLL_MS,
+        // The dongle's RPC: closing the view must not close it.
+        onTransportClosed: (cb) => rpc.onClosed(cb),
+    })
+}
+
+type NodeViewOpener = (
+    rpc: RemapprRpc,
+    id: number,
+    discovery: DiscoveryResult,
+) => Promise<KeyboardService>
+
+/** Node kinds with their own view; any other node opens as a keymap. */
+const VIEW_BY_KIND: Readonly<Partial<Record<DeviceKind, NodeViewOpener>>> = {
+    mouse: openMouseView,
+    joystick: openJoystickView,
+}
+
 /**
  * The `nodes` facade for a Remappr device. On a dongle, `list()` returns the
  * bonded roster and `open(id)` yields a read-only view of one node; on a
@@ -127,9 +178,8 @@ export function buildNodesApi(rpc: RemapprRpc): NodesApi {
             // Relayed discovery + config read, all addressed by the node short-id
             // (§6.2 universal COMMON relay). HW-proven read path.
             const discovery = await discover(rpc, { targetNode: id })
-            if (deviceKind(discovery) === 'mouse') {
-                return openMouseView(rpc, id, discovery)
-            }
+            const openView = VIEW_BY_KIND[deviceKind(discovery)]
+            if (openView) return openView(rpc, id, discovery)
             const loaded = await loadDeviceConfig(rpc, discovery, {
                 targetNode: id,
             })

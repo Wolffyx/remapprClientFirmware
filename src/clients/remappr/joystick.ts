@@ -19,7 +19,8 @@ import {
     type AxisConfig,
     type AxisState,
 } from './protocol'
-import type { RemapprRpc } from './rpc'
+import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
+import type { DiscoveryResult } from './discovery'
 import type { JoystickApi, JoystickCalStep } from '../../service'
 
 /** Report axis "off" on the wire. */
@@ -31,6 +32,13 @@ const STEPS: Readonly<Record<JoystickCalStep, number>> = {
     finish: JoyCalStep.FINISH,
     cancel: JoyCalStep.CANCEL,
     reset: JoyCalStep.RESET,
+}
+
+/** True when the device lists the JOYSTICK namespace (the verbs are
+ *  provisional, so an unlisted namespace is never assumed). */
+export function servesJoystick(discovery: DiscoveryResult): boolean {
+    const ns = discovery.personality?.namespaces
+    return !!ns?.some((n) => n.namespace === Namespace.JOYSTICK)
 }
 
 async function call(
@@ -45,18 +53,57 @@ async function call(
     return reply.data
 }
 
+/** A read, relayed with retries when `targetNode` names a node behind the
+ *  dongle (0 = the device itself). */
+async function read(
+    rpc: RemapprRpc,
+    verb: number,
+    name: string,
+    targetNode: number,
+): Promise<Uint8Array> {
+    if (!targetNode) return call(rpc, verb, name)
+    const reply = await rpc.callUniversalPlain(
+        Namespace.JOYSTICK,
+        verb,
+        undefined,
+        {
+            targetNode,
+            retries: RELAY_READ_RETRIES,
+        },
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`${name} → ${statusName(reply.status)}`)
+    return reply.data
+}
+
 /** JOYSTICK.GET_AXIS_STATE: each input's raw count and value, buttons, hat. */
-export async function getAxisState(rpc: RemapprRpc): Promise<AxisState> {
+export async function getAxisState(
+    rpc: RemapprRpc,
+    targetNode = 0,
+): Promise<AxisState> {
     return parseAxisState(
-        await call(rpc, JoystickVerb.GET_AXIS_STATE, 'GET_AXIS_STATE'),
+        await read(
+            rpc,
+            JoystickVerb.GET_AXIS_STATE,
+            'GET_AXIS_STATE',
+            targetNode,
+        ),
     )
 }
 
 /** JOYSTICK.GET_AXIS_CONFIG: each input's mapping, curve, deadzones and
  *  calibration. */
-export async function getAxisConfig(rpc: RemapprRpc): Promise<AxisConfig> {
+export async function getAxisConfig(
+    rpc: RemapprRpc,
+    targetNode = 0,
+): Promise<AxisConfig> {
     return parseAxisConfig(
-        await call(rpc, JoystickVerb.GET_AXIS_CONFIG, 'GET_AXIS_CONFIG'),
+        await read(
+            rpc,
+            JoystickVerb.GET_AXIS_CONFIG,
+            'GET_AXIS_CONFIG',
+            targetNode,
+        ),
     )
 }
 
@@ -105,11 +152,16 @@ export async function setDeadzone(
 }
 
 /** The `service.joystick` facade. `writable` false keeps the reads and
- *  rejects every change. */
+ *  rejects every change. `targetNode` relays the reads to a node behind the
+ *  dongle; changes there are not supported, so such a view is read-only. */
 export function buildJoystickApi(
     rpc: RemapprRpc,
-    opts: { writable: boolean },
+    opts: { targetNode?: number; writable: boolean },
 ): JoystickApi {
+    const node = opts.targetNode ?? 0
+    if (node && opts.writable) {
+        throw new Error('A joystick behind the dongle can only be read.')
+    }
     const guard = (): void => {
         if (!opts.writable) {
             throw new Error(
@@ -119,8 +171,8 @@ export function buildJoystickApi(
     }
     return {
         writable: opts.writable,
-        getState: () => getAxisState(rpc),
-        getConfig: () => getAxisConfig(rpc),
+        getState: () => getAxisState(rpc, node),
+        getConfig: () => getAxisConfig(rpc, node),
         async calibrate(step, input) {
             guard()
             await calibrate(rpc, step, input)

@@ -97,7 +97,7 @@ interface FakeRpc {
 }
 
 function makeRpc(
-    opts: { roster?: Uint8Array; personality?: number } = {},
+    opts: { roster?: Uint8Array; personality?: number; namespaces?: number[] } = {},
 ): FakeRpc {
     const state: FakeRpc = {
         targets: [],
@@ -132,8 +132,22 @@ function makeRpc(
                 verb === CommonVerb.GET_PERSONALITY_MAP &&
                 opts.personality !== undefined
             ) {
-                // role NODE, personality, proto 2, no namespaces, hw caps 0.
-                return ok(new Uint8Array([0, opts.personality, 2, 0, 0, 0, 0, 0]))
+                // role NODE, personality, proto 2, the namespaces (all verbs),
+                // hw caps 0.
+                const ns = opts.namespaces ?? []
+                return ok(
+                    new Uint8Array([
+                        0,
+                        opts.personality,
+                        2,
+                        ns.length,
+                        ...ns.flatMap((n) => [n, 0xff, 0xff]),
+                        0,
+                        0,
+                        0,
+                        0,
+                    ]),
+                )
             }
             if (namespace === Namespace.COMMON && verb === Cmd.READ_CONFIG_CHUNK) {
                 const dv = new DataView(arg.buffer, arg.byteOffset, arg.byteLength)
@@ -278,6 +292,33 @@ describe('buildNodesApi.open (mouse node)', () => {
         expect(svc.device?.draft).toBeUndefined()
         // Discovery only: no keymap read, no geometry fetch.
         expect(fake.targets.every((t) => t === 0x0007)).toBe(true)
+        await svc.disconnect()
+        expect(fake.closeCalls).toBe(0)
+    })
+})
+
+describe('buildNodesApi.open (joystick node)', () => {
+    it('opens a joystick as a read-only joystick view, not a keymap', async () => {
+        const fake = makeRpc({
+            roster: ROSTER,
+            personality: 5,
+            namespaces: [Namespace.JOYSTICK],
+        })
+        const svc = await buildNodesApi(fake.rpc).open(0x0009)
+
+        expect(svc.kind).toBe('joystick')
+        expect(svc.deviceInfo.name).toBe('Remappr Joystick 0x0009')
+        expect(svc.capabilities.readOnly).toBe(true)
+        expect(svc.device?.personality).toBe('joystick')
+        expect(svc.device?.writable).toBe(false)
+        expect(svc.controls).toBeDefined()
+        expect(svc.controls?.setBinding).toBeUndefined()
+        expect(svc.device?.draft).toBeUndefined()
+        // The live verbs read through the relay and refuse every change.
+        expect(svc.joystick?.writable).toBe(false)
+        await expect(svc.joystick?.calibrate('begin')).rejects.toThrow(/USB/)
+        await expect(svc.joystick?.getState()).rejects.toThrow(/GET_AXIS_STATE/)
+        expect(fake.targets.every((t) => t === 0x0009)).toBe(true)
         await svc.disconnect()
         expect(fake.closeCalls).toBe(0)
     })

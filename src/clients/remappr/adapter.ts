@@ -20,7 +20,7 @@ import { buildDeviceConfigApi } from './deviceConfig'
 import { deviceKind } from './deviceKind'
 import { discover, type DiscoveryResult } from './discovery'
 import { buildMouseMotionApi } from './mouse'
-import { buildJoystickApi } from './joystick'
+import { buildJoystickApi, servesJoystick } from './joystick'
 import { readInputLayout } from './inputLayout'
 import { warmRemapprIdentity } from './identity'
 import { buildClusterApi } from './clusterView'
@@ -205,13 +205,6 @@ async function buildMouseService(
         closeTransport: () =>
             rpc.close({ abortTransport: true }).catch(() => undefined),
     })
-}
-
-/** True when the device lists the JOYSTICK namespace (the verbs are
- *  provisional, so an unlisted namespace is never assumed). */
-export function servesJoystick(discovery: DiscoveryResult): boolean {
-    const ns = discovery.personality?.namespaces
-    return !!ns?.some((n) => n.namespace === Namespace.JOYSTICK)
 }
 
 /** A joystick on its own transport: edited in the device editor, drawn from
