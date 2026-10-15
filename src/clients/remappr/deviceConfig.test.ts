@@ -125,6 +125,21 @@ const MOUSE_DOC: ConfigDevice = {
     radio: { keepaliveMs: 60, autoPair: false },
 }
 
+const JOYSTICK_DOC: ConfigDevice = {
+    schemaVersion: 1,
+    kind: 'remappr.device',
+    meta: { name: 'Bench stick' },
+    personality: 'joystick',
+    joystick: {
+        hatWays: 4,
+        axes: [
+            { input: 0, out: 'x', curve: 'aggressive', inner: 8, outer: 5 },
+            { input: 1, out: 'y', invert: true, inner: 8, outer: 5 },
+        ],
+        buttonActions: [null, { action: 'button', button: 10 }],
+    },
+}
+
 const dongleApi = (dev: FakeDevice) =>
     buildDeviceConfigApi(dev.rpc, {
         personality: 'dongle',
@@ -163,6 +178,19 @@ describe('buildDeviceConfigApi.read', () => {
         for (const r of reads) expect(r.targetNode).toBeUndefined()
         const want = new DataView(reads[0].arg.buffer).getUint16(4, true)
         expect(want).toBe(48)
+    })
+
+    it('decodes a stored joystick config back into the document', async () => {
+        const blob = buildRemapprDeviceBlob(JOYSTICK_DOC, { configVersion: 4 })
+        const dev = fakeDevice({ active: blob, version: 4 })
+        const api = buildDeviceConfigApi(dev.rpc, {
+            personality: 'joystick',
+            name: 'Bench stick',
+            writable: true,
+        })
+        const snap = await api.read()
+        expect(snap.stored).toBe(true)
+        expect(snap.config).toEqual(JOYSTICK_DOC)
     })
 
     it('refuses a stored config for another device', async () => {

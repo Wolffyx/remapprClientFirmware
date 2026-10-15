@@ -77,7 +77,7 @@ function issueText(err: {
         .join('; ')
 }
 
-/** The `service.device` facade for a dongle or a mouse. */
+/** The `service.device` facade for a dongle, a mouse or a joystick. */
 export function buildDeviceConfigApi(
     rpc: RemapprRpc,
     target: DeviceConfigTarget,
@@ -138,13 +138,14 @@ export function buildDeviceConfigApi(
                 `the device holds a ${decoded.personality} config, not a ${target.personality} one`,
             )
         }
-        const { dongle, mouse, radio } = decoded
+        const { dongle, mouse, radio, joystick } = decoded
         return {
             config: {
                 ...emptyDeviceConfig(target.personality, target.name),
                 ...(dongle ? { dongle } : {}),
                 ...(mouse ? { mouse } : {}),
                 ...(radio ? { radio } : {}),
+                ...(joystick ? { joystick } : {}),
             },
             configVersion: decoded.configVersion ?? info.configVersion,
             stored: true,
