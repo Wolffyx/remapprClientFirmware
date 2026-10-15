@@ -84,7 +84,7 @@ function nodeRecordBytes(
 const ROSTER = new Uint8Array([
     // flags 0x0b = online+bonded+master, role 0x01 = STANDALONE_MAIN
     ...nodeRecordBytes(0x0007, 2, 0x0b, 0, -40, [1, 2, 3, 4, 5, 6], 0x01),
-    ...nodeRecordBytes(0x0009, 4, 0x01, 1, -72, [9, 9, 9, 9, 9, 9]),
+    ...nodeRecordBytes(0x0009, 5, 0x01, 1, -72, [9, 9, 9, 9, 9, 9]),
 ])
 
 /* ── a fake RPC that answers the relayed reads ──────────────────────────── */
@@ -206,7 +206,7 @@ describe('buildNodesApi.list', () => {
         expect(nodes[1]).toMatchObject({
             id: 0x0009,
             label: 'Node 0x0009',
-            kind: 'joystick', // radio device type 4
+            kind: 'joystick', // personality 5
             online: true,
             bonded: false,
             rssi: -72,
@@ -214,6 +214,17 @@ describe('buildNodesApi.list', () => {
             isMaster: false,
             nodeRole: 0,
         })
+    })
+
+    it('names no kind for a personality that is never a node', async () => {
+        const roster = new Uint8Array([
+            ...nodeRecordBytes(0x0003, 0, 0x01, 0, 0, []), // config tool
+            ...nodeRecordBytes(0x0004, 4, 0x01, 0, 0, []), // dongle
+        ])
+        const { rpc } = makeRpc({ roster })
+        const nodes = await buildNodesApi(rpc).list()
+
+        expect(nodes.map((n) => n.kind)).toEqual([undefined, undefined])
     })
 
     it('returns [] for a directly-attached (non-dongle) device', async () => {

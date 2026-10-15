@@ -7,6 +7,7 @@
 import type { NodesApi, NodeView, KeyboardService } from '../../service'
 import type { DeviceKind } from '../../devices/types'
 import type { DeviceInfo } from '../../types'
+import { Personality } from '../../config/compilers/remappr/blobWriter'
 
 import { loadDeviceConfig } from './configRead'
 import { buildDeviceConfigApi } from './deviceConfig'
@@ -37,19 +38,20 @@ import { RemapprJoystickService } from './joystickService'
 const hexId = (shortId: number): string =>
     `0x${shortId.toString(16).padStart(4, '0')}`
 
-/** Map a wire node record onto the firmware-neutral UI view. */
-/** The roster's device-type byte is the radio's own enum (radio_proto.h:
- *  NONE 0, KEYBOARD 1, MOUSE 2, CONFIG_TOOL 3, JOYSTICK 4), not the
- *  personality — 3 is a config tool there, not a recovery image, and 4 a
- *  joystick, not a dongle. */
-const KIND_BY_RADIO_TYPE: Readonly<Partial<Record<number, DeviceKind>>> = {
-    1: 'keyboard',
-    2: 'mouse',
-    4: 'joystick',
+/** The roster's byte is the node's personality (role.h), as RUCP §5.9 says.
+ *  Only node personalities name a kind: a dongle (4) or a recovery image (3)
+ *  is never a node, and a config tool reads 0. Dongles before the joystick
+ *  radio leg wrote the radio device type here, which agrees for keyboard (1)
+ *  and mouse (2), the only nodes they could pair. */
+const KIND_BY_NODE_PERSONALITY: Readonly<Partial<Record<number, DeviceKind>>> = {
+    [Personality.keyboard]: 'keyboard',
+    [Personality.mouse]: 'mouse',
+    [Personality.joystick]: 'joystick',
 }
 
+/** Map a wire node record onto the firmware-neutral UI view. */
 function toNodeView(r: NodeRecord): NodeView {
-    const kind = KIND_BY_RADIO_TYPE[r.personality]
+    const kind = KIND_BY_NODE_PERSONALITY[r.personality]
     return {
         id: r.shortId,
         label: `Node ${hexId(r.shortId)}`,
