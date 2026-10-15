@@ -142,7 +142,7 @@ describe('joystick controls mapping', () => {
         expect(b['stick:0']).toEqual({
             out: 'x:y',
             inner: 0,
-            outer: 0,
+            outer: 100,
             curve: 'linear',
             invY: false,
             click: 'pad:btn:5',
@@ -177,7 +177,7 @@ describe('joystick controls mapping', () => {
         const doc = applyJoystickBinding(DOC, INPUTS, 'stick:0', {
             out: 'rx:ry',
             inner: 8,
-            outer: 5,
+            outer: 95,
             curve: 'aggressive',
             invY: true,
             click: 'pad:btn:10',
@@ -214,6 +214,9 @@ describe('joystick controls mapping', () => {
         expect(back.out).toBe('rx:ry')
         expect(back.invY).toBe(true)
         expect(back.click).toBe('pad:btn:10')
+        // The inspector's outer is a saturation radius; the firmware's outer is
+        // the deadzone off the edge: 95% of travel ⇄ a 5% outer deadzone.
+        expect(back.outer).toBe(95)
     })
 
     it('writes a hat to its four positions and its ways', () => {
@@ -241,7 +244,7 @@ describe('joystick controls mapping', () => {
         const doc = applyJoystickBinding(DOC, INPUTS, 'stick:0', {
             out: 'y:x',
             inner: 0,
-            outer: 0,
+            outer: 100,
             curve: 'linear',
             invY: false,
             click: 'pad:btn:5',

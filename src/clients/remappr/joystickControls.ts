@@ -318,6 +318,13 @@ function positionAction(
     return actionId(j?.buttonActions?.[p] ?? defaultAction(p, hats))
 }
 
+/** The inspector's outer is the saturation radius, % of travel (100 = full
+ *  travel counts); the firmware's is the deadzone trimmed off the edge. */
+const saturation = (outerDeadzone: number | undefined): number =>
+    100 - (outerDeadzone ?? 0)
+const outerDeadzone = (saturationPct: number): number =>
+    Math.max(0, 100 - saturationPct)
+
 type BindingFor = (
     j: ConfigJoystick | undefined,
     e: InputLayoutEntry,
@@ -334,7 +341,7 @@ const BINDINGS: Readonly<Record<string, BindingFor>> = {
         return {
             out: outId(x.out, y.out),
             inner: x.inner ?? 0,
-            outer: x.outer ?? 0,
+            outer: saturation(x.outer),
             curve: x.curve ?? 'linear',
             invY: !!y.invert,
             click:
@@ -436,7 +443,11 @@ const APPLY: Readonly<Record<string, ApplyFor>> = {
         const s = b as StickBinding
         const [x, y] = stickAxes(j, Number(id.slice(6)))
         const [xo, yo] = s.out.split(':')
-        const shape = { curve: s.curve, inner: s.inner, outer: s.outer }
+        const shape = {
+            curve: s.curve,
+            inner: s.inner,
+            outer: outerDeadzone(s.outer),
+        }
         const both = withAxis(
             withAxis(j, { ...x, ...shape, out: parseOut(xo) }),
             { ...y, ...shape, out: parseOut(yo), invert: s.invY },
