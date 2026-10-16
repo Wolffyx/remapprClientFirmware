@@ -15,9 +15,15 @@ import type {
     DeviceKind,
     DeviceProfile,
 } from '@firmware/devices/types'
-import type { Capabilities, ControlsApi, WirelessApi } from '@firmware/service'
+import type {
+    Capabilities,
+    ControlsApi,
+    SensorApi,
+    WirelessApi,
+} from '@firmware/service'
 import type { DeviceInfo, ExportedFile } from '@firmware/types'
 import { demoCatalog } from './catalog'
+import { DemoSensor } from './demoSensor'
 import { LiveInputSim } from './liveSim'
 import type { DemoDeviceDef, ProfileOverrides } from './types'
 
@@ -74,6 +80,9 @@ export class MockDeviceService extends KeylessServiceBase {
     readonly capabilities: Capabilities
     readonly controls: ControlsApi
     readonly wireless?: WirelessApi
+    /** The demo sensor, on a device whose catalog describes one with
+     *  procedures (the demo mouse). */
+    readonly sensor?: SensorApi
 
     private profiles: DeviceProfile[]
     private activeId: string
@@ -112,6 +121,10 @@ export class MockDeviceService extends KeylessServiceBase {
             onChanged: () => this.changed({ type: 'model' }),
         })
         this.wireless = demoWireless(def)
+        const described = (def.catalog ?? demoCatalog(def.model.form)).sensor
+        if (def.model.form === 'mouse' && described?.procedures.length) {
+            this.sensor = new DemoSensor(described)
+        }
         this.controls = def.editable
             ? this.editableControls()
             : this.readControls()

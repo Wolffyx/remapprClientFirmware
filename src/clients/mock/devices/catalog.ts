@@ -19,7 +19,10 @@ import type {
  *  a procedure and readings, so the inspector and the settings panel have
  *  something to drive. Names and option values follow the Remappr sensor
  *  registry. */
-const DEMO_SENSOR: Pick<SensorSpec, 'settings' | 'procedures' | 'metrics'> = {
+export const DEMO_SENSOR: Pick<
+    SensorSpec,
+    'settings' | 'procedures' | 'metrics'
+> = {
     settings: [
         {
             name: 'liftCutoff',
