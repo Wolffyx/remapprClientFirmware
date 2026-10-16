@@ -10,8 +10,9 @@ with the device editor's `ControlsApi` for everything that is not a keyboard.
 > and registers a `FirmwareAdapter` like the others.
 >
 > **Source of truth.** The firmware repo owns the wire format: RUCP
-> (`docs/universal-request-response-protocol.md`) and the input-layout /
-> joystick plan (`docs/input-layout-joystick-plan.md`). This document is the
+> (`docs/universal-request-response-protocol.md`), the input-layout /
+> joystick plan (`docs/input-layout-joystick-plan.md`) and the sensor-settings
+> plan (`docs/sensor-settings-plan.md`). This document is the
 > client's view of it. Every layout below is byte-locked by tests to the
 > firmware's own goldens (§9), so a drift fails a test instead of a device.
 
@@ -160,6 +161,7 @@ offset  size  field
 | 0x07 | DONGLE | §4.5 |
 | 0x08 | RADIO | — |
 | 0x09 | INPUT | 0x01 `GET_INPUT_LAYOUT` (§4.2) |
+| 0x0A | SENSOR | §4.6 (provisional, manifest `ns_version` 0) |
 
 COMMON verbs that exist only on the universal route: 0x04
 `GET_PERSONALITY_MAP`, 0x05 `GET_MANIFEST`, 0x06 `GET_LIMITS`, 0x07
@@ -169,8 +171,8 @@ COMMON verbs that exist only on the universal route: 0x04
 
 > **Gate on the namespace list.** A namespace a device does not list in its
 > personality map (§3.8) is not served. The client never assumes the
-> provisional JOYSTICK or the INPUT namespace; it does assume MOUSE on a mouse
-> that predates the list.
+> provisional JOYSTICK or SENSOR namespace, or INPUT; it does assume MOUSE on a
+> mouse that predates the list.
 
 ### 3.4 Legacy command set
 
@@ -272,7 +274,7 @@ HAPTIC 14, BATTERY 15, FLASH_STORAGE 16, ANALOG_AXES 17, HID_GAMEPAD 24.
 
 **`GET_CAPABILITIES`** Cap bits (u32, legacy, keyboards): CONFIG 0, PROFILES 1,
 RGB 2, LAYERS 3, DIAGNOSTICS 4, AUTH 5, KEYMAP 6, PAIRING 7, MOUSE 11,
-CLUSTER_DIAG 12, UNICODE 14, JOYSTICK 15.
+CLUSTER_DIAG 12, UNICODE 14, JOYSTICK 15, SENSOR 16.
 
 > **Two bit 15s.** `hw_caps` bit 15 is BATTERY; Cap bit 15 is JOYSTICK. They are
 > different words.
@@ -429,13 +431,97 @@ u16 short_id | u8 device_type | u8 pipe | u8 flags (bit0 online, bit1 bonded, bi
 > as RECOVERY and DONGLE.
 
 **Relayed reads.** A node is read by addressing universal COMMON / INPUT /
-MOUSE / JOYSTICK reads to its short-id (`target_node`). Reads retry up to 4
+MOUSE / JOYSTICK / SENSOR reads to its short-id (`target_node`). Reads retry up to 4
 times with a 500 ms timeout each. `open(id)` runs discovery against the node
 and returns a **read-only** view by its kind: a mouse view, a joystick view, or
 a keyboard view (keymap decoded from the node's active blob). Views share the
 dongle's RPC and never close it. Writing through the relay (sealed relay
 session, `establishNodeSession`) is built but not yet proven on hardware, so
 views refuse every change.
+
+### 4.6 Sensor — SENSOR namespace (provisional)
+
+Personality-neutral: a mouse's optical sensor and a keyboard's trackball use
+the same verbs. A sensor's **adapter** in the firmware lists what it has —
+settings, procedures, readings — and the device describes exactly that; the
+client keeps no list of which sensor supports what. Every verb names the
+sensor by its index. Reads are plaintext-open and fit the 48-byte unsealed
+chunk; `SET_SETTING` and `RUN_PROCEDURE` are mutating (sealed in a product
+build, §10). Every reply except `SET_SETTING`'s starts with `u8 ver (= 1)`; a
+newer firmware may append, so a reader stops where it knows.
+
+| Op | Verb | Arg → reply |
+|---|---|---|
+| 0x01 | `GET_SENSORS` | `u8 first` → `ver \| u8 total \| u8 n \| n × {u8 index, u8 class, u16 model_id, u8 settings, u8 procedures, u8 metrics, u8 name_len, name}` (two fit a reply: ask again from `first + n`) |
+| 0x02 | `GET_SETTING` | `u8 sensor \| u8 position` → `ver \| u8 id \| u8 type \| u8 flags \| u8 unit \| i32 value \| i32 default`, then INT `i32 min \| i32 max \| i32 step`, ENUM `u8 n \| n × u8 code \| u8 gated_mask \| u8 procedure`, then `u8 name_len \| name` |
+| 0x03 | `SET_SETTING` | `u8 sensor \| u8 id \| i32 value` → `i32 applied` (no version byte; snapped to what the hardware holds) |
+| 0x04 | `GET_PROCEDURE` | `u8 sensor \| u8 position` → `ver \| u8 id \| u8 phases \| u8 flags \| u8 name_len \| name` |
+| 0x05 | `RUN_PROCEDURE` | `u8 sensor \| u8 id \| u8 step` → the status below |
+| 0x06 | `GET_PROCEDURE_STATUS` | `u8 sensor \| u8 id` → `ver \| u8 state \| u8 phase \| u16 progress \| u16 total \| u8 result` (8 B) |
+| 0x07 | `GET_METRICS` | `u8 sensor` → `ver \| u8 n \| n × {u8 id, i32 value, i32 max}` |
+
+`position` is the place in the sensor's own list (0 .. count − 1 from
+`GET_SENSORS`), not a registry id; `SET_SETTING`, `RUN_PROCEDURE` and the
+status take the registry id. Names are ASCII, at most 12 bytes: the device's
+fallback label for an id the client has no name for.
+
+| Field | Values |
+|---|---|
+| class | POINTER 1, TOUCH 2, IMU 3, ANALOG 4 |
+| type | BOOL 1 (0 / 1), INT 2 (`min + k × step`), ENUM 3 (up to 8 option codes) |
+| unit | none 0, ms 1, µs 2, degrees 3, cpi 4, % 5 |
+| setting flags | ADVANCED 1 (folded away), NEEDS_PROCEDURE 2, PERSONALITY 4 (driven by the personality's own feature; not set as a sensor setting) |
+| `gated_mask` | bit _i_ = option _i_ needs a stored result of `procedure` first |
+| procedure flags | HAS_RESULT 1 (a finished run leaves a result the unit keeps) |
+| step | BEGIN 0, NEXT 1 (end the phase in hand), CANCEL 2, RESET 3 (forget the stored result) |
+| state | IDLE 0, RUNNING 1, DONE 2, FAILED 3; `phase` 1.. while running; `progress` / `total` 0 / 0 for a phase that does not count |
+| result | OK 0, FAILED 1 |
+
+**Registry** (`include/dt-bindings/remappr/sensor.h`, append-only and
+wire-frozen once shipped; mirrored by the client for names and labels only):
+
+| Id | Name | Type | Options / unit |
+|---|---|---|---|
+| 0x01 | `resolution` | INT, PERSONALITY | cpi (the mouse's DPI drives it) |
+| 0x02 | `readPeriod` | INT, PERSONALITY | µs (the report rate drives it) |
+| 0x10 | `liftCutoff` | ENUM | 10 `1mm`, 20 `2mm`, 0 `calibrated` (gated by `liftCalibration`) |
+| 0x11 | `angleSnap` | BOOL | |
+| 0x12 | `angleTune` | INT | degrees |
+| 0x13 | `performanceMode` | ENUM | 0 `high`, 1 `lowPower`, 2 `office`, 3 `corded` |
+| 0x14 | `stayAwake` | BOOL | rest modes off |
+| 0x15 | `motionSync` | BOOL | reads synced to the host (no adapter yet) |
+| 0x20–0x25 | `runDownshiftMs`, `rest1PeriodMs`, `rest1DownshiftMs`, `rest2PeriodMs`, `rest2DownshiftMs`, `rest3PeriodMs` | INT | ms |
+
+Procedure 0x01 `liftCalibration` (2 phases: move over the whole surface, NEXT
+ends it; keep moving while phase 2 counts to its total and ends by itself).
+Metrics 0x01 `surfaceQuality`, 0x02 `lifted` (0 / 1), 0x03 `shutter`, 0x04
+`brightness`. An id the client does not know keys as its hex (`0x16`) in
+bindings and documents.
+
+- **Live until COMMIT.** `SET_SETTING` changes the sensor now and holds until
+  the next COMMIT, which applies the new config's TBL_SENSOR (§5.6) or, with
+  none, every default. Nothing is stored by the SET itself.
+- **What is in force**, lowest first: the hardware at settle, the board's
+  devicetree `remappr,setting-defaults` (together they are what `default`
+  reports), TBL_SENSOR, a live SET.
+- **Errors.** `ERR_ARG`: unknown sensor, setting, procedure or option, or a
+  value out of range. `ERR_STATE`: the sensor is not up yet, a gated option
+  before its procedure has a stored result, a PERSONALITY setting, a step out
+  of turn; `GET_METRICS` while a procedure holds the sensor (calibration phase
+  1).
+- **Procedure results** belong to the unit: stored in the device's own
+  settings (`remappr/sensor/<index>/<procedure>`), restored at boot, never in
+  a config. RESET forgets one and drops an option that needed it to its
+  default.
+- **Client.** `buildSensorApi` (`sensor.ts`) gives `service.sensor`
+  (§7.3), speaking names: `getSensors()` describes every sensor (one
+  `GET_SETTING` / `GET_PROCEDURE` per entry, plus `GET_METRICS`) with the
+  values in force. Over the dongle the reads are relayed with retries and
+  every change is refused. The mouse's device editor offers the pointer
+  sensor's non-PERSONALITY settings (`catalog.sensor.settings`); a change is
+  previewed with `SET_SETTING` (the snapped value shown), staged in the
+  document's `sensor` section, written by `commit()` and put back by
+  `discardChanges()`.
 
 ---
 
@@ -458,10 +544,11 @@ Table ids: Layer 1, Layout 2, Binding 3, Behavior 4, Combo 5, Macro 6, Rgb 7,
 **Mouse 8**, Profile 9, Alias 10, Security 11, Subs 12, Conditional 13,
 KeyOverride 14, Leader 15, **Personality 16**, **ActionBinding 17**, Poshold 18,
 Names 19, Encoder 20, Cluster 21, ClusterSec 22, LinkProfile 23, Autocorrect
-24, **Dongle 25**, **Radio 26**, (27 reserved, TBL_UPDATE), **Joystick 28**.
+24, **Dongle 25**, **Radio 26**, (27 reserved, TBL_UPDATE), **Joystick 28**,
+**Sensor 29**.
 
 A device document's blob holds, in order: PERSONALITY, then DONGLE, or MOUSE +
-ACTION_BINDING + RADIO, or JOYSTICK + ACTION_BINDING.
+ACTION_BINDING + RADIO + SENSOR, or JOYSTICK + ACTION_BINDING.
 
 ### 5.2 TBL_PERSONALITY (16) v1
 
@@ -515,15 +602,47 @@ u16 count | u16 num_positions | count × { u16 position | u8 kind | u8 rsvd | u1
 19–23 are reserved for gamepad, 24–31 for audio. The keymap decoder reads kinds
 ≥ 8 back as `none`: they belong to device documents, not keymaps.
 
-### 5.6 The `remappr.device` document
+### 5.6 TBL_SENSOR (29) v1
+
+```
+u8 count | u8 rsvd
+count × { u8 sensor | u8 id | u16 rsvd | i32 value }
+```
+
+- `id` is the registry id (§4.6); BOOL 0 / 1, ENUM its option code.
+- **Validated strictly** at `VALIDATE_CONFIG`: an entry for a sensor the
+  device does not have, a setting its adapter does not list, a PERSONALITY
+  setting, a value out of range or a duplicate refuses the whole config. A
+  gated option (`calibrated`) passes, so a config stays portable; on a unit
+  with no stored result it falls back to the default when applied.
+- Absent table = every setting on its default. The client writes the table
+  only when the document names a value.
+- **Compiler.** `compilers/remappr/sensor.ts` turns names (or hex keys) and
+  option names into entries. Given the device's own description
+  (`DeviceConfigTarget.sensors`, which the mouse's `service.device.write`
+  passes), an entry the device would refuse is left out and the document keeps
+  it. A keymap's `node.sensor.defaults` (product defaults, by name) is written
+  as TBL_SENSOR for sensor 0 in the keymap blob too, and the board compiler
+  builds it into the sensor's devicetree node as `remappr,setting-defaults =
+  <ID VALUE …>` (`board.sensor`).
+- Golden: firmware `tests/config_blob/src/test_sensor_decode.c` (sensor 0:
+  lift 2 mm, angle snap on, angle tune −5).
+
+### 5.7 The `remappr.device` document
 
 The JSON a non-keyboard device's blob is compiled from (`config/device.ts`):
 
 ```json
 { "schemaVersion": 1, "kind": "remappr.device", "meta": { "name": "…" },
   "personality": "mouse" | "joystick" | "dongle",
-  "mouse": {…}, "radio": {…}, "joystick": {…}, "dongle": {…} }
+  "mouse": {…}, "radio": {…}, "sensor": {…}, "joystick": {…}, "dongle": {…} }
 ```
+
+`sensor` (mouse) is `{ index?, settings: { <name>: value } }`: the values the
+user set, by registry name (a BOOL as a boolean, an INT as a number, an ENUM as
+its code or option name); one left out stays on the device's default. Read
+back, an option comes back as its code. A name the client does not know is kept
+and never compiled.
 
 Every field is optional; a section that belongs to another personality is
 rejected. Field-by-field reference: the docs site's *Device document* page
@@ -586,6 +705,7 @@ and node INPUT events come back through it (§4.5).
 | `deviceConfig.ts` | `DeviceConfigApi`: read / write a device document |
 | `mouse.ts`, `reportRate.ts`, `mouseControls.ts`, `mouseService.ts` | MOUSE verbs, report rate, catalog, `RemapprMouseService` |
 | `joystick.ts`, `joystickControls.ts`, `joystickService.ts` | JOYSTICK verbs, catalog, `RemapprJoystickService` |
+| `sensor.ts`, `sensorRegistry.ts` | SENSOR verbs and `buildSensorApi`; the registry mirror (names, labels, option names, devicetree macros) |
 | `nodes.ts`, `nodeView.ts` | DONGLE verbs; `NodesApi` (roster, read-only node views) |
 | `clusterView.ts`, `unicode.ts`, `unicodeView.ts`, `dynamicBridge.ts` | Cluster diag, unicode mode, dynamic entries |
 
@@ -598,7 +718,7 @@ timeout, else universal COMMON; personality map and limits when `proto_max ≥
 | Kind | Service | Notes |
 |---|---|---|
 | keyboard | `RemapprKeyboardService` | auth handshake, keymap load, `GET_CAPABILITIES` |
-| mouse | `RemapprMouseService` | `device` when the device has a config store; `motion` when MOUSE is served; layout when INPUT is listed |
+| mouse | `RemapprMouseService` | `device` when the device has a config store; `motion` when MOUSE is served; `sensor` when SENSOR is listed; layout when INPUT is listed |
 | joystick | `RemapprJoystickService` | `device` when it has a config store; `joystick` when JOYSTICK is listed; layout when INPUT is listed |
 | dongle | dongle service (`buildDongleService`) | `nodes` facade, dongle settings |
 
@@ -614,13 +734,16 @@ The mouse and joystick services extend `KeylessServiceBase`: `kind` set,
 | `DeviceConfigApi` | `personality`, `writable`, `read()` → `{config, configVersion, stored}`, `write(cfg)` → new version, `draft?` |
 | `MouseMotionApi` | `writable`, `getConfig`, `setDpi`, `setAccelProfile`, `setScrollMode` |
 | `JoystickApi` | `writable`, `getState`, `getConfig`, `calibrate(step, input?)`, `setAxisMap`, `setDeadzone` |
+| `SensorApi` | `writable`, `getSensors()` → `SensorInfo[]`, `setSetting(sensor, name, value)` → applied, `runProcedure(sensor, name, step)` / `getProcedureStatus` → status, `getMetrics(sensor)` |
 | `ControlsApi` | `getModel`, `getCatalog`, `getProfiles`, `getBindings`, `setBinding?`, `onChanged`, `onInput?`, `layout?` |
 | `NodesApi` | `list`, `open(id)`, `openPairWindow`, `forgetNode`, … |
 
 A facade that is absent (or `writable: false`) is how the UI learns a device
 cannot do something; there is no separate capability list.
 
-**Control ids.** Mouse: `lmb rmb wheel back fwd btn5..btn7` and `sensor`;
+**Control ids.** Mouse: `lmb rmb wheel back fwd btn5..btn7` and `sensor`
+(its binding: `stages`, `active`, `poll`, and `settings` — the sensor values the
+user set, by name; a dropped key is a reset);
 catalog actions `dev:<action>[:dpi]` for DPI actions. Joystick: `btn:<pos>`,
 `stick:<n>`, `hat:<n>`; catalog actions `pad:btn:N`, `pad:hat:D`,
 `pad:axis:<axis>:<value>`.
@@ -636,9 +759,12 @@ catalog actions `dev:<action>[:dpi]` for DPI actions. Joystick: `btn:<pos>`,
 - **Universal header**: 8 B, version 2; fragments ≤ 4096 B, 2000 ms gap.
 - **Blob**: magic `RMBC`, 20 B header, `config_version` at byte 8, 16 B alignment.
 - **Firmware**: `include/remappr/control.h`, `control_usb.h`, `node_proto.h`,
-  `action.h`, `role.h`; `subsys/remappr/control/` (incl. `control_joystick.c`);
-  host CLI `tools/control_cli/` (`control_cli.py`, `make_mouse_blob.py`,
-  `make_joystick_blob.py`).
+  `action.h`, `role.h`, `sensor.h` (+ `dt-bindings/remappr/sensor.h`, the
+  registry); `subsys/remappr/control/` (incl. `control_joystick.c`,
+  `control_sensor.c`), `subsys/remappr/sensor/`, `lib/sensors/settings/`; host
+  CLI `tools/control_cli/` (`control_cli.py` incl. `sensors`, `sensor-get`,
+  `sensor-set`, `sensor-cal`, `sensor-metrics`; `make_mouse_blob.py
+  --sensor`, `make_joystick_blob.py`).
 
 ---
 
@@ -652,9 +778,15 @@ catalog actions `dev:<action>[:dpi]` for DPI actions. Joystick: `btn:<pos>`,
 - **Fake RPC.** Discovery, device-document read/write, node views and the
   services run against a fake `RemapprRpc` that answers from real blobs built by
   the compilers, so the paths are covered end to end without hardware.
+- **SENSOR goldens.** `sensor.test.ts` mirrors the firmware's
+  `tests/sensor_settings/src/test_wire.c` replies; `remappr.sensor.test.ts`
+  the TBL_SENSOR golden of `test_sensor_decode.c`.
 - **Hardware.** Against a device flashed from the firmware repo,
-  `control_cli.py info | get-inputs | joy-state | push` is the byte-level
-  reference.
+  `control_cli.py info | get-inputs | joy-state | sensors | push` is the
+  byte-level reference. The client's own stack runs on a DK without a browser
+  through a Node `/dev/hidraw` transport (`remapprAdapter.connect`): the SENSOR
+  path was checked that way on the PAW3395 mouse (live preview, discard, save,
+  reset, gated refusal, lift calibration, readings).
 
 ---
 
@@ -672,3 +804,10 @@ catalog actions `dev:<action>[:dpi]` for DPI actions. Joystick: `btn:<pos>`,
 5. **OTA over the wire** — not bound to a transport yet.
 6. **Live combos / macros / tap-dance RPC** — they ship in the blob; no live
    verbs.
+7. **SENSOR namespace** — provisional (`ns_version` 0) until the layouts
+   freeze; the TBL_SENSOR layout is versioned like every table.
+8. **Stored procedure result not reported** — after a reboot that restored a
+   lift calibration, `GET_PROCEDURE_STATUS` says IDLE, so the client cannot
+   tell a result exists; a gated option can only be tried (`ERR_STATE`
+   without one). A has-result bit in the status reply would let the app mark
+   the option.
