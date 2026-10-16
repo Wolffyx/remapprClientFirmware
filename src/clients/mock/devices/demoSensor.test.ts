@@ -58,6 +58,23 @@ describe('DemoSensor', () => {
         })
     })
 
+    it('says whether a result is stored, and a cancel keeps it', async () => {
+        const { sensor, at } = make()
+        expect(
+            await sensor.getProcedureStatus(0, 'liftCalibration'),
+        ).toMatchObject({ state: 'idle', hasResult: false })
+        await sensor.runProcedure(0, 'liftCalibration', 'begin')
+        await sensor.runProcedure(0, 'liftCalibration', 'next')
+        at(5000)
+        expect(
+            await sensor.getProcedureStatus(0, 'liftCalibration'),
+        ).toMatchObject({ state: 'done', hasResult: true })
+        await sensor.runProcedure(0, 'liftCalibration', 'begin')
+        expect(
+            await sensor.runProcedure(0, 'liftCalibration', 'cancel'),
+        ).toMatchObject({ state: 'idle', hasResult: true })
+    })
+
     it('forgets a result on reset and drops the option that needed it', async () => {
         const { sensor, at } = make()
         await sensor.runProcedure(0, 'liftCalibration', 'begin')
@@ -65,7 +82,9 @@ describe('DemoSensor', () => {
         at(5000)
         await sensor.getProcedureStatus(0, 'liftCalibration')
         await sensor.setSetting(0, 'liftCutoff', 0)
-        await sensor.runProcedure(0, 'liftCalibration', 'reset')
+        expect(
+            await sensor.runProcedure(0, 'liftCalibration', 'reset'),
+        ).toMatchObject({ state: 'idle', hasResult: false })
         const [s] = await sensor.getSensors()
         expect(s!.settings[0]!.value).toBe(10)
         await expect(sensor.setSetting(0, 'liftCutoff', 0)).rejects.toThrow()

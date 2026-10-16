@@ -61,7 +61,10 @@ const PROC = new Uint8Array([
     0x08,
     ...ascii('Lift cal'),
 ])
+/** An 8-byte status (firmware before the flags byte). */
 const STATUS = new Uint8Array([0x01, 0x01, 0x02, 0xb0, 0x04, 0xb8, 0x0b, 0x00])
+/** Idle with a stored result: the 9th byte's bit0 is HAS_RESULT. */
+const STORED = new Uint8Array([0x01, 0x00, 0x00, 0, 0, 0, 0, 0x00, 0x01])
 // prettier-ignore
 const METRICS = new Uint8Array([
     0x01, 0x02,
@@ -146,6 +149,15 @@ describe('sensor wire (SENSOR namespace)', () => {
             progress: 1200,
             total: 3000,
             result: 0,
+        })
+        expect(parseSensorStatus(STATUS)).not.toHaveProperty('flags')
+        expect(parseSensorStatus(STORED)).toEqual({
+            state: 0,
+            phase: 0,
+            progress: 0,
+            total: 0,
+            result: 0,
+            flags: 1,
         })
         expect(parseSensorMetrics(METRICS)).toEqual([
             { id: 1, value: 150, max: 182 },
@@ -330,6 +342,28 @@ describe('SensorApi', () => {
             { name: 'surfaceQuality', value: 150, max: 182 },
             { name: 'lifted', value: 0, max: 1 },
         ])
+    })
+
+    it('says whether a result is stored, when the firmware tells', async () => {
+        const reply = (data: Uint8Array) =>
+            fakeRpc((c) =>
+                c.verb === SensorVerb.GET_PROCEDURE_STATUS
+                    ? { status: Status.OK, data }
+                    : undefined,
+            ).rpc
+        const status = (data: Uint8Array) =>
+            buildSensorApi(reply(data), { writable: true }).getProcedureStatus(
+                0,
+                'liftCalibration',
+            )
+        expect(await status(STORED)).toMatchObject({
+            state: 'idle',
+            hasResult: true,
+        })
+        expect(
+            await status(new Uint8Array([...STORED.subarray(0, 8), 0x00])),
+        ).toMatchObject({ hasResult: false })
+        expect(await status(STATUS)).not.toHaveProperty('hasResult')
     })
 
     it('surfaces a refusal by its status', async () => {

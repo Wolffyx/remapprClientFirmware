@@ -457,7 +457,7 @@ newer firmware may append, so a reader stops where it knows.
 | 0x03 | `SET_SETTING` | `u8 sensor \| u8 id \| i32 value` → `i32 applied` (no version byte; snapped to what the hardware holds) |
 | 0x04 | `GET_PROCEDURE` | `u8 sensor \| u8 position` → `ver \| u8 id \| u8 phases \| u8 flags \| u8 name_len \| name` |
 | 0x05 | `RUN_PROCEDURE` | `u8 sensor \| u8 id \| u8 step` → the status below |
-| 0x06 | `GET_PROCEDURE_STATUS` | `u8 sensor \| u8 id` → `ver \| u8 state \| u8 phase \| u16 progress \| u16 total \| u8 result` (8 B) |
+| 0x06 | `GET_PROCEDURE_STATUS` | `u8 sensor \| u8 id` → `ver \| u8 state \| u8 phase \| u16 progress \| u16 total \| u8 result \| u8 flags` (9 B; older firmware stops at 8, no flags) |
 | 0x07 | `GET_METRICS` | `u8 sensor` → `ver \| u8 n \| n × {u8 id, i32 value, i32 max}` |
 
 `position` is the place in the sensor's own list (0 .. count − 1 from
@@ -476,6 +476,7 @@ fallback label for an id the client has no name for.
 | step | BEGIN 0, NEXT 1 (end the phase in hand), CANCEL 2, RESET 3 (forget the stored result) |
 | state | IDLE 0, RUNNING 1, DONE 2, FAILED 3; `phase` 1.. while running; `progress` / `total` 0 / 0 for a phase that does not count |
 | result | OK 0, FAILED 1 |
+| status flags | HAS_RESULT 1 (a result is stored now, so the options it gates are accepted; one restored at boot reads IDLE with it set; RESET clears it, CANCEL keeps it) |
 
 **Registry** (`include/dt-bindings/remappr/sensor.h`, append-only and
 wire-frozen once shipped; mirrored by the client for names and labels only):
@@ -512,7 +513,8 @@ bindings and documents.
 - **Procedure results** belong to the unit: stored in the device's own
   settings (`remappr/sensor/<index>/<procedure>`), restored at boot, never in
   a config. RESET forgets one and drops an option that needed it to its
-  default.
+  default. The status's HAS_RESULT flag says one is stored (the client's
+  `hasResult`; absent when older firmware sends no flags byte).
 - **Client.** `buildSensorApi` (`sensor.ts`) gives `service.sensor`
   (§7.3), speaking names: `getSensors()` describes every sensor (one
   `GET_SETTING` / `GET_PROCEDURE` per entry, plus `GET_METRICS`) with the
@@ -806,8 +808,3 @@ catalog actions `dev:<action>[:dpi]` for DPI actions. Joystick: `btn:<pos>`,
    verbs.
 7. **SENSOR namespace** — provisional (`ns_version` 0) until the layouts
    freeze; the TBL_SENSOR layout is versioned like every table.
-8. **Stored procedure result not reported** — after a reboot that restored a
-   lift calibration, `GET_PROCEDURE_STATUS` says IDLE, so the client cannot
-   tell a result exists; a gated option can only be tried (`ERR_STATE`
-   without one). A has-result bit in the status reply would let the app mark
-   the option.

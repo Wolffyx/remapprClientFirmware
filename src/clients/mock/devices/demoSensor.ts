@@ -5,7 +5,8 @@
 // Remappr sensor does over the SENSOR namespace. A setting snaps to its step;
 // an option that needs a procedure is refused until that procedure has run; a
 // two-phase procedure waits for Next in phase 1 (readings are refused then,
-// as the firmware does while calibrating) and counts by itself in phase 2.
+// as the firmware does while calibrating) and counts by itself in phase 2;
+// its status says whether a result is stored.
 import type {
     SensorInfo,
     SensorSettingSpec,
@@ -115,23 +116,9 @@ export class DemoSensor implements SensorApi {
         name: string,
     ): Promise<SensorProcedureStatus> {
         this.tick()
-        const run = this.run
-        if (run?.name !== name) {
-            return Promise.resolve(this.last.state === 'idle' ? IDLE : this.last)
-        }
-        const counting = run.phase === this.phases(name)
-        const progress = counting
-            ? Math.min(
-                  COUNT_TOTAL,
-                  Math.round(((this.now() - run.since) / COUNT_MS) * COUNT_TOTAL),
-              )
-            : 0
         return Promise.resolve({
-            state: 'running',
-            phase: run.phase,
-            progress,
-            total: counting ? COUNT_TOTAL : 0,
-            ok: true,
+            ...this.progressOf(name),
+            hasResult: this.results.has(name),
         })
     }
 
@@ -186,6 +173,28 @@ export class DemoSensor implements SensorApi {
                 if (needs === name) this.values.set(s.name, s.default)
             }
         },
+    }
+
+    /** Where procedure `name` is now (the stored result aside). */
+    private progressOf(name: string): SensorProcedureStatus {
+        const run = this.run
+        if (run?.name !== name) {
+            return this.last.state === 'idle' ? IDLE : this.last
+        }
+        const counting = run.phase === this.phases(name)
+        const progress = counting
+            ? Math.min(
+                  COUNT_TOTAL,
+                  Math.round(((this.now() - run.since) / COUNT_MS) * COUNT_TOTAL),
+              )
+            : 0
+        return {
+            state: 'running',
+            phase: run.phase,
+            progress,
+            total: counting ? COUNT_TOTAL : 0,
+            ok: true,
+        }
     }
 
     /** The counting phase ends by itself once it has counted. */

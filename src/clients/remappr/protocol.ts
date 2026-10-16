@@ -1455,6 +1455,12 @@ export const SensorResult = {
     FAILED: 1,
 } as const
 
+/** Status flags (the status reply's 9th byte). HAS_RESULT: the procedure's
+ *  result is stored now, so the options it gates are accepted. */
+export const SensorStatusFlag = {
+    HAS_RESULT: 1 << 0,
+} as const
+
 /** One sensor from GET_SENSORS: its class (1 pointer, 2 touch, 3 IMU,
  *  4 analog) and how many settings, procedures and metrics it lists. */
 export interface SensorRecord {
@@ -1593,20 +1599,24 @@ export function parseSensorProcedure(d: Uint8Array): SensorProcedureRecord {
 }
 
 /** A procedure's progress: SensorState, the phase (1.. while running),
- *  progress / total of a phase that counts (0 / 0 when it does not), and
- *  SensorResult once DONE or FAILED. */
+ *  progress / total of a phase that counts (0 / 0 when it does not),
+ *  SensorResult once DONE or FAILED, and SensorStatusFlag bits (absent from
+ *  firmware that sends no flags byte). */
 export interface SensorStatusRecord {
     state: number
     phase: number
     progress: number
     total: number
     result: number
+    flags?: number
 }
 
+const STATUS_LEN = 8
+
 /** RUN_PROCEDURE / GET_PROCEDURE_STATUS reply: u8 ver | u8 state | u8 phase |
- *  u16 progress | u16 total | u8 result. */
+ *  u16 progress | u16 total | u8 result, then u8 flags on newer firmware. */
 export function parseSensorStatus(d: Uint8Array): SensorStatusRecord {
-    sensorReplyVersion(d, 8, 'sensor status')
+    sensorReplyVersion(d, STATUS_LEN, 'sensor status')
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
     return {
         state: d[1],
@@ -1614,6 +1624,7 @@ export function parseSensorStatus(d: Uint8Array): SensorStatusRecord {
         progress: dv.getUint16(3, true),
         total: dv.getUint16(5, true),
         result: d[7],
+        ...(d.length > STATUS_LEN ? { flags: d[STATUS_LEN] } : {}),
     }
 }
 

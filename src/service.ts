@@ -713,13 +713,17 @@ export type SensorProcedureStep = 'begin' | 'next' | 'cancel' | 'reset'
 
 /** A procedure's progress. `phase` counts from 1 while it runs (0 else);
  *  `progress` / `total` are what a counting phase has done (0 / 0 when the
- *  phase does not count). `ok` is the result once done or failed. */
+ *  phase does not count). `ok` is the result once done or failed.
+ *  `hasResult` says a result is stored now (one kept from an earlier run
+ *  reads idle with it set), so the options the procedure gates are accepted;
+ *  absent when the device does not say. */
 export interface SensorProcedureStatus {
     readonly state: 'idle' | 'running' | 'done' | 'failed'
     readonly phase: number
     readonly progress: number
     readonly total: number
     readonly ok: boolean
+    readonly hasResult?: boolean
 }
 
 /** A live reading, by its {@link SensorMetricSpec} name. */

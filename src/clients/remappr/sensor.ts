@@ -39,6 +39,7 @@ import {
     SensorProcFlag,
     SensorResult,
     SensorState,
+    SensorStatusFlag,
     SensorStep,
     SensorTypeCode,
     SensorVerb,
@@ -312,6 +313,9 @@ export function sensorProcedureStatus(
         progress: st.progress,
         total: st.total,
         ok: st.result === SensorResult.OK,
+        ...(st.flags === undefined
+            ? {}
+            : { hasResult: (st.flags & SensorStatusFlag.HAS_RESULT) !== 0 }),
     }
 }
 
