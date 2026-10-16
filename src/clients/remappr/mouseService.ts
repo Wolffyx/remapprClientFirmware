@@ -270,11 +270,36 @@ export class RemapprMouseService extends KeylessServiceBase {
         for (const [name, was] of before) {
             const next = settings[name] ?? this.sensorDefault(name)
             if (next === undefined || next === was) continue
-            const applied = await api.setSetting(info.index, name, next)
+            const applied = await api
+                .setSetting(info.index, name, next)
+                .catch((e: unknown) => {
+                    throw this.refusal(name, next, e)
+                })
             this.previewed.add(name)
             if (name in settings) settings[name] = applied
         }
         return { ...b, settings }
+    }
+
+    /** A refused sensor value, named for the user: an option that needs a
+     *  procedure says which one to run (the device answers only ERR_STATE). */
+    private refusal(
+        name: string,
+        value: SensorSettingValue,
+        cause: unknown,
+    ): Error {
+        const info = this.sensorInfo
+        const setting = info?.settings.find((s) => s.name === name)
+        const option = setting?.options?.find((o) => o.value === value)
+        const proc = info?.procedures.find((p) => p.name === option?.needs)
+        if (!setting || !option || !proc) {
+            return cause instanceof Error ? cause : new Error(String(cause))
+        }
+        return new Error(
+            `${setting.label} "${option.label}" needs a ${proc.label.toLowerCase()} ` +
+                'first: run it in Device settings.',
+            { cause },
+        )
     }
 
     /** Put every previewed setting back to the stored config's value. */

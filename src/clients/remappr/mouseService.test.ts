@@ -493,7 +493,9 @@ describe('RemapprMouseService sensor settings', () => {
                 ...b,
                 settings: { liftCutoff: 0 },
             } as never),
-        ).rejects.toThrow('ERR_STATE')
+        ).rejects.toThrow(
+            'Lift-off distance "Calibrated" needs a lift-off calibration first',
+        )
         expect(svc.hasPendingChanges()).toBe(false)
     })
 
