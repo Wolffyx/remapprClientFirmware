@@ -67,7 +67,7 @@ editor, every other personality the device editor.
 | Node behind a dongle | Read-only view (keyboard, mouse, joystick) | relayed universal reads (§4.5) | ✅ reads · writes pending |
 
 Not in the client: OTA, live combos / macros / tap-dance as RPC (they ship in the
-config blob), editing through the dongle, a joystick's radio leg (§10).
+config blob), editing through the dongle (§10).
 
 ---
 
@@ -421,14 +421,17 @@ applies it on `commit()`; it is not in the device document.
 **`LIST_NODES` record (15 B):**
 
 ```
-u16 short_id | u8 device_type | u8 pipe | u8 flags (bit0 online, bit1 bonded, bit2 secured, bit3 master)
+u16 short_id | u8 personality | u8 pipe | u8 flags (bit0 online, bit1 bonded, bit2 secured, bit3 master)
 | u8 hops | i8 rssi | 6 B device_id_tail | u8 battery (0xFF unknown) | u8 node_role
 ```
 
-> **`device_type` is not a personality.** The byte is the radio's own enum
-> (`radio_proto.h`): NONE 0, KEYBOARD 1, MOUSE 2, CONFIG_TOOL 3, JOYSTICK 4. The
-> client maps 1 → keyboard, 2 → mouse, 4 → joystick; 3 and 4 must not be read
-> as RECOVERY and DONGLE.
+> **The kind byte is the node's personality** (RUCP §5.9, `role.h`): KEYBOARD 1,
+> MOUSE 2, JOYSTICK 5, and 0 for a config tool. `LIST_NODES`, `GET_NODE_INFO`
+> and `GET_MASTER` carry it; only `GET_PIPE_TABLE` keeps the radio's own device
+> type (`radio_proto.h`: NONE 0, KEYBOARD 1, MOUSE 2, CONFIG_TOOL 3, JOYSTICK 4).
+> The client maps 1 → keyboard, 2 → mouse, 5 → joystick, and nothing else to a
+> kind. Dongles from before the joystick could pair wrote the radio type here,
+> which agrees for keyboard and mouse, the only nodes they paired.
 
 **Relayed reads.** A node is read by addressing universal COMMON / INPUT /
 MOUSE / JOYSTICK / SENSOR reads to its short-id (`target_node`). Reads retry up to 4
@@ -794,17 +797,14 @@ catalog actions `dev:<action>[:dpi]` for DPI actions. Joystick: `btn:<pos>`,
 
 ## 10. Firmware and client gaps
 
-1. **Joystick radio leg** — pairing refuses radio device type 4, so a joystick
-   cannot sit behind a dongle yet. The client's read-only joystick node view is
-   ready for it.
-2. **Editing through the dongle** — the sealed relay session exists in the
+1. **Editing through the dongle** — the sealed relay session exists in the
    client; it needs hardware proof before node views become writable.
-3. **JOYSTICK namespace** — provisional (`ns_version` 0) until the joystick has
-   run on hardware.
-4. **Sealing** — mutating verbs go plaintext while control auth is
+2. **JOYSTICK namespace** — provisional (`ns_version` 0). It has run on
+   hardware, over USB and through a dongle; the layouts are not frozen yet.
+3. **Sealing** — mutating verbs go plaintext while control auth is
    dev-disabled; a product build seals them (RUCP §19).
-5. **OTA over the wire** — not bound to a transport yet.
-6. **Live combos / macros / tap-dance RPC** — they ship in the blob; no live
+4. **OTA over the wire** — not bound to a transport yet.
+5. **Live combos / macros / tap-dance RPC** — they ship in the blob; no live
    verbs.
-7. **SENSOR namespace** — provisional (`ns_version` 0) until the layouts
+6. **SENSOR namespace** — provisional (`ns_version` 0) until the layouts
    freeze; the TBL_SENSOR layout is versioned like every table.
