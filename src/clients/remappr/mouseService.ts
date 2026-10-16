@@ -2,9 +2,11 @@
 //
 // The Remappr mouse as a device the app edits in the device editor. Its
 // settings are one `remappr.device` document; every editor (the controls
-// facade for buttons and CPI, the settings panel for the curve, flags and
-// radio) changes one staged copy, and `commit()` writes it in one go — the
-// header's Save. A view through the dongle is read-only.
+// facade for buttons, CPI and the sensor, the settings panel for the curve,
+// flags and radio) changes one staged copy, and `commit()` writes it in one
+// go — the header's Save. A sensor setting is also previewed on the device at
+// once (SET_SETTING, live until the next commit); a discard puts the previewed
+// ones back. A view through the dongle is read-only.
 import type { ConfigDevice } from '../../config/device'
 import { ProtocolError } from '../../errors'
 import { KeylessServiceBase } from '../../devices/keylessService'
@@ -17,6 +19,8 @@ import type {
     ControlsChange,
     DeviceBindings,
     SensorBinding,
+    SensorInfo,
+    SensorSettingValue,
 } from '../../devices/types'
 import type {
     Capabilities,
@@ -24,6 +28,7 @@ import type {
     DeviceConfigApi,
     DeviceConfigDraft,
     MouseMotionApi,
+    SensorApi,
 } from '../../service'
 import type { DeviceInfo, ExportedFile } from '../../types'
 import {
@@ -31,6 +36,8 @@ import {
     mouseBindings,
     mouseCatalog,
     mouseModel,
+    pointerSensor,
+    sensorBindingSettings,
 } from './mouseControls'
 import type { InputLayout } from './inputLayout'
 import type { Limits, MotionConfig, RateLimits } from './protocol'
@@ -44,6 +51,9 @@ export interface MouseServiceDeps {
     motion?: MouseMotionApi
     /** Report-rate verbs (direct mouse only); they may answer ERR_CMD. */
     rate?: { get(): Promise<RateLimits>; set(hz: number): Promise<number> }
+    /** The sensor's settings, procedures and readings; absent when the
+     *  firmware does not serve the SENSOR namespace. */
+    sensor?: SensorApi
     /** False for a mouse seen through the dongle. */
     writable: boolean
     /** GET_PERSONALITY_MAP hw_caps (0 / absent = not reported). */
@@ -73,12 +83,18 @@ function stableJson(v: unknown): string {
 const sameDoc = (a: ConfigDevice | null, b: ConfigDevice | null): boolean =>
     stableJson(a) === stableJson(b)
 
+/** The hardware took a sensor value other than the one asked for: the editor
+ *  must re-read to show it. */
+const snapped = (asked: SensorBinding, took: SensorBinding): boolean =>
+    Object.entries(took.settings).some(([k, v]) => asked.settings[k] !== v)
+
 export class RemapprMouseService extends KeylessServiceBase {
     readonly kind = 'mouse' as const
     readonly deviceInfo: DeviceInfo
     readonly capabilities: Capabilities
     readonly limits?: Limits
     readonly motion?: MouseMotionApi
+    readonly sensor?: SensorApi
     readonly device?: DeviceConfigApi
     readonly controls: ControlsApi
 
@@ -88,6 +104,10 @@ export class RemapprMouseService extends KeylessServiceBase {
     private motionCfg: MotionConfig | null = null
     private rates: RateLimits | null = null
     private stagedRate: number | null = null
+    /** The pointer sensor as last described (values in force then). */
+    private sensorInfo: SensorInfo | null = null
+    /** Sensor settings changed live since the last commit or discard. */
+    private readonly previewed = new Set<string>()
     private loading: Promise<void> | null = null
     private readonly changeListeners = new Set<(c: ControlsChange) => void>()
     private readonly draftListeners = new Set<(d: ConfigDevice) => void>()
@@ -98,6 +118,7 @@ export class RemapprMouseService extends KeylessServiceBase {
         this.deviceInfo = deps.deviceInfo
         this.limits = deps.limits
         this.motion = deps.motion
+        this.sensor = deps.sensor
         // Drawn as the mouse reports itself, else generic; a layout drawn in
         // the Builder is remembered per mouse and wins while it fits.
         this.layout = createLayoutOverride(
@@ -138,6 +159,8 @@ export class RemapprMouseService extends KeylessServiceBase {
             this.stored = this.draft
         }
         await this.applyStagedRate()
+        // The pushed config holds the sensor values now; the live ones ended.
+        this.previewed.clear()
         this.setPending(false)
         // A pushed config replaces the live DPI / acceleration / wheel values.
         this.motionCfg =
@@ -145,20 +168,25 @@ export class RemapprMouseService extends KeylessServiceBase {
             this.motionCfg
     }
 
-    override discardChanges(): Promise<void> {
+    override async discardChanges(): Promise<void> {
         this.stagedRate = null
         this.draft = this.stored
         this.setPending(false)
         this.announce(this.stored)
-        return Promise.resolve()
+        await this.restorePreviewed()
     }
 
-    /** Back to the firmware defaults: a document without mouse or radio
-     *  settings, written at once. */
+    /** Back to the firmware defaults: a document without mouse, radio or
+     *  sensor settings, written at once. */
     override async resetSettings(): Promise<void> {
         await this.load()
         if (!this.stored) return
-        const { mouse: _mouse, radio: _radio, ...defaults } = this.stored
+        const {
+            mouse: _mouse,
+            radio: _radio,
+            sensor: _sensor,
+            ...defaults
+        } = this.stored
         this.draft = defaults
         await this.commit()
         this.announce(this.draft)
@@ -194,15 +222,72 @@ export class RemapprMouseService extends KeylessServiceBase {
     }
 
     private async read(): Promise<void> {
-        const [snap, motion, rates] = await Promise.all([
+        const [snap, motion, rates, sensors] = await Promise.all([
             this.deps.device?.read() ?? null,
             this.deps.motion?.getConfig().catch(() => null) ?? null,
             this.deps.rate?.get().catch(() => null) ?? null,
+            // The editor still opens when the sensor cannot be described: it
+            // then offers only the DPI and the rate.
+            this.deps.sensor?.getSensors().catch(() => null) ?? null,
         ])
         this.stored = snap?.config ?? null
         this.draft = this.stored
         this.motionCfg = motion
         this.rates = rates
+        this.sensorInfo = pointerSensor(sensors)
+    }
+
+    /** A sensor setting's value with nothing set: the device's default. */
+    private sensorDefault(name: string): SensorSettingValue | undefined {
+        return this.sensorInfo?.settings.find((s) => s.name === name)?.default
+    }
+
+    /** What each sensor setting is under `doc`: its value, else the default. */
+    private sensorValues(
+        doc: ConfigDevice | null,
+    ): Map<string, SensorSettingValue> {
+        const set = sensorBindingSettings(doc?.sensor)
+        const out = new Map<string, SensorSettingValue>()
+        for (const s of this.sensorInfo?.settings ?? []) {
+            if (!s.personality) out.set(s.name, set[s.name] ?? s.default)
+        }
+        return out
+    }
+
+    /**
+     * Preview `b`'s sensor settings on the device: each one whose value moves
+     * from the draft's is set live. Resolves to `b` with the values the
+     * hardware took (an INT snaps to what its registers hold). A refusal (an
+     * option that needs a calibration first) rejects before anything is
+     * staged.
+     */
+    private async previewSensor(b: SensorBinding): Promise<SensorBinding> {
+        const api = this.deps.sensor
+        const info = this.sensorInfo
+        if (!api || !info) return b
+        const before = this.sensorValues(this.draft)
+        const settings = { ...b.settings }
+        for (const [name, was] of before) {
+            const next = settings[name] ?? this.sensorDefault(name)
+            if (next === undefined || next === was) continue
+            const applied = await api.setSetting(info.index, name, next)
+            this.previewed.add(name)
+            if (name in settings) settings[name] = applied
+        }
+        return { ...b, settings }
+    }
+
+    /** Put every previewed setting back to the stored config's value. */
+    private async restorePreviewed(): Promise<void> {
+        const api = this.deps.sensor
+        const info = this.sensorInfo
+        if (!api || !info || this.previewed.size === 0) return
+        const stored = this.sensorValues(this.stored)
+        for (const name of [...this.previewed]) {
+            const value = stored.get(name)
+            if (value !== undefined) await api.setSetting(info.index, name, value)
+            this.previewed.delete(name)
+        }
     }
 
     private async applyStagedRate(): Promise<void> {
@@ -245,7 +330,12 @@ export class RemapprMouseService extends KeylessServiceBase {
             this.rates && this.stagedRate !== null
                 ? { ...this.rates, currentHz: this.stagedRate }
                 : this.rates
-        const all = mouseBindings(this.draft?.mouse, this.motionCfg, rates)
+        const all = mouseBindings(
+            this.draft?.mouse,
+            this.motionCfg,
+            rates,
+            this.draft?.sensor,
+        )
         // Only the controls the mouse has (no sensor when it reports none).
         const ids = new Set(this.layout.model().controls.map((c) => c.id))
         return Object.fromEntries(
@@ -277,6 +367,7 @@ export class RemapprMouseService extends KeylessServiceBase {
                     this.motionCfg,
                     this.rates,
                     this.draft?.mouse,
+                    this.sensorInfo,
                 )
             },
             getProfiles: () =>
@@ -309,11 +400,19 @@ export class RemapprMouseService extends KeylessServiceBase {
                         'The mouse settings could not be read',
                     )
                 }
-                if (controlId === 'sensor')
-                    this.stageRate(binding as SensorBinding)
+                if (controlId !== 'sensor') {
+                    this.stage(
+                        applyMouseBinding(this.draft, controlId, binding),
+                        true,
+                    )
+                    return
+                }
+                const asked = binding as SensorBinding
+                const took = await this.previewSensor(asked)
+                this.stageRate(took)
                 this.stage(
-                    applyMouseBinding(this.draft, controlId, binding),
-                    true,
+                    applyMouseBinding(this.draft, controlId, took, this.sensorInfo),
+                    !snapped(asked, took),
                 )
             },
         }

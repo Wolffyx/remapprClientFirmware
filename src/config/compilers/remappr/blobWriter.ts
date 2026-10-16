@@ -48,6 +48,7 @@ export const TableId = {
     Radio: 26, // a node's own 2.4 GHz link settings (device-config plan)
     // 27 is promised to TBL_UPDATE.
     Joystick: 28, // joystick axes + hat (input-layout plan §4)
+    Sensor: 29, // sensor settings (sensor-settings plan §4)
 } as const
 
 /** enum remappr_personality (firmware include/remappr/role.h). */
@@ -544,6 +545,17 @@ export const JOY_FLAG_RADIAL = 1 << 1
 export const JOYSTICK_TBL_HDR_LEN = 2
 export const JOYSTICK_TBL_AXIS_LEN = 8
 
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_SENSOR layout
+/** One TBL_SENSOR (id 29) entry: a setting's value for one of the device's
+ *  sensors. `id` is the registry id (sensorRegistry.ts). */
+export interface SensorTableEntry {
+    sensor: number
+    id: number
+    value: number
+}
+export const SENSOR_TBL_HDR_LEN = 2
+export const SENSOR_TBL_ENTRY_LEN = 8
+
 /** One action-binding record (10 bytes): an additive per-position action that
  *  sits alongside the keymap binding. `kind`/`code`/`arg0`/`arg1` are passed
  *  through verbatim (the firmware resolver interprets them). */
@@ -822,6 +834,23 @@ export class BlobBuilder {
                 this.w.u8(v)
             }
             this.w.u16(0) // reserved
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_SENSOR (id 29) v1: u8 count, u8 reserved, then per entry u8 sensor,
+     *  u8 id, u16 reserved, i32 value — matching firmware decode_sensor.c. */
+    sensorTable(entries: readonly SensorTableEntry[]): this {
+        this.tableBegin(TableId.Sensor, 1)
+        this.w.u8(entries.length)
+        this.w.u8(0) // reserved
+        for (const e of entries) {
+            this.w.u8(e.sensor)
+            this.w.u8(e.id)
+            this.w.u16(0) // reserved
+            this.w.u32(e.value)
         }
         this.tableEnd()
         return this

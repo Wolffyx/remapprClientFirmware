@@ -246,6 +246,37 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   Keep `keepaliveMs` below the dongle's `failsafeMs` with room for one lost
   frame, or the dongle releases a key held without change. The two live on
   different devices, so the compiler cannot check that for you.
+- `node.sensor.defaults` holds the product's defaults for the node's motion
+  sensor, by registry name (the Remappr sensor registry,
+  `include/dt-bindings/remappr/sensor.h`, mirrored in
+  `src/clients/remappr/sensorRegistry.ts`). A BOOL takes a boolean, an INT a
+  number, an ENUM its option name or code. A name the registry does not have
+  is refused; an id with no name yet is written in hex (`"0x16": 1`).
+
+  ```jsonc
+  "node": {
+    "personality": "mouse",
+    "sensor": {
+      "defaults": {
+        "liftCutoff": "2mm",          // 1mm | 2mm | calibrated
+        "angleSnap": false,
+        "angleTune": -5,              // degrees
+        "performanceMode": "corded",  // high | lowPower | office | corded
+        "stayAwake": true
+      }
+    }
+  }
+  ```
+
+  They reach the device twice. The `remappr-board` compiler builds them into
+  the sensor's devicetree node as `remappr,setting-defaults` (with
+  `board.sensor`, below), where they become the defaults the device reports
+  and the app's Reset goes back to. The keymap compiler also writes them into
+  TBL_SENSOR (id 29) for the first sensor, so firmware not built from this
+  JSON runs them too. The device checks TBL_SENSOR strictly: a setting its
+  sensor does not have, or a value out of its range, refuses the whole config.
+  Which settings a sensor has is the device's to say (the SENSOR namespace);
+  no list of them lives here.
 - `firmware.<target>` namespaces settings so every registered firmware target's
   knobs are reachable. _(consumed per-target in a later phase)_
 - `board` feeds the DT/Kconfig generator; `controller` accepts a known Zephyr
@@ -258,6 +289,24 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   explicit `keyboard.hardware.transform` and warn when derived from geometry.
   Get it via `getCompiler('remappr-board')` or `buildProjectBundle(config,
   'remappr-board')`.
+- `board.sensor` puts a motion sensor on an SPI bus of the board: `part` is its
+  devicetree compatible, `bus` the bus's node label, `motion` (and optionally
+  `cs`, `reset`) its pins, as raw `&gpioN pin FLAGS` specs or friendly labels;
+  `spiMaxHz` defaults to 8 MHz. The shield gets the sensor's node with
+  `node.sensor.defaults` as `remappr,setting-defaults`; its driver turns on
+  from devicetree.
+
+  ```jsonc
+  "board": {
+    "sensor": {
+      "part": "pixart,paw3395",
+      "bus": "arduino_spi",
+      "cs": "&gpio1 12 GPIO_ACTIVE_LOW",   // leave out if the bus lists it first
+      "motion": "&gpio1 10 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)",
+      "reset": "&gpio1 11 GPIO_ACTIVE_LOW"
+    }
+  }
+  ```
 
 ## Device documents (non-keyboard devices)
 
@@ -310,13 +359,23 @@ above) and the radio block (as `node.radio`):
     "scrollDivisor": 2,
     "buttonMap": [1, 0, 2, 3, 4, 5, 6, null]  // swap left/right, drop button 8
   },
-  "radio": { "keepaliveMs": 60 }
+  "radio": { "keepaliveMs": 60 },
+  "sensor": { "settings": { "liftCutoff": "2mm", "angleSnap": true } }
 }
 ```
 
-- `buildRemapprDeviceBlob` writes TBL_PERSONALITY (mouse = 2), TBL_MOUSE and
-  TBL_RADIO; `decodeRemapprDeviceBlob` returns `personality`, `mouse` and
-  `radio`. Push it to the mouse over USB, or through the dongle relay.
+- `buildRemapprDeviceBlob` writes TBL_PERSONALITY (mouse = 2), TBL_MOUSE,
+  TBL_RADIO and TBL_SENSOR; `decodeRemapprDeviceBlob` returns `personality`,
+  `mouse`, `radio` and `sensor`. Push it to the mouse over USB, or through the
+  dongle relay.
+- `sensor.settings` holds the values the user set for the sensor, by registry
+  name as `node.sensor.defaults` does; a setting left out stays on the
+  device's default. `sensor.index` picks another of the device's sensors
+  (default 0). Given the device's description of its sensors
+  (`buildRemapprDeviceBlob(config, { configVersion, sensors })`; the mouse's
+  `service.device.write` passes it), a setting the device would refuse is
+  left out of the blob. A name nobody registered is kept in the document but
+  never compiled. Read back, an option comes back as its code.
 - The mouse's DPI range is the board's; the device refuses a `cpi` outside it.
 - The MOUSE verbs (`SET_DPI`, `SET_ACCEL_PROFILE`, `SET_SCROLL_MODE`) are live
   tweaks that stand until a different config becomes active.
@@ -332,6 +391,15 @@ From a connected service (the app's dongle and mouse pages):
   config store.
 - `service.motion` holds the live MOUSE verbs and `getConfig()` (DPI range and
   the values in force). Present on a mouse.
+- `service.sensor` (SENSOR namespace, provisional) describes each sensor
+  (`getSensors()`: its settings with type, range or options, unit, default
+  and the value in force; its procedures and readings), sets a setting live
+  (`setSetting`, until the next saved config), runs a procedure step by step
+  (`runProcedure`, e.g. the lift calibration, whose result the unit keeps)
+  and reads the readings (`getMetrics`). Present when the device lists the
+  namespace. The mouse's device editor offers exactly the settings the
+  sensor describes (`catalog.sensor.settings`) and previews each change
+  live; a discard puts the previewed ones back.
 - A mouse connected over USB comes up as `kind: 'mouse'`. A mouse opened from
   the dongle's roster is a read-only view: both facades read through the relay
   and every write rejects.

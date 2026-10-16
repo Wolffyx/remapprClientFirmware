@@ -29,9 +29,7 @@ function defaultSensor(catalog: ControlsCatalog): SensorBinding {
             stages: [800],
             active: 0,
             poll: 1000,
-            lod: '',
-            snap: false,
-            motionSync: false,
+            settings: {},
         }
     }
     const inRange = DPI_LADDER.filter(
@@ -48,9 +46,8 @@ function defaultSensor(catalog: ControlsCatalog): SensorBinding {
         stages,
         active: Math.min(1, stages.length - 1),
         poll,
-        lod: spec.lods[0]?.id ?? '',
-        snap: false,
-        motionSync: true,
+        // Every sensor setting starts at the device's default.
+        settings: {},
     }
 }
 

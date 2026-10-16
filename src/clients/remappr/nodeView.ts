@@ -15,6 +15,7 @@ import { deviceKind } from './deviceKind'
 import { discover, type DiscoveryResult } from './discovery'
 import { buildMouseMotionApi } from './mouse'
 import { buildJoystickApi, servesJoystick } from './joystick'
+import { buildSensorApi, servesSensor } from './sensor'
 import { readInputLayout } from './inputLayout'
 import {
     clearAllBonds,
@@ -116,6 +117,9 @@ async function openMouseView(
             writable: false,
         }),
         motion: buildMouseMotionApi(rpc, { targetNode: id, writable: false }),
+        sensor: servesSensor(discovery)
+            ? buildSensorApi(rpc, { targetNode: id, writable: false })
+            : undefined,
         writable: false,
         hwCaps: discovery.personality?.hwCaps,
         layout,

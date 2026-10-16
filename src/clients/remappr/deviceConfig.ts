@@ -4,7 +4,8 @@
 // and decoded by compilers/remappr/device.ts.
 //
 // The config of a device that is not a keyboard: the dongle's TBL_DONGLE, the
-// mouse's TBL_MOUSE and TBL_RADIO (firmware docs/device-config-plan.md). These
+// mouse's TBL_MOUSE, TBL_RADIO (firmware docs/device-config-plan.md) and
+// TBL_SENSOR (sensor-settings plan §4). These
 // devices hold no §19 session: whoever has the device on USB configures it, so
 // every verb is plaintext. They are always universal frames, which both the
 // dongle (it drops legacy frames) and the mouse answer, at target 0 for the
@@ -17,6 +18,7 @@ import {
 } from '../../config/compilers/remappr/device'
 import { DecodeCode } from '../../config/compilers/remappr/decode'
 import { ProtocolError } from '../../errors'
+import type { SensorInfo } from '../../devices/types'
 import type { DeviceConfigApi, DeviceConfigSnapshot } from '../../service'
 
 import { readConfigBlob } from './configRead'
@@ -48,6 +50,10 @@ export interface DeviceConfigTarget {
     name: string
     /** False for a node reached through the dongle: `write` then rejects. */
     writable: boolean
+    /** The device's sensors as it describes them (SENSOR namespace), when it
+     *  serves them: `write` leaves out a sensor setting the device would
+     *  refuse (it validates TBL_SENSOR strictly). */
+    sensors?: () => Promise<readonly SensorInfo[]>
 }
 
 /** A document with no settings: every field on the device's default. */
@@ -138,7 +144,7 @@ export function buildDeviceConfigApi(
                 `the device holds a ${decoded.personality} config, not a ${target.personality} one`,
             )
         }
-        const { dongle, mouse, radio, joystick } = decoded
+        const { dongle, mouse, radio, joystick, sensor } = decoded
         return {
             config: {
                 ...emptyDeviceConfig(target.personality, target.name),
@@ -146,6 +152,7 @@ export function buildDeviceConfigApi(
                 ...(mouse ? { mouse } : {}),
                 ...(radio ? { radio } : {}),
                 ...(joystick ? { joystick } : {}),
+                ...(sensor ? { sensor } : {}),
             },
             configVersion: decoded.configVersion ?? info.configVersion,
             stored: true,
@@ -172,8 +179,9 @@ export function buildDeviceConfigApi(
         // that does not move it forward, and another tool may have pushed since.
         const info = await deviceInfo()
         const version = (info.hasActive ? info.configVersion : 0) + 1
+        const sensors = parsed.data.sensor ? await target.sensors?.() : undefined
         const blob = padToAlign(
-            buildRemapprDeviceBlob(parsed.data, { configVersion: version }),
+            buildRemapprDeviceBlob(parsed.data, { configVersion: version, sensors }),
         )
 
         await callOk(Cmd.WRITE_CONFIG_BEGIN, 'WRITE_CONFIG_BEGIN')

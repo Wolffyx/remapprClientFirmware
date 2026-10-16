@@ -771,6 +771,39 @@ export interface ConfigBoard {
     storage?: 'zms' | 'nvs'
     /** Rotary encoder hardware for the board generator (opt-in; emits gpio-qdec). */
     encoders?: BoardEncoder[]
+    /** A motion sensor on SPI (opt-in; emits its node with the product's
+     *  sensor defaults from node.sensor). */
+    sensor?: BoardSensor
+    [k: string]: unknown
+}
+
+/** A motion sensor on SPI for the board generator. Pins are friendly labels
+ *  or verbatim `&`-specs, like the encoders'. */
+export interface BoardSensor {
+    /** The sensor's devicetree compatible, e.g. "pixart,paw3395". */
+    part: string
+    /** Node label of the SPI bus it sits on, e.g. "arduino_spi". */
+    bus: string
+    /** Chip select, written as the bus's cs-gpios; omit when the bus already
+     *  lists it first. */
+    cs?: string
+    /** MOTION (interrupt) pin. */
+    motion: string
+    /** NRESET pin, when wired. */
+    reset?: string
+    /** SPI clock, Hz (default 8000000). */
+    spiMaxHz?: number
+}
+
+/** A sensor setting's value in a document or JSON config: a boolean (BOOL), a
+ *  number (INT, or an ENUM's code), or an ENUM option's registry name. */
+export type ConfigSensorValue = number | boolean | string
+
+/** The node's sensor (sensor-settings plan §4b). */
+export interface ConfigNodeSensor {
+    /** The product's defaults by registry name: built into the board and
+     *  written into TBL_SENSOR. */
+    defaults?: Record<string, ConfigSensorValue>
     [k: string]: unknown
 }
 
@@ -966,6 +999,9 @@ export interface ConfigNode {
     /** The node's 2.4 GHz link settings (TBL_RADIO): auto-pair, repeats,
      *  keepalive, beacon loss. */
     radio?: ConfigRadioSettings
+    /** The sensor's product defaults (TBL_SENSOR, the board's
+     *  remappr,setting-defaults). */
+    sensor?: ConfigNodeSensor
     [k: string]: unknown
 }
 

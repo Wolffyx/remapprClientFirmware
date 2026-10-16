@@ -5,8 +5,9 @@
 // (`remappr.keymap`, schema.ts); a dongle has no keys or layers, so it gets this
 // small document instead. It compiles to an RMBC blob holding TBL_PERSONALITY
 // plus the device's own tables (compilers/remappr/device.ts): the dongle's
-// TBL_DONGLE, the mouse's TBL_MOUSE and TBL_RADIO (firmware
-// docs/device-config-plan.md), or the joystick's TBL_JOYSTICK and button
+// TBL_DONGLE, the mouse's TBL_MOUSE, TBL_RADIO (firmware
+// docs/device-config-plan.md) and its sensor's TBL_SENSOR (sensor-settings
+// plan §4), or the joystick's TBL_JOYSTICK and button
 // actions (input-layout plan §4).
 //
 //   {
@@ -23,7 +24,8 @@
 //     "meta": { "name": "Travel mouse" },
 //     "personality": "mouse",
 //     "mouse": { "cpi": 1600, "invertWheel": true, "buttonMap": [1,0,2,3,4,5,6,7] },
-//     "radio": { "keepaliveMs": 60 }
+//     "radio": { "keepaliveMs": 60 },
+//     "sensor": { "settings": { "liftCutoff": "2mm", "angleSnap": false } }
 //   }
 //
 //   {
@@ -39,7 +41,12 @@
 // config that passes here is never refused for a range. A mouse's DPI must also
 // sit inside its board's range, which only the device knows (GET_MOTION_CONFIG).
 import { z } from 'zod'
-import { JoystickSchema, MouseSchema, RadioSettingsSchema } from './schema'
+import {
+    DeviceSensorSchema,
+    JoystickSchema,
+    MouseSchema,
+    RadioSettingsSchema,
+} from './schema'
 
 export const DongleSettingsSchema = z
     .object({
@@ -130,15 +137,16 @@ export const DeviceConfigSchema = z
         mouse: MouseSchema.optional(),
         radio: RadioSettingsSchema.optional(),
         joystick: JoystickSchema.optional(),
+        sensor: DeviceSensorSchema.optional(),
     })
     .superRefine((d, ctx) => {
         // A section another device reads would be silently ignored: refuse it.
         const own: Record<string, string[]> = {
             dongle: ['dongle'],
-            mouse: ['mouse', 'radio'],
+            mouse: ['mouse', 'radio', 'sensor'],
             joystick: ['joystick'],
         }
-        for (const key of ['dongle', 'mouse', 'radio', 'joystick'] as const) {
+        for (const key of ['dongle', 'mouse', 'radio', 'joystick', 'sensor'] as const) {
             if (d[key] !== undefined && !own[d.personality].includes(key)) {
                 ctx.addIssue({
                     code: 'custom',
@@ -152,6 +160,7 @@ export const DeviceConfigSchema = z
 
 export type ConfigDevice = z.infer<typeof DeviceConfigSchema>
 export type DongleSettings = z.infer<typeof DongleSettingsSchema>
+export type ConfigDeviceSensor = z.infer<typeof DeviceSensorSchema>
 
 /** Parse + validate a device config document. Throws a ZodError (or a
  *  SyntaxError for bad JSON) like parseKeymap does. */

@@ -9,6 +9,8 @@ import type {
     DeviceKind,
     DeviceModel,
     DeviceProfile,
+    SensorInfo,
+    SensorSettingValue,
 } from './devices/types'
 import type { LightingCatalog } from './lighting'
 import type {
@@ -705,6 +707,59 @@ export interface JoystickApi {
     setDeadzone(input: number, inner: number, outer: number): Promise<void>
 }
 
+/** A RUN_PROCEDURE step: begin (phase 1), next (end the phase in hand),
+ *  cancel (stop; a stored result stays), reset (forget the stored result). */
+export type SensorProcedureStep = 'begin' | 'next' | 'cancel' | 'reset'
+
+/** A procedure's progress. `phase` counts from 1 while it runs (0 else);
+ *  `progress` / `total` are what a counting phase has done (0 / 0 when the
+ *  phase does not count). `ok` is the result once done or failed. */
+export interface SensorProcedureStatus {
+    readonly state: 'idle' | 'running' | 'done' | 'failed'
+    readonly phase: number
+    readonly progress: number
+    readonly total: number
+    readonly ok: boolean
+}
+
+/** A live reading, by its {@link SensorMetricSpec} name. */
+export interface SensorReading {
+    readonly name: string
+    readonly value: number
+    readonly max: number
+}
+
+// Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as MouseMotionApi / JoystickApi above.
+/** A device's sensors (SENSOR namespace, provisional): what each has, live
+ *  changes, procedures and readings. A setting set here is a live preview:
+ *  the next saved config replaces it. A procedure's result belongs to the
+ *  unit and stays across configs. Settings and procedures are named as their
+ *  descriptors name them. */
+export interface SensorApi {
+    /** False on a node reached through a dongle (read-only view). */
+    readonly writable: boolean
+    /** Each sensor and everything it describes, with the values in force. */
+    getSensors(): Promise<readonly SensorInfo[]>
+    /** Live: set one setting. Resolves to the value the hardware took (an INT
+     *  snaps to what its registers hold). Rejects a value out of range, a
+     *  personality's setting, or an option that needs a procedure first. */
+    setSetting(
+        sensor: number,
+        name: string,
+        value: SensorSettingValue,
+    ): Promise<SensorSettingValue>
+    /** One step of a procedure; resolves to its status after the step.
+     *  Rejects a step out of turn. */
+    runProcedure(
+        sensor: number,
+        name: string,
+        step: SensorProcedureStep,
+    ): Promise<SensorProcedureStatus>
+    getProcedureStatus(sensor: number, name: string): Promise<SensorProcedureStatus>
+    /** The live readings. Rejects while a procedure holds the sensor. */
+    getMetrics(sensor: number): Promise<readonly SensorReading[]>
+}
+
 // Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as
 // EncoderApi / MouseMotionApi / SideloadApi above: one surface an adapter may
 // or may not implement, gated by presence.
@@ -789,6 +844,9 @@ export interface KeyboardService {
     readonly motion?: MouseMotionApi
     /** Live joystick controls and calibration; present on a joystick. */
     readonly joystick?: JoystickApi
+    /** The device's sensors: settings, procedures, readings. Present when the
+     *  firmware serves them. */
+    readonly sensor?: SensorApi
 
     getLockState(): Promise<LockState>
 

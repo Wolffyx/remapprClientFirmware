@@ -18,6 +18,10 @@ import {
     REPL_ALPHABET,
     TYPO_ALPHABET,
 } from './compilers/remappr/autocorrect'
+import {
+    registrySetting,
+    sensorSettingId,
+} from '../clients/remappr/sensorRegistry'
 
 /* ── leaf vocabularies ─────────────────────────────────────────────────── */
 
@@ -889,6 +893,7 @@ export const BoardSchema = z
             .optional(),
         split: z.boolean().optional(),
         storage: z.enum(['zms', 'nvs']).optional(),
+        sensor: z.lazy(() => BoardSensorSchema).optional(),
     })
     .describe(
         'Build-time board definition for the DT/Kconfig generator (never in the blob).',
@@ -977,6 +982,108 @@ export const MouseSchema = z
             '(TBL_MOUSE v2) axis inverts / swap, scroll divisor and button map, ' +
             '(v3) DPI stages, and a mouse image\'s button actions.',
     )
+
+// pattern-check: skip declarative zod schemas for sensor settings (sensor-settings plan §4b)
+const SensorValueSchema = z.union([z.boolean(), z.number().int(), z.string()])
+
+/** Why `value` does not suit setting `key`, or null when it does: a BOOL takes
+ *  a boolean (or 0 / 1), an INT a number, an ENUM a code or an option name. A
+ *  hex key (`0x16`, an id with no registry name) takes a number or boolean. */
+function sensorValueIssue(key: string, value: unknown): string | null {
+    const reg = registrySetting(key)
+    if (!reg) {
+        return typeof value === 'string'
+            ? `"${key}" has no option names: give its value as a number`
+            : null
+    }
+    if (typeof value !== 'string') return null
+    if (reg.options?.some((o) => o.name === value)) return null
+    const names = reg.options?.map((o) => o.name).join(', ')
+    return names
+        ? `"${value}" is not an option of ${key} (${names})`
+        : `${key} takes a ${reg.type === 'bool' ? 'boolean' : 'number'}`
+}
+
+/** Sensor settings by registry name. `strict` also refuses a name the
+ *  registry does not have (and that is not a hex id). */
+function sensorValuesSchema(strict: boolean) {
+    return z
+        .record(z.string(), SensorValueSchema)
+        .superRefine((values, ctx) => {
+            for (const [key, value] of Object.entries(values)) {
+                if (strict && sensorSettingId(key) === undefined) {
+                    ctx.addIssue({
+                        code: 'custom',
+                        path: [key],
+                        message: `"${key}" is not a sensor setting name`,
+                    })
+                    continue
+                }
+                const issue = sensorValueIssue(key, value)
+                if (issue) ctx.addIssue({ code: 'custom', path: [key], message: issue })
+            }
+        })
+}
+
+export const DeviceSensorSchema = z
+    .object({
+        index: z
+            .number()
+            .int()
+            .min(0)
+            .max(255)
+            .optional()
+            .describe("Which of the device's sensors (default 0, the first)."),
+        settings: sensorValuesSchema(false)
+            .optional()
+            .describe(
+                'Values the user set, by registry name (liftCutoff, angleSnap, …): a ' +
+                    'BOOL as a boolean, an INT as a number, an ENUM as its code or ' +
+                    'option name. A setting left out stays on the device default; a ' +
+                    'name the device does not list is kept but not compiled.',
+            ),
+    })
+    .describe("A device's sensor settings (TBL_SENSOR, sensor-settings plan §4).")
+
+export const NodeSensorSchema = z
+    .looseObject({
+        defaults: sensorValuesSchema(true)
+            .optional()
+            .describe(
+                "The product's defaults for the sensor, by registry name: built " +
+                    'into the board (remappr,setting-defaults) and written into ' +
+                    'TBL_SENSOR, under any value the user sets.',
+            ),
+    })
+    .describe("The node's sensor (sensor-settings plan §4b).")
+
+export const BoardSensorSchema = z
+    .object({
+        part: z
+            .string()
+            .min(1)
+            .describe('The sensor\'s devicetree compatible, e.g. "pixart,paw3395".'),
+        bus: z
+            .string()
+            .min(1)
+            .describe('Node label of the SPI bus it sits on, e.g. "arduino_spi".'),
+        cs: z
+            .string()
+            .optional()
+            .describe(
+                "Chip-select GPIO; written as the bus's cs-gpios. Leave it out when " +
+                    'the bus already lists it first.',
+            ),
+        motion: z.string().min(1).describe('MOTION (interrupt) GPIO.'),
+        reset: z.string().optional().describe('NRESET GPIO, when wired.'),
+        spiMaxHz: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe('SPI clock, Hz (default 8000000).'),
+    })
+    .describe('A motion sensor on SPI, for the board generator.')
 
 // pattern-check: skip declarative zod schemas mirroring TBL_JOYSTICK and the gamepad actions
 const JOYSTICK_AXES = ['x', 'y', 'z', 'rx', 'ry', 'rz'] as const
@@ -1156,6 +1263,7 @@ export const NodeSchema = z
         cluster: z.array(ClusterNodeSchema).optional(),
         linkProfile: LinkProfileSchema.optional(),
         radio: RadioSettingsSchema.optional(),
+        sensor: NodeSensorSchema.optional(),
     })
     .describe(
         'Per-personality node configuration; a dongle has a limited surface, a ' +

@@ -5,11 +5,12 @@
 // keymap tables. The firmware refuses a blob whose personality is not its own,
 // so the personality is always emitted. The dongle reads TBL_DONGLE (id 25);
 // the mouse reads TBL_MOUSE (id 8), its button actions from TBL_ACTION_BINDING
-// (id 17) and TBL_RADIO (id 26); the joystick reads TBL_JOYSTICK (id 28) and
+// (id 17), TBL_RADIO (id 26) and its sensor's TBL_SENSOR (id 29); the joystick reads TBL_JOYSTICK (id 28) and
 // its button actions from TBL_ACTION_BINDING. Byte layout mirrors
 // firmware include/remappr/config_blob.h, lib/config_blob/decode_dongle.c and
 // include/remappr/radio_settings.h.
-import type { ConfigDevice, DongleSettings } from '../../device'
+import type { SensorInfo } from '../../../devices/types'
+import type { ConfigDevice, ConfigDeviceSensor, DongleSettings } from '../../device'
 import type {
     ConfigJoystick,
     ConfigMouse,
@@ -40,6 +41,7 @@ import {
     readMouseTable,
 } from './mouse'
 import { radioRecord, readRadio } from './radio'
+import { deviceSensorEntries, readSensorTable } from './sensor'
 import {
     JOYSTICK_ACTION_POSITIONS,
     joystickActionRecords,
@@ -86,11 +88,13 @@ function addJoystick(builder: BlobBuilder, j: ConfigJoystick): void {
 /**
  * Device config -> RMBC blob. `configVersion` must be above the device's active
  * one (the firmware refuses a stale commit). The config is assumed validated
- * (parseDeviceConfig / DeviceConfigSchema).
+ * (parseDeviceConfig / DeviceConfigSchema). `sensors`, the device's own
+ * description of its sensors, leaves out a sensor setting it would refuse
+ * (compilers/remappr/sensor.ts); the document keeps it.
  */
 export function buildRemapprDeviceBlob(
     config: ConfigDevice,
-    opts: { configVersion: number },
+    opts: { configVersion: number; sensors?: readonly SensorInfo[] },
 ): Uint8Array {
     const builder = new BlobBuilder().personalityTable(
         Personality[config.personality],
@@ -102,6 +106,8 @@ export function buildRemapprDeviceBlob(
     if (actions.length) builder.actionBindingTable(MOUSE_ACTION_POSITIONS, actions)
     const radio = config.radio ? radioRecord(config.radio) : undefined
     if (radio) builder.radioTable(radio)
+    const sensor = deviceSensorEntries(config.sensor, opts.sensors).entries
+    if (sensor.length) builder.sensorTable(sensor)
     if (config.joystick) addJoystick(builder, config.joystick)
     return builder.finalize(
         config.schemaVersion,
@@ -123,6 +129,8 @@ export interface DeviceDecodeResult {
     /** The joystick's settings (a joystick blob with TBL_JOYSTICK or button
      *  actions). */
     joystick?: ConfigJoystick
+    /** The sensor's settings (a mouse blob that carries TBL_SENSOR). */
+    sensor?: ConfigDeviceSensor
     /** The blob's config_version, present on OK. */
     configVersion?: number
 }
@@ -163,7 +171,7 @@ const PERSONALITY_BY_CODE: Record<number, DevicePersonality> = {
 type Frames = (id: number) => TableFrame | undefined
 type DeviceTables = Pick<
     DeviceDecodeResult,
-    'dongle' | 'mouse' | 'radio' | 'joystick'
+    'dongle' | 'mouse' | 'radio' | 'joystick' | 'sensor'
 >
 
 function decodeDongleTables(
@@ -201,6 +209,13 @@ function decodeMouseTables(
         if (rt.version !== 1) return DecodeCode.TABLE_VER
         if (rt.end - rt.start < RADIO_TBL_LEN) return DecodeCode.TABLE_FRAME
         out.radio = readRadio(bytes, rt.start)
+    }
+    const st = table(TableId.Sensor)
+    if (st) {
+        if (st.version !== 1) return DecodeCode.TABLE_VER
+        const sensor = readSensorTable(bytes, st.start, st.end)
+        if (typeof sensor === 'string') return DecodeCode.TABLE_FRAME
+        if (sensor.settings) out.sensor = sensor
     }
     return out
 }

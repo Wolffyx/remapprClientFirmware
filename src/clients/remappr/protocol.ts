@@ -126,6 +126,7 @@ export const Cap = {
     CLUSTER_DIAG: 1 << 12, // GET_CLUSTER_DIAG source wired (§N4b-3)
     UNICODE: 1 << 14, // unicode input-method ops wired (§5.2-E)
     JOYSTICK: 1 << 15, // JOYSTICK-namespace ops wired (input-layout plan §4)
+    SENSOR: 1 << 16, // SENSOR-namespace ops wired (sensor-settings plan §3)
 } as const
 
 /** enum remappr_capability (include/remappr/capabilities.h) — the hardware
@@ -184,6 +185,10 @@ export const Namespace = {
     /** Personality-neutral input verbs: the layout of any device (input-layout
      *  plan §2). Listed in the personality map once the firmware serves it. */
     INPUT: 0x09,
+    /** Personality-neutral sensor settings, procedures and readings
+     *  (sensor-settings plan §3). Provisional (ns_version 0): served only when
+     *  the personality map lists it. */
+    SENSOR: 0x0a,
 } as const
 
 export const UchFlag = {
@@ -1378,6 +1383,283 @@ export function parseCalSuggestion(d: Uint8Array): CalSuggestion[] {
         inner: pct(d[2 + 2 * i]),
         outer: pct(d[3 + 2 * i]),
     }))
+}
+
+/* ── SENSOR namespace (sensor-settings plan §3) ──────────────────────────── */
+
+/** SENSOR-namespace verbs — namespace-scoped, 0xE2-only, PROVISIONAL (the
+ *  manifest lists the namespace at ns_version 0). Every verb names the sensor
+ *  by its index; reads are plaintext-open, SET_SETTING and RUN_PROCEDURE are
+ *  sealed and mutating. Every reply but SET_SETTING's starts with a version
+ *  byte (1); a newer firmware may append, so a reader stops where it knows. */
+export const SensorVerb = {
+    /** Arg: u8 first. Reply: see parseSensorsPage; ask again from first + n. */
+    GET_SENSORS: 0x01,
+    /** Arg: u8 sensor | u8 position (in its settings list). See
+     *  parseSensorSetting. */
+    GET_SETTING: 0x02,
+    /** Arg: u8 sensor | u8 id | i32 value. Reply: i32 applied (snapped to what
+     *  the hardware holds). Live until the next COMMIT, never stored. */
+    SET_SETTING: 0x03,
+    /** Arg: u8 sensor | u8 position. See parseSensorProcedure. */
+    GET_PROCEDURE: 0x04,
+    /** Arg: u8 sensor | u8 id | u8 step (SensorStep). Reply: the status. */
+    RUN_PROCEDURE: 0x05,
+    /** Arg: u8 sensor | u8 id. See parseSensorStatus. */
+    GET_PROCEDURE_STATUS: 0x06,
+    /** Arg: u8 sensor. See parseSensorMetrics. ERR_STATE while a procedure
+     *  holds the sensor. */
+    GET_METRICS: 0x07,
+} as const
+
+/** Setting types (enum remappr_sensor_type). */
+export const SensorTypeCode = {
+    BOOL: 1,
+    INT: 2,
+    ENUM: 3,
+} as const
+
+/** Setting flags (REMAPPR_SENSOR_FLAG_*). PERSONALITY: set by the
+ *  personality's own feature (DPI, report rate), not as a sensor setting. */
+export const SensorFlag = {
+    ADVANCED: 1 << 0,
+    NEEDS_PROCEDURE: 1 << 1,
+    PERSONALITY: 1 << 2,
+} as const
+
+/** Procedure flags. HAS_RESULT: a finished run leaves a result the unit
+ *  keeps (in its own storage, never in a config). */
+export const SensorProcFlag = {
+    HAS_RESULT: 1 << 0,
+} as const
+
+/** RUN_PROCEDURE steps. */
+export const SensorStep = {
+    BEGIN: 0,
+    NEXT: 1,
+    CANCEL: 2,
+    RESET: 3,
+} as const
+
+/** Procedure states (GET_PROCEDURE_STATUS). */
+export const SensorState = {
+    IDLE: 0,
+    RUNNING: 1,
+    DONE: 2,
+    FAILED: 3,
+} as const
+
+/** Procedure results, once DONE or FAILED. */
+export const SensorResult = {
+    OK: 0,
+    FAILED: 1,
+} as const
+
+/** One sensor from GET_SENSORS: its class (1 pointer, 2 touch, 3 IMU,
+ *  4 analog) and how many settings, procedures and metrics it lists. */
+export interface SensorRecord {
+    index: number
+    cls: number
+    modelId: number
+    settings: number
+    procedures: number
+    metrics: number
+    name: string
+}
+
+export interface SensorsPage {
+    total: number
+    sensors: SensorRecord[]
+}
+
+const ascii = (d: Uint8Array, o: number, n: number): string =>
+    String.fromCharCode(...d.subarray(o, o + n))
+
+/** A length-prefixed name at `o`, or throws when the reply cuts it short. */
+function sensorName(d: Uint8Array, o: number, what: string): string {
+    if (d.length < o + 1 || d.length < o + 1 + d[o])
+        throw new Error(`${what} reply too short`)
+    return ascii(d, o + 1, d[o])
+}
+
+function sensorReplyVersion(d: Uint8Array, min: number, what: string): void {
+    if (d.length < min) throw new Error(`${what} reply too short`)
+    if (d[0] !== 1) throw new Error(`unknown ${what} version ${d[0]}`)
+}
+
+const SENSOR_REC_LEN = 8
+
+/** GET_SENSORS reply: u8 ver | u8 total | u8 n | n × {u8 index | u8 class |
+ *  u16 model_id | u8 settings | u8 procedures | u8 metrics | u8 name_len |
+ *  name}. */
+export function parseSensorsPage(d: Uint8Array): SensorsPage {
+    sensorReplyVersion(d, 3, 'sensors')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const sensors: SensorRecord[] = []
+    let o = 3
+    for (let i = 0; i < d[2]; i++) {
+        if (d.length < o + SENSOR_REC_LEN) throw new Error('sensors reply too short')
+        const name = sensorName(d, o + 7, 'sensors')
+        sensors.push({
+            index: d[o],
+            cls: d[o + 1],
+            modelId: dv.getUint16(o + 2, true),
+            settings: d[o + 4],
+            procedures: d[o + 5],
+            metrics: d[o + 6],
+            name,
+        })
+        o += SENSOR_REC_LEN + name.length
+    }
+    return { total: d[1], sensors }
+}
+
+/** One setting from GET_SETTING, as the device describes it. `value` is the
+ *  one in force, `dflt` what a reset goes back to (the board's default).
+ *  INT carries min / max / step; ENUM its option codes, which of them
+ *  (bit i = options[i]) need `procedure`'s stored result first. */
+export interface SensorSettingRecord {
+    id: number
+    type: number
+    flags: number
+    unit: number
+    value: number
+    dflt: number
+    min?: number
+    max?: number
+    step?: number
+    options?: number[]
+    gatedMask?: number
+    procedure?: number
+    name: string
+}
+
+const SETTING_HDR_LEN = 13
+const SETTING_INT_LEN = 12
+
+/** GET_SETTING reply: u8 ver | u8 id | u8 type | u8 flags | u8 unit | i32
+ *  value | i32 default, then INT: i32 min | i32 max | i32 step; ENUM: u8 n |
+ *  n × u8 code | u8 gated_mask | u8 procedure; then u8 name_len | name. */
+export function parseSensorSetting(d: Uint8Array): SensorSettingRecord {
+    sensorReplyVersion(d, SETTING_HDR_LEN, 'sensor setting')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const rec: SensorSettingRecord = {
+        id: d[1],
+        type: d[2],
+        flags: d[3],
+        unit: d[4],
+        value: dv.getInt32(5, true),
+        dflt: dv.getInt32(9, true),
+        name: '',
+    }
+    let o = SETTING_HDR_LEN
+    if (rec.type === SensorTypeCode.INT) {
+        if (d.length < o + SETTING_INT_LEN)
+            throw new Error('sensor setting reply too short')
+        rec.min = dv.getInt32(o, true)
+        rec.max = dv.getInt32(o + 4, true)
+        rec.step = dv.getInt32(o + 8, true)
+        o += SETTING_INT_LEN
+    } else if (rec.type === SensorTypeCode.ENUM) {
+        const n = d[o] ?? 0
+        if (d.length < o + 3 + n) throw new Error('sensor setting reply too short')
+        rec.options = Array.from(d.subarray(o + 1, o + 1 + n))
+        rec.gatedMask = d[o + 1 + n]
+        rec.procedure = d[o + 2 + n]
+        o += 3 + n
+    }
+    rec.name = sensorName(d, o, 'sensor setting')
+    return rec
+}
+
+/** One procedure from GET_PROCEDURE. */
+export interface SensorProcedureRecord {
+    id: number
+    phases: number
+    flags: number
+    name: string
+}
+
+/** GET_PROCEDURE reply: u8 ver | u8 id | u8 phases | u8 flags | u8 name_len |
+ *  name. */
+export function parseSensorProcedure(d: Uint8Array): SensorProcedureRecord {
+    sensorReplyVersion(d, 4, 'sensor procedure')
+    return {
+        id: d[1],
+        phases: d[2],
+        flags: d[3],
+        name: sensorName(d, 4, 'sensor procedure'),
+    }
+}
+
+/** A procedure's progress: SensorState, the phase (1.. while running),
+ *  progress / total of a phase that counts (0 / 0 when it does not), and
+ *  SensorResult once DONE or FAILED. */
+export interface SensorStatusRecord {
+    state: number
+    phase: number
+    progress: number
+    total: number
+    result: number
+}
+
+/** RUN_PROCEDURE / GET_PROCEDURE_STATUS reply: u8 ver | u8 state | u8 phase |
+ *  u16 progress | u16 total | u8 result. */
+export function parseSensorStatus(d: Uint8Array): SensorStatusRecord {
+    sensorReplyVersion(d, 8, 'sensor status')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    return {
+        state: d[1],
+        phase: d[2],
+        progress: dv.getUint16(3, true),
+        total: dv.getUint16(5, true),
+        result: d[7],
+    }
+}
+
+/** One live reading and the most it reads (for a meter). */
+export interface SensorMetricRecord {
+    id: number
+    value: number
+    max: number
+}
+
+const METRIC_REC_LEN = 9
+
+/** GET_METRICS reply: u8 ver | u8 n | n × {u8 id | i32 value | i32 max}. */
+export function parseSensorMetrics(d: Uint8Array): SensorMetricRecord[] {
+    sensorReplyVersion(d, 2, 'sensor metrics')
+    const n = d[1]
+    if (d.length < 2 + n * METRIC_REC_LEN)
+        throw new Error('sensor metrics reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    return Array.from({ length: n }, (_, i) => {
+        const o = 2 + i * METRIC_REC_LEN
+        return {
+            id: d[o],
+            value: dv.getInt32(o + 1, true),
+            max: dv.getInt32(o + 5, true),
+        }
+    })
+}
+
+/** SET_SETTING reply: i32 applied (no version byte). */
+export function parseSensorApplied(d: Uint8Array): number {
+    if (d.length < 4) throw new Error('sensor set reply too short')
+    return new DataView(d.buffer, d.byteOffset, d.byteLength).getInt32(0, true)
+}
+
+/** SET_SETTING arg: u8 sensor | u8 id | i32 value. */
+export function buildSensorSetArg(
+    sensor: number,
+    id: number,
+    value: number,
+): Uint8Array {
+    const out = new Uint8Array(6)
+    out[0] = sensor
+    out[1] = id
+    new DataView(out.buffer).setInt32(2, value, true)
+    return out
 }
 
 /** Standard HID report-rate steps (Hz), ascending — mirrors the firmware's

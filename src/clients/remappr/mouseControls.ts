@@ -7,10 +7,13 @@
 //   input-layout plan §3); button 3 (Middle) is the wheel click;
 // - the sensor resolution: up to five DPI stages the DPI buttons step through
 //   (TBL_MOUSE v3), or one (`cpi`);
-// - the report rate, only when the firmware answers GET_RATE_LIMITS.
+// - the report rate, only when the firmware answers GET_RATE_LIMITS;
+// - the sensor's own settings (lift-off, angle snap, …), exactly the ones its
+//   sensor describes (SENSOR namespace), in the document's `sensor` section
+//   (TBL_SENSOR).
 // Where the controls sit comes from the mouse itself (GET_INPUT_LAYOUT) when
 // its firmware reports it; otherwise the layout is the generic mouse layout.
-import type { ConfigDevice } from '../../config/device'
+import type { ConfigDevice, ConfigDeviceSensor } from '../../config/device'
 import type { ConfigMouse, MouseButtonAction } from '../../config/types'
 import { MOUSE_BUTTON_NAMES } from '../../config/deviceFields'
 import { defaultLayout } from '../../devices/defaultLayout'
@@ -22,6 +25,9 @@ import type {
     DeviceBindings,
     DeviceModel,
     SensorBinding,
+    SensorInfo,
+    SensorSettingValue,
+    SensorSpec,
     WheelBinding,
 } from '../../devices/types'
 import {
@@ -37,6 +43,7 @@ import {
     type MotionConfig,
     type RateLimits,
 } from './protocol'
+import { sensorWireValue } from './sensorRegistry'
 
 /** Control id → HID button index (bit of the button report). */
 export const BUTTON_INDEX: Readonly<Record<string, number>> = {
@@ -167,16 +174,42 @@ export function mouseModel(
     })
 }
 
-/** What the mouse can be set to: report-as-button actions, DPI actions and
- *  the CPI range. `mouse` is the document, for the DPI values it binds. */
+/** The sensor that moves the pointer: the first of class pointer, else the
+ *  first the device has. */
+export function pointerSensor(
+    sensors: readonly SensorInfo[] | null | undefined,
+): SensorInfo | null {
+    return sensors?.find((s) => s.cls === 'pointer') ?? sensors?.[0] ?? null
+}
+
+/** What the sensor describes, for the catalog: its own settings (the DPI and
+ *  rate it takes from the mouse are not among them), procedures, readings. */
+function sensorSpecParts(
+    sensor: SensorInfo | null | undefined,
+): Pick<SensorSpec, 'settings' | 'procedures' | 'metrics'> {
+    const settings = (sensor?.settings ?? [])
+        .filter((s) => !s.personality)
+        .map(({ value: _value, personality: _p, ...spec }) => spec)
+    return {
+        settings,
+        procedures: sensor?.procedures ?? [],
+        metrics: sensor?.metrics ?? [],
+    }
+}
+
+/** What the mouse can be set to: report-as-button actions, DPI actions, the
+ *  CPI range and what its sensor describes. `mouse` is the document, for the
+ *  DPI values it binds. */
 export function mouseCatalog(
     motion: MotionConfig | null,
     rates: RateLimits | null,
     mouse?: ConfigMouse,
+    sensor?: SensorInfo | null,
 ): ControlsCatalog {
     const poll = rates && rates.supported.length > 0
     const dpiMin = motion?.dpiMin || 100
     const dpiMax = motion?.dpiMax || 26000
+    const parts = sensorSpecParts(sensor)
     return {
         groups: [
             { id: 'mouse', label: 'Mouse buttons', category: 'mouse' },
@@ -195,7 +228,11 @@ export function mouseCatalog(
         fields: {
             button: ['a'],
             wheel: ['click'],
-            sensor: poll ? ['stages', 'poll'] : ['stages'],
+            sensor: [
+                'stages',
+                ...(poll ? (['poll'] as const) : []),
+                ...(parts.settings.length ? (['settings'] as const) : []),
+            ],
         },
         sensor: {
             dpiMin,
@@ -203,9 +240,26 @@ export function mouseCatalog(
             dpiStep: motion?.dpiStep || 100,
             maxStages: MAX_DPI_STAGES,
             pollRates: poll ? rates.supported : [],
-            lods: [],
+            ...parts,
         },
     }
+}
+
+/** The document's sensor values as a binding's: an option name becomes its
+ *  code; one the registry cannot resolve is left out (the document keeps it). */
+export function sensorBindingSettings(
+    sensor: ConfigDeviceSensor | undefined,
+): Record<string, SensorSettingValue> {
+    const out: Record<string, SensorSettingValue> = {}
+    for (const [key, v] of Object.entries(sensor?.settings ?? {})) {
+        if (typeof v !== 'string') {
+            out[key] = v
+            continue
+        }
+        const code = sensorWireValue(key, v)
+        if (code !== undefined) out[key] = code
+    }
+    return out
 }
 
 /** What physical button `i` reports as (identity when the map is unset). */
@@ -225,11 +279,12 @@ function buttonAction(
     return dev ? devId(dev) : actionOf(mappedTo(mouse, i))
 }
 
-/** The document's mouse section as control bindings. */
+/** The document's mouse and sensor sections as control bindings. */
 export function mouseBindings(
     mouse: ConfigMouse | undefined,
     motion: MotionConfig | null,
     rates: RateLimits | null,
+    sensor?: ConfigDeviceSensor,
 ): DeviceBindings {
     const out: Record<string, ControlBinding> = {}
     for (const [id, i] of Object.entries(BUTTON_INDEX)) {
@@ -250,9 +305,7 @@ export function mouseBindings(
         stages: mouse?.dpiStages ?? [mouse?.cpi ?? motion?.dpi ?? 800],
         active: mouse?.dpiStages ? (mouse.dpiStage ?? 0) : 0,
         poll: rates?.currentHz ?? 1000,
-        lod: '',
-        snap: false,
-        motionSync: false,
+        settings: sensorBindingSettings(sensor),
     } satisfies SensorBinding
     return out
 }
@@ -303,23 +356,54 @@ function sensorFields(b: SensorBinding): Partial<ConfigMouse> {
     }
 }
 
+/** The binding's sensor values as the document's section: `index` names the
+ *  sensor (left out for the first); no values, no section. A setting the
+ *  binding does not name but the document does (one the device does not
+ *  describe, so the editor never showed it) is kept. */
+function sensorSection(
+    prev: ConfigDeviceSensor | undefined,
+    settings: SensorBinding['settings'],
+    index: number,
+    shown: ReadonlySet<string> | undefined,
+): ConfigDeviceSensor | undefined {
+    const kept = Object.entries(prev?.settings ?? {}).filter(
+        ([k]) => shown !== undefined && !shown.has(k),
+    )
+    const all = { ...Object.fromEntries(kept), ...settings }
+    if (Object.keys(all).length === 0) return undefined
+    return index ? { index, settings: all } : { settings: all }
+}
+
 /** `doc` with control `id` bound to `binding`. Unknown controls are ignored.
  *  A DPI action leaves the button's map entry at the identity, so removing
- *  the action later gives the button back. */
+ *  the action later gives the button back. `sensor` is the sensor the
+ *  binding's settings belong to (its index and the settings it describes). */
 export function applyMouseBinding(
     doc: ConfigDevice,
     id: string,
     binding: ControlBinding,
+    sensor?: SensorInfo | null,
 ): ConfigDevice {
     const withMouse = (mouse: ConfigMouse): ConfigDevice => ({
         ...doc,
         mouse: compact(mouse),
     })
     if (id === 'sensor') {
-        return withMouse({
+        const b = binding as SensorBinding
+        const shown = sensor
+            ? new Set(sensor.settings.map((s) => s.name))
+            : undefined
+        const { sensor: _prev, ...rest } = withMouse({
             ...doc.mouse,
-            ...sensorFields(binding as SensorBinding),
+            ...sensorFields(b),
         })
+        const section = sensorSection(
+            doc.sensor,
+            b.settings ?? {},
+            sensor?.index ?? doc.sensor?.index ?? 0,
+            shown,
+        )
+        return section ? { ...rest, sensor: section } : rest
     }
     const i = BUTTON_INDEX[id]
     if (i === undefined) return doc

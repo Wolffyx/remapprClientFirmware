@@ -24,7 +24,18 @@ const CATALOG: ControlsCatalog = {
         dpiStep: 100,
         maxStages: 3,
         pollRates: [125, 500, 1000],
-        lods: [{ id: 'low', label: 'Low' }],
+        settings: [
+            {
+                name: 'angleSnap',
+                label: 'Angle snapping',
+                type: 'bool',
+                unit: '',
+                advanced: false,
+                default: true,
+            },
+        ],
+        procedures: [],
+        metrics: [],
     },
 }
 
@@ -172,7 +183,8 @@ describe('defaultBinding', () => {
         expect(s.stages).toEqual([400, 800, 1600])
         expect(s.active).toBe(1)
         expect(s.poll).toBe(1000)
-        expect(s.lod).toBe('low')
+        // Sensor settings start at the device's defaults: none set.
+        expect(s.settings).toEqual({})
     })
 
     it('falls back to the kind default for an unbound control', () => {

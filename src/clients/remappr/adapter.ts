@@ -21,6 +21,7 @@ import { deviceKind } from './deviceKind'
 import { discover, type DiscoveryResult } from './discovery'
 import { buildMouseMotionApi } from './mouse'
 import { buildJoystickApi, servesJoystick } from './joystick'
+import { buildSensorApi, servesSensor } from './sensor'
 import { readInputLayout } from './inputLayout'
 import { warmRemapprIdentity } from './identity'
 import { buildClusterApi } from './clusterView'
@@ -181,6 +182,9 @@ async function buildMouseService(
 ): Promise<RemapprMouseService> {
     const { discovery, deviceInfo } = probed
     const layout = await readInputLayout(rpc, discovery.personality?.namespaces)
+    const sensor = servesSensor(discovery)
+        ? buildSensorApi(rpc, { writable: true })
+        : undefined
     return new RemapprMouseService({
         deviceInfo,
         limits: discovery.limits,
@@ -189,11 +193,13 @@ async function buildMouseService(
                   personality: 'mouse',
                   name: deviceInfo.name,
                   writable: true,
+                  ...(sensor ? { sensors: () => sensor.getSensors() } : {}),
               })
             : undefined,
         motion: servesMouse(discovery)
             ? buildMouseMotionApi(rpc, { writable: true })
             : undefined,
+        sensor,
         rate: {
             get: () => getRateLimits(rpc),
             set: (hz) => setReportRate(rpc, hz),

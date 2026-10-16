@@ -190,16 +190,20 @@ export interface HatBinding {
     readonly ways: 4 | 8
 }
 
+/** A sensor setting's value: a BOOL as a boolean, an INT as its number, an
+ *  ENUM as its option's value. */
+export type SensorSettingValue = number | boolean
+
 export interface SensorBinding {
     /** DPI per stage; the DPI button cycles them. */
     readonly stages: readonly number[]
     readonly active: number
     /** Polling rate, Hz. */
     readonly poll: number
-    /** A lift-off option id from the catalog's sensor spec. */
-    readonly lod: string
-    readonly snap: boolean
-    readonly motionSync: boolean
+    /** The sensor's own settings the user set, keyed by
+     *  {@link SensorSettingSpec.name}. One left out is at its default; dropping
+     *  a key resets it. */
+    readonly settings: Readonly<Record<string, SensorSettingValue>>
 }
 
 export interface EncoderBinding {
@@ -279,13 +283,101 @@ export type ControlFieldSupport = {
     readonly [K in ControlKind]?: readonly (keyof BindingByKind[K])[]
 }
 
+// ---------------------------------------------------------------------------
+// Sensor descriptor — what THIS sensor has, as the device describes it
+// ---------------------------------------------------------------------------
+
+export type SensorSettingType = 'bool' | 'int' | 'enum'
+
+export type SensorUnit = '' | 'ms' | 'us' | 'deg' | 'cpi' | '%'
+
+/** One choice of an ENUM sensor setting. */
+export interface SensorOption {
+    readonly value: number
+    readonly label: string
+    /** The procedure (by name) whose stored result this option needs first,
+     *  e.g. a calibrated lift-off distance needs a lift calibration. */
+    readonly needs?: string
+}
+
+/** One setting a sensor has. Listed only when the sensor has it: the
+ *  device's description IS the capability. */
+export interface SensorSettingSpec {
+    /** Stable key that bindings and documents use: the registry name
+     *  (`liftCutoff`), or the id in hex (`0x16`) for one this client has no
+     *  name for. */
+    readonly name: string
+    readonly label: string
+    readonly type: SensorSettingType
+    readonly unit: SensorUnit
+    /** INT: the range and its step (values are min + k × step). */
+    readonly min?: number
+    readonly max?: number
+    readonly step?: number
+    /** ENUM: the options, in the device's order. */
+    readonly options?: readonly SensorOption[]
+    /** Folded away in the inspector. */
+    readonly advanced: boolean
+    /** What a reset goes back to: the device's default for the product. */
+    readonly default: SensorSettingValue
+    readonly help?: string
+}
+
+/** A guided multi-step job on the sensor, such as a lift calibration. */
+export interface SensorProcedureSpec {
+    readonly name: string
+    readonly label: string
+    /** One prompt per phase, in order. */
+    readonly phases: readonly string[]
+    /** A finished run leaves a result the unit keeps (never in a config). */
+    readonly hasResult: boolean
+}
+
+/** A live reading, for a meter. */
+export interface SensorMetricSpec {
+    readonly name: string
+    readonly label: string
+    /** The most it reads. */
+    readonly max: number
+}
+
+export type SensorClass = 'pointer' | 'touch' | 'imu' | 'analog' | 'other'
+
+/** A setting as the device holds it now. */
+export interface SensorSettingInfo extends SensorSettingSpec {
+    /** The value in force: a live change, the config's, or the default. */
+    readonly value: SensorSettingValue
+    /** Driven by the personality's own feature (a mouse's DPI or report
+     *  rate), not set as a sensor setting. */
+    readonly personality: boolean
+}
+
+/** One sensor of a device and everything it describes. */
+export interface SensorInfo {
+    /** Its index among the device's sensors (the wire and the config name it
+     *  by this). */
+    readonly index: number
+    readonly cls: SensorClass
+    /** The part, e.g. "PAW3395". */
+    readonly model: string
+    readonly settings: readonly SensorSettingInfo[]
+    readonly procedures: readonly SensorProcedureSpec[]
+    readonly metrics: readonly SensorMetricSpec[]
+}
+
 export interface SensorSpec {
     readonly dpiMin: number
     readonly dpiMax: number
     readonly dpiStep: number
     readonly maxStages: number
     readonly pollRates: readonly number[]
-    readonly lods: readonly ControlOption[]
+    /** The sensor's own settings (not the DPI or the rate), as it describes
+     *  them; empty when it describes none. */
+    readonly settings: readonly SensorSettingSpec[]
+    /** Procedures and readings, for the device settings (they belong to the
+     *  unit, not to a binding). */
+    readonly procedures: readonly SensorProcedureSpec[]
+    readonly metrics: readonly SensorMetricSpec[]
 }
 
 export interface ControlsCatalog {

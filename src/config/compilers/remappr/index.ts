@@ -73,6 +73,7 @@ import {
 import { encodeAutocorrectDictionary } from './autocorrect'
 import { radioRecord } from './radio'
 import { mouseRecord } from './mouse'
+import { sensorEntries } from './sensor'
 import type { CanonicalKeyId } from '../../../catalog/types'
 import type {
     CanonHoldTapDef,
@@ -1360,6 +1361,19 @@ function encodeBlob(
     // mouse.ts). Old firmware skips the unknown table.
     const mouseRec = config.node?.mouse ? mouseRecord(config.node.mouse) : undefined
     if (mouseRec) builder.mouseTable(mouseRec)
+    // TBL_SENSOR (sensor-settings plan §4b): the product's sensor defaults from
+    // node.sensor.defaults, for the first sensor, so firmware not built from
+    // this JSON runs them too.
+    const sensor = sensorEntries(config.node?.sensor?.defaults, 0)
+    for (const skip of sensor.skipped) {
+        diag.warn(`sensor default "${skip.key}" left out: ${skip.reason}`, [
+            'node',
+            'sensor',
+            'defaults',
+            skip.key,
+        ])
+    }
+    if (sensor.entries.length > 0) builder.sensorTable(sensor.entries)
     // TBL_RGB (§4c): per-key static colors from keyboard.lighting.perKey, emitted
     // as a flat (non-per-layer) RGB888 map over every physical position; unset
     // positions stay black (0,0,0). The firmware LED sink renders it locally.

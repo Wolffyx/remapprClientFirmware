@@ -30,7 +30,7 @@ import type {
     ConfigKeymap,
     DiodeDirection,
 } from '../../types'
-import { emitEncoders, emitRgb } from './boardHardware'
+import { emitEncoders, emitRgb, emitSensor } from './boardHardware'
 
 /** HID Usage Page 0x07 (Keyboard/Keypad) — the only page a `&key` action emits. */
 const HID_PAGE_KEYBOARD = 7
@@ -263,6 +263,7 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     // Optional peripheral overlay nodes (empty fragments when unconfigured).
     const rgb = emitRgb(config, ctrl.board, diag)
     const enc = emitEncoders(config, ctrl.board, diag)
+    const sensor = emitSensor(config, ctrl.board, diag)
 
     const overlay: string[] = [
         `/*`,
@@ -285,6 +286,7 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         `#include <remappr/behavior-tokens.dtsi>`,
         ...rgb.includes,
         ...enc.includes,
+        ...sensor.includes,
         ``,
         `/ {`,
         `\tkbd_matrix: kbd-matrix {`,
@@ -328,6 +330,7 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         `};`,
         ...(rgb.nodes.length ? ['', ...rgb.nodes] : []),
         ...(enc.nodes.length ? ['', ...enc.nodes] : []),
+        ...(sensor.nodes.length ? ['', ...sensor.nodes] : []),
         ``,
     ]
 
