@@ -183,10 +183,11 @@ export function pointerSensor(
 }
 
 /** What the sensor describes, for the catalog: its own settings (the DPI and
- *  rate it takes from the mouse are not among them), procedures, readings. */
+ *  rate it takes from the mouse are not among them), procedures, readings,
+ *  and its index. */
 function sensorSpecParts(
     sensor: SensorInfo | null | undefined,
-): Pick<SensorSpec, 'settings' | 'procedures' | 'metrics'> {
+): Pick<SensorSpec, 'settings' | 'procedures' | 'metrics' | 'index'> {
     const settings = (sensor?.settings ?? [])
         .filter((s) => !s.personality)
         .map(({ value: _value, personality: _p, ...spec }) => spec)
@@ -194,6 +195,7 @@ function sensorSpecParts(
         settings,
         procedures: sensor?.procedures ?? [],
         metrics: sensor?.metrics ?? [],
+        ...(sensor ? { index: sensor.index } : {}),
     }
 }
 

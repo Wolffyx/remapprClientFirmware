@@ -448,10 +448,14 @@ describe('RemapprMouseService sensor settings', () => {
             'liftCalibration',
         ])
         expect(c.sensor?.metrics).toHaveLength(1)
+        expect(c.sensor?.index).toBe(0)
+        const second = mouseCatalog(MOTION, null, undefined, { ...PAW, index: 2 })
+        expect(second.sensor?.index).toBe(2)
 
         const bare = await make().svc.controls.getCatalog()
         expect(bare.fields.sensor).not.toContain('settings')
         expect(bare.sensor?.settings).toEqual([])
+        expect(bare.sensor).not.toHaveProperty('index')
     })
 
     it('previews a setting live and saves it in the sensor section', async () => {

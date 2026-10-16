@@ -1,6 +1,6 @@
 // pattern-check: skip — unit tests for the demo sensor.
 import { describe, expect, it } from 'vitest'
-import { DEMO_SENSOR } from './catalog'
+import { DEMO_CATALOG, DEMO_SENSOR } from './catalog'
 import { DemoSensor } from './demoSensor'
 import { MockDeviceService } from './MockDeviceService'
 import { HALO_M2 } from './haloM2'
@@ -25,6 +25,7 @@ describe('DemoSensor', () => {
             DEMO_SENSOR.settings.map((x) => x.name),
         )
         expect(s!.settings[0]).toMatchObject({ value: 10, personality: false })
+        expect(s!.index).toBe(DEMO_CATALOG.sensor!.index)
     })
 
     it('snaps an INT and refuses a gated option before its procedure', async () => {

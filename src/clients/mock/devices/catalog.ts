@@ -328,6 +328,7 @@ export const DEMO_CATALOG: ControlsCatalog = {
         maxStages: 5,
         pollRates: [125, 500, 1000, 4000, 8000],
         ...DEMO_SENSOR,
+        index: 0, // the one sensor DemoSensor reports
     },
 }
 

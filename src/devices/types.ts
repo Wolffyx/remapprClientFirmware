@@ -378,6 +378,10 @@ export interface SensorSpec {
      *  unit, not to a binding). */
     readonly procedures: readonly SensorProcedureSpec[]
     readonly metrics: readonly SensorMetricSpec[]
+    /** Which of the device's sensors this describes (the index its SENSOR
+     *  verbs take, e.g. to ask whether a procedure's result is stored);
+     *  absent when the catalog was not read from one. */
+    readonly index?: number
 }
 
 export interface ControlsCatalog {
