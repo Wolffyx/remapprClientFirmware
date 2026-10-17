@@ -64,10 +64,11 @@ editor, every other personality the device editor.
 | Joystick | Settings document | config blob: TBL_JOYSTICK, TBL_ACTION_BINDING (§5) | ✅ |
 | Joystick | Live state, calibration, live axis map / deadzone | JOYSTICK ns (§4.4) — provisional | ✅ |
 | Dongle | Roster, pairing, NKRO, link stats | DONGLE ns (§4.5) | ✅ |
-| Node behind a dongle | Read-only view (keyboard, mouse, joystick) | relayed universal reads (§4.5) | ✅ reads · writes pending |
+| Mouse / joystick behind a dongle | Everything above, through the relay | relayed universal frames (§4.5) | ✅ |
+| Keyboard behind a dongle | Read-only view | relayed universal reads (§4.5) | ✅ reads · writes pending |
 
 Not in the client: OTA, live combos / macros / tap-dance as RPC (they ship in the
-config blob), editing through the dongle (§10).
+config blob), editing a keyboard through the dongle (§10).
 
 ---
 
@@ -433,14 +434,31 @@ u16 short_id | u8 personality | u8 pipe | u8 flags (bit0 online, bit1 bonded, bi
 > kind. Dongles from before the joystick could pair wrote the radio type here,
 > which agrees for keyboard and mouse, the only nodes they paired.
 
-**Relayed reads.** A node is read by addressing universal COMMON / INPUT /
-MOUSE / JOYSTICK / SENSOR reads to its short-id (`target_node`). Reads retry up to 4
-times with a 500 ms timeout each. `open(id)` runs discovery against the node
-and returns a **read-only** view by its kind: a mouse view, a joystick view, or
-a keyboard view (keymap decoded from the node's active blob). Views share the
-dongle's RPC and never close it. Writing through the relay (sealed relay
-session, `establishNodeSession`) is built but not yet proven on hardware, so
-views refuse every change.
+**Relayed calls.** A node is reached by addressing universal COMMON / INPUT /
+MOUSE / JOYSTICK / SENSOR frames to its short-id (`target_node`). `open(id)`
+runs discovery against the node and returns a view by its kind. Views share the
+dongle's RPC and never close it.
+
+- **Mouse, joystick.** The same service as on the device's own transport
+  (`deviceServices.ts`), every call addressed to the node. These nodes hold no
+  §19 session, so their changes go plaintext, as over USB.
+- **Keyboard.** A **read-only** view (keymap decoded from the node's active
+  blob). Its changes need the sealed relay session (`establishNodeSession`),
+  built but not yet proven on hardware.
+
+The radio can lose a reply after the node acted on it; the dongle then answers
+`ERR_STATE` after 1 s (§10). What the client does depends on whether the call
+is safe to send twice:
+
+| Call | Through the dongle |
+|---|---|
+| A read; a SET of an absolute value (`SET_DPI`, `SET_REPORT_RATE`, SENSOR `SET_SETTING`, JOYSTICK `SET_AXIS_MAP` / `SET_DEADZONE`) | retried up to 4 times on `ERR_STATE` or a 500 ms timeout (`repeatable`) |
+| A procedure step (SENSOR `RUN_PROCEDURE`, JOYSTICK `CALIBRATE`) | sent once (`once`); after a loss, read the status |
+| A config push | each verb sent once; on `ERR_STATE` or a timeout before COMMIT the push starts over from `WRITE_CONFIG_BEGIN` (3 tries); a COMMIT answered `ERR_STATE` counts when `GET_DEVICE_INFO` then shows the pushed version |
+
+A late reply to an abandoned request is dropped by its request id. The node's
+radio session drops a resent frame it already took (its replay counter), so a
+chunk is never staged twice.
 
 ### 4.6 Sensor — SENSOR namespace (provisional)
 
@@ -711,7 +729,8 @@ and node INPUT events come back through it (§4.5).
 | `mouse.ts`, `reportRate.ts`, `mouseControls.ts`, `mouseService.ts` | MOUSE verbs, report rate, catalog, `RemapprMouseService` |
 | `joystick.ts`, `joystickControls.ts`, `joystickService.ts` | JOYSTICK verbs, catalog, `RemapprJoystickService` |
 | `sensor.ts`, `sensorRegistry.ts` | SENSOR verbs and `buildSensorApi`; the registry mirror (names, labels, option names, devicetree macros) |
-| `nodes.ts`, `nodeView.ts` | DONGLE verbs; `NodesApi` (roster, read-only node views) |
+| `nodes.ts`, `nodeView.ts` | DONGLE verbs; `NodesApi` (roster, node views) |
+| `deviceServices.ts` | Builds the mouse and joystick services, for the device itself or a node behind the dongle |
 | `clusterView.ts`, `unicode.ts`, `unicodeView.ts`, `dynamicBridge.ts` | Cluster diag, unicode mode, dynamic entries |
 
 ### 7.2 Connect
@@ -797,8 +816,10 @@ catalog actions `dev:<action>[:dpi]` for DPI actions. Joystick: `btn:<pos>`,
 
 ## 10. Firmware and client gaps
 
-1. **Editing through the dongle** — the sealed relay session exists in the
-   client; it needs hardware proof before node views become writable.
+1. **Editing a keyboard through the dongle** — mice and joysticks are edited
+   through the dongle (proven on hardware with a mouse). A keyboard needs the
+   sealed relay session, which exists in the client but has no hardware proof
+   yet.
 2. **JOYSTICK namespace** — provisional (`ns_version` 0). It has run on
    hardware, over USB and through a dongle; the layouts are not frozen yet.
 3. **Sealing** — mutating verbs go plaintext while control auth is
