@@ -144,6 +144,20 @@ export function modelFromLayout(doc: DeviceLayoutDoc): DeviceModel {
     }
 }
 
+let cachedJsonSchema: Record<string, unknown> | null = null
+
+/** The layout document's JSON Schema (Draft 2020-12), for an editor's live
+ *  validation and completion. Generated from DeviceLayoutSchema the same way
+ *  as config/jsonSchema.ts: what a user writes (`io: 'input'`), and anything
+ *  zod cannot express in JSON Schema (the duplicate-id check) left open. */
+export function deviceLayoutJsonSchema(): Record<string, unknown> {
+    cachedJsonSchema ??= z.toJSONSchema(DeviceLayoutSchema, {
+        unrepresentable: 'any',
+        io: 'input',
+    }) as Record<string, unknown>
+    return cachedJsonSchema
+}
+
 export type LayoutParse =
     | { ok: true; model: DeviceModel }
     | { ok: false; error: string }

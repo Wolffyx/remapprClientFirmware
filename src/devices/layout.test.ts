@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defaultLayout } from './defaultLayout'
 import { createLayoutOverride } from './layoutOverride'
 import {
+    deviceLayoutJsonSchema,
     layoutFits,
     layoutFromModel,
     modelFromLayout,
@@ -62,6 +63,23 @@ describe('device layout document', () => {
             ok: false,
             error: expect.stringMatching(/^controls\.0\.w: /),
         })
+    })
+})
+
+describe('deviceLayoutJsonSchema', () => {
+    it('describes the document a layout editor shows', () => {
+        const schema = deviceLayoutJsonSchema() as {
+            type: string
+            required: string[]
+            properties: Record<string, { const?: unknown; enum?: unknown[] }>
+        }
+        expect(schema.type).toBe('object')
+        expect(schema.required).toEqual(
+            expect.arrayContaining(['kind', 'form', 'controls']),
+        )
+        expect(schema.properties.kind?.const).toBe('remappr.device-layout')
+        expect(schema.properties.form?.enum).toContain('gamepad')
+        expect(deviceLayoutJsonSchema()).toBe(schema) // generated once
     })
 })
 

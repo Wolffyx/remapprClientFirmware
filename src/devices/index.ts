@@ -27,6 +27,7 @@ export {
     CONTROL_SHAPES,
     DEVICE_FORMS,
     DeviceLayoutSchema,
+    deviceLayoutJsonSchema,
     layoutFits,
     layoutFromModel,
     modelFromLayout,
