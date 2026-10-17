@@ -49,12 +49,12 @@ export interface MouseServiceDeps {
     device?: DeviceConfigApi
     /** Live MOUSE controls; absent when the firmware does not serve them. */
     motion?: MouseMotionApi
-    /** Report-rate verbs (direct mouse only); they may answer ERR_CMD. */
+    /** Report-rate verbs; they may answer ERR_CMD. */
     rate?: { get(): Promise<RateLimits>; set(hz: number): Promise<number> }
     /** The sensor's settings, procedures and readings; absent when the
      *  firmware does not serve the SENSOR namespace. */
     sensor?: SensorApi
-    /** False for a mouse seen through the dongle. */
+    /** False for a read-only view. */
     writable: boolean
     /** GET_PERSONALITY_MAP hw_caps (0 / absent = not reported). */
     hwCaps?: number

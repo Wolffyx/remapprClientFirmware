@@ -168,6 +168,36 @@ describe('joystick wire (JOYSTICK namespace)', () => {
         ).rejects.toThrow(/ERR_STATE/)
     })
 
+    it('relays reads and changes to a node behind the dongle', async () => {
+        const seen: [number, { targetNode?: number; retries?: number }?][] = []
+        const rpc = {
+            callUniversalPlain: async (
+                _ns: number,
+                verb: number,
+                _arg?: Uint8Array,
+                opts?: { targetNode?: number; retries?: number },
+            ): Promise<UniversalReply> => {
+                seen.push([verb, opts])
+                const data = verb === JoystickVerb.GET_AXIS_STATE ? STATE : SUGGEST
+                return { status: Status.OK, data }
+            },
+        } as unknown as RemapprRpc
+        const api = buildJoystickApi(rpc, { targetNode: 3, writable: true })
+        await api.getState()
+        await api.calibrate('finish')
+        await api.setAxisMap(0, 1, { invert: false })
+        await api.setDeadzone(0, 4, 6)
+        expect(seen.every(([, o]) => o?.targetNode === 3)).toBe(true)
+        // A calibration step must not run twice; the absolute SETs may.
+        const retries = seen.map(([verb, o]) => [verb, (o?.retries ?? 0) > 0])
+        expect(retries).toEqual([
+            [JoystickVerb.GET_AXIS_STATE, true],
+            [JoystickVerb.CALIBRATE, false],
+            [JoystickVerb.SET_AXIS_MAP, true],
+            [JoystickVerb.SET_DEADZONE, true],
+        ])
+    })
+
     it('keeps the reads and rejects changes when read-only', async () => {
         const rpc = fakeRpc(async () => ({ status: Status.OK, data: STATE }))
         const api = buildJoystickApi(rpc, { writable: false })

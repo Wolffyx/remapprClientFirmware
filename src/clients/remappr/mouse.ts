@@ -17,7 +17,7 @@ import {
     statusName,
     type MotionConfig,
 } from './protocol'
-import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
+import { repeatable, type RemapprRpc } from './rpc'
 import type { MouseMotionApi } from '../../service'
 
 export type { MotionConfig }
@@ -34,7 +34,7 @@ export async function getMotionConfig(
         Namespace.MOUSE,
         MouseVerb.GET_MOTION_CONFIG,
         undefined,
-        targetNode ? { targetNode, retries: RELAY_READ_RETRIES } : undefined,
+        repeatable(targetNode),
     )
     if (reply.status !== Status.OK)
         throw new Error(`GET_MOTION_CONFIG → ${statusName(reply.status)}`)
@@ -52,7 +52,7 @@ export async function setDpi(
         Namespace.MOUSE,
         MouseVerb.SET_DPI,
         buildDpiArg(dpi),
-        targetNode ? { targetNode } : undefined,
+        repeatable(targetNode),
     )
     if (reply.status !== Status.OK)
         throw new Error(`SET_DPI → ${statusName(reply.status)}`)
@@ -68,7 +68,7 @@ export async function setAccelProfile(
         Namespace.MOUSE,
         MouseVerb.SET_ACCEL_PROFILE,
         new Uint8Array([profile]),
-        targetNode ? { targetNode } : undefined,
+        repeatable(targetNode),
     )
     if (reply.status !== Status.OK)
         throw new Error(`SET_ACCEL_PROFILE → ${statusName(reply.status)}`)
@@ -84,15 +84,15 @@ export async function setScrollMode(
         Namespace.MOUSE,
         MouseVerb.SET_SCROLL_MODE,
         new Uint8Array([mode]),
-        targetNode ? { targetNode } : undefined,
+        repeatable(targetNode),
     )
     if (reply.status !== Status.OK)
         throw new Error(`SET_SCROLL_MODE → ${statusName(reply.status)}`)
 }
 
 // pattern-check: skip — facade object over the wrappers above, like buildNodesApi
-/** The `service.motion` facade for a mouse. `writable` false (a node reached
- *  through the dongle) keeps the reads and rejects every SET_*. */
+/** The `service.motion` facade for a mouse. `writable` false keeps the reads
+ *  and rejects every SET_*. `targetNode` addresses a node behind the dongle. */
 export function buildMouseMotionApi(
     rpc: RemapprRpc,
     opts: { targetNode?: number; writable: boolean },
@@ -101,8 +101,7 @@ export function buildMouseMotionApi(
     const guard = (): void => {
         if (!opts.writable) {
             throw new Error(
-                'Read-only node view: live mouse changes through the dongle are ' +
-                    'not supported yet. Connect the mouse over USB.',
+                'Read-only view: connect the mouse over USB to change it.',
             )
         }
     }

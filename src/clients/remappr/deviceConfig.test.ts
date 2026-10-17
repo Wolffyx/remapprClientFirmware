@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest'
 import type { ConfigDevice } from '../../config/device'
 import { buildRemapprDeviceBlob } from '../../config/compilers/remappr/device'
 
+import { TransportError } from '../../errors'
+
 import { buildDeviceConfigApi, emptyDeviceConfig } from './deviceConfig'
 import { Cmd, Namespace, Status } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
@@ -25,10 +27,21 @@ interface FakeDevice {
     version: number
 }
 
+/** How the relay loses one call: `reply` = the node acted but its reply never
+ *  came (the dongle answers ERR_STATE), `request` = the node never saw it,
+ *  `timeout` = the node acted and the client timed out first. */
+type Drop = 'reply' | 'request' | 'timeout'
+
 /** A device that stores what it is sent, like the firmware's config store: the
- *  staged bytes become active on COMMIT. `refuse` makes VALIDATE fail. */
+ *  staged bytes become active on COMMIT. `refuse` makes VALIDATE fail; `drop`
+ *  names the calls the relay loses (by verb and how many of it came before). */
 function fakeDevice(
-    opts: { active?: Uint8Array; version?: number; refuse?: boolean } = {},
+    opts: {
+        active?: Uint8Array
+        version?: number
+        refuse?: boolean
+        drop?: (cmd: number, nth: number) => Drop | undefined
+    } = {},
 ): FakeDevice {
     const dev: FakeDevice = {
         rpc: undefined as unknown as RemapprRpc,
@@ -90,9 +103,15 @@ function fakeDevice(
             o: { targetNode?: number; retries?: number } = {},
         ): Promise<UniversalReply> {
             expect(ns).toBe(Namespace.COMMON)
+            const nth = dev.calls.filter((c) => c.cmd === cmd).length
             dev.calls.push({ cmd, arg, targetNode: o.targetNode, retries: o.retries })
+            const drop = opts.drop?.(cmd, nth)
+            const lost = { status: Status.ERR_STATE, data: new Uint8Array() }
+            if (drop === 'request') return lost
             const h = handlers[cmd]
-            return h ? h(arg) : { status: Status.ERR_CMD, data: new Uint8Array() }
+            const reply = h ? h(arg) : { status: Status.ERR_CMD, data: new Uint8Array() }
+            if (drop === 'timeout') throw new TransportError('control response timeout')
+            return drop === 'reply' ? lost : reply
         },
     } as unknown as RemapprRpc
     return dev
@@ -285,7 +304,95 @@ describe('buildDeviceConfigApi.write', () => {
             writable: false,
         })
         expect(api.writable).toBe(false)
-        await expect(api.write(MOUSE_DOC)).rejects.toThrow(/Read-only node view/)
+        await expect(api.write(MOUSE_DOC)).rejects.toThrow(/Read-only/)
         expect(dev.calls).toEqual([])
+    })
+})
+
+describe('buildDeviceConfigApi.write through the dongle', () => {
+    const nodeApi = (dev: FakeDevice) =>
+        buildDeviceConfigApi(dev.rpc, {
+            personality: 'mouse',
+            targetNode: 2,
+            name: 'Mouse',
+            writable: true,
+        })
+    const count = (dev: FakeDevice, cmd: number) =>
+        dev.calls.filter((c) => c.cmd === cmd).length
+
+    it('sends each config verb once, addressed to the node', async () => {
+        const dev = fakeDevice()
+        expect(await nodeApi(dev).write(MOUSE_DOC)).toBe(1)
+        const verbs = dev.calls.filter((c) => c.cmd !== Cmd.GET_DEVICE_INFO)
+        for (const c of verbs) {
+            expect(c.targetNode).toBe(2)
+            expect(c.retries ?? 0).toBe(0)
+        }
+    })
+
+    it('starts over from BEGIN when the link drops a chunk reply', async () => {
+        const dev = fakeDevice({
+            drop: (cmd, nth) =>
+                cmd === Cmd.WRITE_CONFIG_CHUNK && nth === 1 ? 'reply' : undefined,
+        })
+        expect(await nodeApi(dev).write(MOUSE_DOC)).toBe(1)
+        expect(count(dev, Cmd.WRITE_CONFIG_BEGIN)).toBe(2)
+        // The chunk the node took twice did not end up staged twice.
+        expect((await nodeApi(dev).read()).config.mouse).toEqual(MOUSE_DOC.mouse)
+    })
+
+    it('starts over when a reply times out', async () => {
+        const dev = fakeDevice({
+            drop: (cmd, nth) =>
+                cmd === Cmd.VALIDATE_CONFIG && nth === 0 ? 'timeout' : undefined,
+        })
+        expect(await nodeApi(dev).write(MOUSE_DOC)).toBe(1)
+        expect(count(dev, Cmd.WRITE_CONFIG_BEGIN)).toBe(2)
+    })
+
+    it('gives up after three tries', async () => {
+        const dev = fakeDevice({
+            drop: (cmd) => (cmd === Cmd.WRITE_CONFIG_BEGIN ? 'request' : undefined),
+        })
+        await expect(nodeApi(dev).write(MOUSE_DOC)).rejects.toThrow(
+            'WRITE_CONFIG_BEGIN failed: ERR_STATE',
+        )
+        expect(count(dev, Cmd.WRITE_CONFIG_BEGIN)).toBe(3)
+        expect(dev.active).toBeNull()
+    })
+
+    it('counts a COMMIT whose reply was lost when the node shows the version', async () => {
+        const dev = fakeDevice({
+            drop: (cmd) => (cmd === Cmd.COMMIT_CONFIG ? 'reply' : undefined),
+        })
+        expect(await nodeApi(dev).write(MOUSE_DOC)).toBe(1)
+        expect(dev.version).toBe(1)
+        expect(dev.calls.at(-1)?.cmd).toBe(Cmd.GET_DEVICE_INFO)
+    })
+
+    it('rejects a COMMIT the node never saw', async () => {
+        const dev = fakeDevice({
+            drop: (cmd) => (cmd === Cmd.COMMIT_CONFIG ? 'request' : undefined),
+        })
+        await expect(nodeApi(dev).write(MOUSE_DOC)).rejects.toThrow(
+            'COMMIT_CONFIG failed: ERR_STATE',
+        )
+        expect(dev.active).toBeNull()
+    })
+
+    it('does not start over on the device itself', async () => {
+        const dev = fakeDevice({
+            drop: (cmd, nth) =>
+                cmd === Cmd.WRITE_CONFIG_CHUNK && nth === 0 ? 'reply' : undefined,
+        })
+        const api = buildDeviceConfigApi(dev.rpc, {
+            personality: 'mouse',
+            name: 'Mouse',
+            writable: true,
+        })
+        await expect(api.write(MOUSE_DOC)).rejects.toThrow(
+            'WRITE_CONFIG_CHUNK failed: ERR_STATE',
+        )
+        expect(count(dev, Cmd.WRITE_CONFIG_BEGIN)).toBe(1)
     })
 })

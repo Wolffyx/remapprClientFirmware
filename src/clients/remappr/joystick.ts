@@ -22,7 +22,7 @@ import {
     type AxisState,
     type CalSuggestion,
 } from './protocol'
-import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
+import { once, repeatable, type CallTarget, type RemapprRpc } from './rpc'
 import type { DiscoveryResult } from './discovery'
 import type {
     JoystickApi,
@@ -57,36 +57,16 @@ export function servesJoystick(discovery: DiscoveryResult): boolean {
     return !!ns?.some((n) => n.namespace === Namespace.JOYSTICK)
 }
 
+/** One JOYSTICK verb, to the device itself or (`to`) a node behind the
+ *  dongle. */
 async function call(
     rpc: RemapprRpc,
     verb: number,
     name: string,
     arg?: Uint8Array,
+    to?: CallTarget,
 ): Promise<Uint8Array> {
-    const reply = await rpc.callUniversalPlain(Namespace.JOYSTICK, verb, arg)
-    if (reply.status !== Status.OK)
-        throw new Error(`${name} → ${statusName(reply.status)}`)
-    return reply.data
-}
-
-/** A read, relayed with retries when `targetNode` names a node behind the
- *  dongle (0 = the device itself). */
-async function read(
-    rpc: RemapprRpc,
-    verb: number,
-    name: string,
-    targetNode: number,
-): Promise<Uint8Array> {
-    if (!targetNode) return call(rpc, verb, name)
-    const reply = await rpc.callUniversalPlain(
-        Namespace.JOYSTICK,
-        verb,
-        undefined,
-        {
-            targetNode,
-            retries: RELAY_READ_RETRIES,
-        },
-    )
+    const reply = await rpc.callUniversalPlain(Namespace.JOYSTICK, verb, arg, to)
     if (reply.status !== Status.OK)
         throw new Error(`${name} → ${statusName(reply.status)}`)
     return reply.data
@@ -98,11 +78,12 @@ export async function getAxisState(
     targetNode = 0,
 ): Promise<AxisState> {
     return parseAxisState(
-        await read(
+        await call(
             rpc,
             JoystickVerb.GET_AXIS_STATE,
             'GET_AXIS_STATE',
-            targetNode,
+            undefined,
+            repeatable(targetNode),
         ),
     )
 }
@@ -114,37 +95,44 @@ export async function getAxisConfig(
     targetNode = 0,
 ): Promise<AxisConfig> {
     return parseAxisConfig(
-        await read(
+        await call(
             rpc,
             JoystickVerb.GET_AXIS_CONFIG,
             'GET_AXIS_CONFIG',
-            targetNode,
+            undefined,
+            repeatable(targetNode),
         ),
     )
 }
 
 /** JOYSTICK.CALIBRATE one step on `input` (omitted = every input). Finish
- *  resolves to what each input measured; the other steps to []. */
+ *  resolves to what each input measured; the other steps to []. A step must
+ *  not run twice (a second finish or undo is not the first), so through the
+ *  dongle it is sent once. */
 export async function calibrate(
     rpc: RemapprRpc,
     step: JoystickCalStep,
     input?: number,
+    targetNode = 0,
 ): Promise<CalSuggestion[]> {
     const data = await call(
         rpc,
         JoystickVerb.CALIBRATE,
         'CALIBRATE',
         new Uint8Array([input ?? JOY_CAL_ALL, STEPS[step]]),
+        once(targetNode),
     )
     return parseCalSuggestion(data)
 }
 
-/** JOYSTICK.SET_AXIS_MAP (live): `input` onto report axis `out` (null off). */
+/** JOYSTICK.SET_AXIS_MAP (live): `input` onto report axis `out` (null off).
+ *  Absolute, so through the dongle it rides the relay retries. */
 export async function setAxisMap(
     rpc: RemapprRpc,
     input: number,
     out: number | null,
     flags: JoystickAxisFlags,
+    targetNode = 0,
 ): Promise<void> {
     const bits =
         (flags.invert ? JoyAxisFlag.INVERT : 0) |
@@ -154,35 +142,33 @@ export async function setAxisMap(
         JoystickVerb.SET_AXIS_MAP,
         'SET_AXIS_MAP',
         new Uint8Array([input, out ?? AXIS_OFF, bits]),
+        repeatable(targetNode),
     )
 }
 
-/** JOYSTICK.SET_DEADZONE (live). */
+/** JOYSTICK.SET_DEADZONE (live). Absolute, like SET_AXIS_MAP. */
 export async function setDeadzone(
     rpc: RemapprRpc,
     input: number,
-    inner: number,
-    outer: number,
+    zones: { inner: number; outer: number },
+    targetNode = 0,
 ): Promise<void> {
     await call(
         rpc,
         JoystickVerb.SET_DEADZONE,
         'SET_DEADZONE',
-        new Uint8Array([input, inner, outer]),
+        new Uint8Array([input, zones.inner, zones.outer]),
+        repeatable(targetNode),
     )
 }
 
 /** The `service.joystick` facade. `writable` false keeps the reads and
- *  rejects every change. `targetNode` relays the reads to a node behind the
- *  dongle; changes there are not supported, so such a view is read-only. */
+ *  rejects every change. `targetNode` addresses a node behind the dongle. */
 export function buildJoystickApi(
     rpc: RemapprRpc,
     opts: { targetNode?: number; writable: boolean },
 ): JoystickVerbs {
     const node = opts.targetNode ?? 0
-    if (node && opts.writable) {
-        throw new Error('A joystick behind the dongle can only be read.')
-    }
     const guard = (): void => {
         if (!opts.writable) {
             throw new Error(
@@ -196,15 +182,15 @@ export function buildJoystickApi(
         getConfig: () => getAxisConfig(rpc, node),
         async calibrate(step, input) {
             guard()
-            return calibrate(rpc, step, input)
+            return calibrate(rpc, step, input, node)
         },
         async setAxisMap(input, out, flags) {
             guard()
-            await setAxisMap(rpc, input, out, flags)
+            await setAxisMap(rpc, input, out, flags, node)
         },
         async setDeadzone(input, inner, outer) {
             guard()
-            await setDeadzone(rpc, input, inner, outer)
+            await setDeadzone(rpc, input, { inner, outer }, node)
         },
     }
 }

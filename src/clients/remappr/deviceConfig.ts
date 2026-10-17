@@ -32,7 +32,13 @@ import {
     statusName,
     UCH_LEN,
 } from './protocol'
-import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
+import {
+    isLinkDrop,
+    once,
+    repeatable,
+    type RemapprRpc,
+    type UniversalReply,
+} from './rpc'
 
 type DevicePersonality = ConfigDevice['personality']
 
@@ -42,13 +48,100 @@ type DevicePersonality = ConfigDevice['personality']
 const WRITE_CHUNK =
     Math.floor((64 - 1 - UCH_LEN - 4) / BLOB_ALIGN) * BLOB_ALIGN
 
+/** Tries at staging a config on a node behind the dongle. The link can drop a
+ *  reply after the node acted on it (a chunk then may or may not be staged),
+ *  so a relayed push starts over from BEGIN, which drops whatever was staged. */
+const RELAY_PUSH_ATTEMPTS = 3
+
+/** What a config verb gets back when the relay lost its reply: the dongle's
+ *  own answer for a node that did not reply, which says nothing of whether
+ *  the node acted. */
+const LINK_DROPPED: UniversalReply = {
+    status: Status.ERR_STATE,
+    data: new Uint8Array(),
+}
+
+/** One config verb, sent once. */
+type ConfigCall = (cmd: number, arg?: Uint8Array) => Promise<UniversalReply>
+
+/** The step of a push the device refused, and how. */
+interface Refusal {
+    step: string
+    status: number
+}
+
+/** The config verbs for the device itself (`node` 0) or a node behind the
+ *  dongle; on the relay a reply that never came reads as LINK_DROPPED. */
+function configCall(rpc: RemapprRpc, node: number): ConfigCall {
+    return async (cmd, arg) => {
+        try {
+            return await rpc.callUniversalPlain(Namespace.COMMON, cmd, arg, once(node))
+        } catch (e) {
+            if (!node || !isLinkDrop(e)) throw e
+            return LINK_DROPPED
+        }
+    }
+}
+
+/** One try at staging `blob`: BEGIN, every chunk, VALIDATE. The step the
+ *  device refused, or null once the blob is staged and valid. */
+async function stageOnce(
+    call: ConfigCall,
+    blob: Uint8Array,
+): Promise<Refusal | null> {
+    const begin = await call(Cmd.WRITE_CONFIG_BEGIN)
+    if (begin.status !== Status.OK)
+        return { step: 'WRITE_CONFIG_BEGIN', status: begin.status }
+    for (let off = 0; off < blob.length; off += WRITE_CHUNK) {
+        const chunk = await call(
+            Cmd.WRITE_CONFIG_CHUNK,
+            blob.subarray(off, Math.min(off + WRITE_CHUNK, blob.length)),
+        )
+        if (chunk.status !== Status.OK)
+            return { step: 'WRITE_CONFIG_CHUNK', status: chunk.status }
+    }
+    const validate = await call(Cmd.VALIDATE_CONFIG)
+    if (validate.status === Status.OK) return null
+    return { step: 'VALIDATE_CONFIG', status: validate.status }
+}
+
+/** The error a refused push ends in. A config the device found invalid is
+ *  rolled back first, so nothing stays staged. */
+async function refusalError(
+    call: ConfigCall,
+    refused: Refusal,
+): Promise<ProtocolError> {
+    const status = statusName(refused.status)
+    if (refused.step !== 'VALIDATE_CONFIG')
+        return new ProtocolError(`${refused.step} failed: ${status}`)
+    await call(Cmd.ROLLBACK_CONFIG).catch(() => undefined)
+    return new ProtocolError(
+        `The device refused the settings (VALIDATE_CONFIG: ${status})`,
+    )
+}
+
+/** Stage `blob`, starting over from BEGIN while ERR_STATE comes back (on the
+ *  relay: a dropped reply) and tries are left. */
+async function stage(
+    call: ConfigCall,
+    blob: Uint8Array,
+    attempts: number,
+): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+        const refused = await stageOnce(call, blob)
+        if (refused === null) return
+        if (refused.status === Status.ERR_STATE && attempt < attempts) continue
+        throw await refusalError(call, refused)
+    }
+}
+
 export interface DeviceConfigTarget {
     personality: DevicePersonality
     /** 0 = the device on this transport; a short-id = a node behind the dongle. */
     targetNode?: number
     /** The document's meta.name (the blob does not carry one). */
     name: string
-    /** False for a node reached through the dongle: `write` then rejects. */
+    /** False for a read-only view: `write` then rejects. */
     writable: boolean
     /** The device's sensors as it describes them (SENSOR namespace), when it
      *  serves them: `write` leaves out a sensor setting the device would
@@ -89,28 +182,14 @@ export function buildDeviceConfigApi(
     target: DeviceConfigTarget,
 ): DeviceConfigApi {
     const node = target.targetNode ?? 0
-    const relayOpts = node ? { targetNode: node } : undefined
-    const readOpts = node
-        ? { targetNode: node, retries: RELAY_READ_RETRIES }
-        : undefined
-
-    async function call(cmd: number, arg?: Uint8Array) {
-        return rpc.callUniversalPlain(Namespace.COMMON, cmd, arg, relayOpts)
-    }
-
-    async function callOk(cmd: number, label: string, arg?: Uint8Array) {
-        const r = await call(cmd, arg)
-        if (r.status !== Status.OK) {
-            throw new ProtocolError(`${label} failed: ${statusName(r.status)}`)
-        }
-    }
+    const call = configCall(rpc, node)
 
     async function deviceInfo(): Promise<DeviceInfo> {
         const r = await rpc.callUniversalPlain(
             Namespace.COMMON,
             Cmd.GET_DEVICE_INFO,
             undefined,
-            readOpts,
+            repeatable(node),
         )
         if (r.status !== Status.OK) {
             throw new ProtocolError(`GET_DEVICE_INFO failed: ${statusName(r.status)}`)
@@ -159,11 +238,18 @@ export function buildDeviceConfigApi(
         }
     }
 
+    /** Through the dongle a lost COMMIT reply reads as ERR_STATE whether or not
+     *  the node committed, so ask it which version is active. */
+    async function committed(status: number, version: number): Promise<boolean> {
+        if (!node || status !== Status.ERR_STATE) return false
+        const now = await deviceInfo()
+        return now.hasActive && now.configVersion === version
+    }
+
     async function write(config: ConfigDevice): Promise<number> {
         if (!target.writable) {
             throw new ProtocolError(
-                'Read-only node view: saving to a node through the dongle is not ' +
-                    'supported yet. Connect the device over USB.',
+                'Read-only view: connect the device over USB to change it.',
             )
         }
         const parsed = DeviceConfigSchema.safeParse(config)
@@ -184,23 +270,11 @@ export function buildDeviceConfigApi(
             buildRemapprDeviceBlob(parsed.data, { configVersion: version, sensors }),
         )
 
-        await callOk(Cmd.WRITE_CONFIG_BEGIN, 'WRITE_CONFIG_BEGIN')
-        for (let off = 0; off < blob.length; off += WRITE_CHUNK) {
-            await callOk(
-                Cmd.WRITE_CONFIG_CHUNK,
-                'WRITE_CONFIG_CHUNK',
-                blob.subarray(off, Math.min(off + WRITE_CHUNK, blob.length)),
-            )
-        }
-        const validate = await call(Cmd.VALIDATE_CONFIG)
-        if (validate.status !== Status.OK) {
-            await call(Cmd.ROLLBACK_CONFIG).catch(() => undefined)
-            throw new ProtocolError(
-                `The device refused the settings (VALIDATE_CONFIG: ${statusName(validate.status)})`,
-            )
-        }
-        await callOk(Cmd.COMMIT_CONFIG, 'COMMIT_CONFIG')
-        return version
+        await stage(call, blob, node ? RELAY_PUSH_ATTEMPTS : 1)
+        const commit = await call(Cmd.COMMIT_CONFIG)
+        if (commit.status === Status.OK) return version
+        if (await committed(commit.status, version)) return version
+        throw new ProtocolError(`COMMIT_CONFIG failed: ${statusName(commit.status)}`)
     }
 
     return {

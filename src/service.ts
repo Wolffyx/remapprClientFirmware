@@ -425,10 +425,11 @@ export interface NodesApi {
      *  directly-attached (non-dongle) device. */
     list(): Promise<NodeView[]>
 
-    /** Open a **read-only** KeyboardService view of one node (relayed read of its
-     *  device-info + active config + geometry). The returned service has
-     *  `capabilities.readOnly === true`; every editing call throws. Editing a
-     *  behind-dongle node is gated on the relayed-write HW-proof. */
+    /** Open a view of one node, every call relayed to it. A mouse or a joystick
+     *  gets the service it has on its own transport, editable through the relay.
+     *  A keyboard is **read-only** (`capabilities.readOnly === true`, every
+     *  editing call throws): its changes need the sealed relay session, which is
+     *  not proven on hardware yet. */
     open(id: number): Promise<KeyboardService>
 
     /** Open (or close) the dongle's pairing window so a new node can bond — the
@@ -617,7 +618,7 @@ export type { MotionConfig } from './clients/remappr/protocol'
 /** A mouse's live motion controls (MOUSE namespace). A live change holds until
  *  the next pushed config, and survives a reboot until then. */
 export interface MouseMotionApi {
-    /** False on a node reached through a dongle (read-only view). */
+    /** False on a read-only view. */
     readonly writable: boolean
     /** The sensor's DPI range and step, and the DPI, acceleration profile and
      *  scroll mode in force. */
@@ -680,7 +681,7 @@ export interface DeadzoneSuggestion {
  *  and deadzones set here are live tweaks: the next saved config replaces
  *  them. Calibration belongs to the unit and stays across configs. */
 export interface JoystickApi {
-    /** False on a node reached through a dongle (read-only view). */
+    /** False on a read-only view. */
     readonly writable: boolean
     /** Each analog input's raw count and report value, the buttons, the hat. */
     getState(): Promise<AxisState>
@@ -740,7 +741,7 @@ export interface SensorReading {
  *  unit and stays across configs. Settings and procedures are named as their
  *  descriptors name them. */
 export interface SensorApi {
-    /** False on a node reached through a dongle (read-only view). */
+    /** False on a read-only view. */
     readonly writable: boolean
     /** Each sensor and everything it describes, with the values in force. */
     getSensors(): Promise<readonly SensorInfo[]>
@@ -784,7 +785,7 @@ export interface ControlsApi {
         activeId: string
     }>
     getBindings(profileId: string): Promise<DeviceBindings>
-    /** Absent = read-only (a generic HID device, a behind-dongle view). Follows
+    /** Absent = read-only (a generic HID device, a keyboard behind a dongle). Follows
      *  `capabilities.saveMode`: 'none' keeps the edit for the session, 'manual'
      *  stages it until `commit()` (`discardChanges()` reverts it and fires
      *  onChanged), 'automatic' writes it at once. Names the profile so an undo
@@ -906,7 +907,7 @@ export interface KeyboardService {
      *  to avoid colliding with adapters' internal keymap `layers`. */
     layerControl?: LayersApi
     /** Behind-dongle node roster (present on dongle devices; `list()` is empty for
-     *  a directly-attached keyboard). Views are read-only today. */
+     *  a directly-attached keyboard). Keyboard views are read-only today. */
     nodes?: NodesApi
     /** Cluster diagnostics + live role-transition events (§N4b-3). Present only on
      *  a directly-attached node whose firmware wired a cluster-diag source

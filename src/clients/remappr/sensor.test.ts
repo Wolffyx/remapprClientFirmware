@@ -378,23 +378,37 @@ describe('SensorApi', () => {
         )
     })
 
-    it('relays reads to a node and refuses every change there', async () => {
+    it('relays reads and changes to a node behind the dongle', async () => {
         const { rpc, calls } = fakeRpc()
-        const api = buildSensorApi(rpc, { targetNode: 2, writable: false })
+        const api = buildSensorApi(rpc, { targetNode: 2, writable: true })
         await api.getSensors()
         expect(
             calls.every(
                 (c) => c.opts?.targetNode === 2 && (c.opts.retries ?? 0) > 0,
             ),
         ).toBe(true)
+        calls.length = 0
+        await api.setSetting(0, 'angleSnap', true)
+        await api.runProcedure(0, 'liftCalibration', 'begin')
+        const [set, run] = calls
+        // An absolute value may be sent again; a procedure step never is.
+        expect(set!.verb).toBe(SensorVerb.SET_SETTING)
+        expect(set!.opts?.targetNode).toBe(2)
+        expect(set!.opts?.retries ?? 0).toBeGreaterThan(0)
+        expect(run!.verb).toBe(SensorVerb.RUN_PROCEDURE)
+        expect(run!.opts?.targetNode).toBe(2)
+        expect(run!.opts?.retries ?? 0).toBe(0)
+    })
+
+    it('keeps the reads and refuses every change when read-only', async () => {
+        const { rpc } = fakeRpc()
+        const api = buildSensorApi(rpc, { targetNode: 2, writable: false })
+        await api.getSensors()
         await expect(api.setSetting(0, 'angleSnap', true)).rejects.toThrow(
             'Read-only',
         )
         await expect(
             api.runProcedure(0, 'liftCalibration', 'begin'),
         ).rejects.toThrow('Read-only')
-        expect(() =>
-            buildSensorApi(rpc, { targetNode: 2, writable: true }),
-        ).toThrow()
     })
 })

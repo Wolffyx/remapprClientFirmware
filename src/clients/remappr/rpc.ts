@@ -59,6 +59,34 @@ const RELAY_READ_TIMEOUT_MS = 500
  *  well past 99 %. Pass as `callUniversalPlain(..., { retries: RELAY_READ_RETRIES })`. */
 export const RELAY_READ_RETRIES = 4
 
+/** Where a call goes and whether it may be sent again. */
+export interface CallTarget {
+    targetNode?: number
+    retries?: number
+}
+
+/** A call that, sent twice, leaves the device as sending it once would: a read,
+ *  or a SET of an absolute value. To a node behind the dongle it rides the relay
+ *  retries; to the device itself (`targetNode` 0) it goes as is. */
+export function repeatable(targetNode: number): CallTarget | undefined {
+    return targetNode ? { targetNode, retries: RELAY_READ_RETRIES } : undefined
+}
+
+/** A call that must not run twice: a procedure step, a config chunk. To a node
+ *  behind the dongle it is sent once. */
+export function once(targetNode: number): CallTarget | undefined {
+    return targetNode ? { targetNode } : undefined
+}
+
+/** True for what a lossy relay hop throws: a reply (or a fragment of one) that
+ *  never came. The request may or may not have reached the node. */
+export function isLinkDrop(e: unknown): boolean {
+    return (
+        e instanceof FragmentLostError ||
+        (e instanceof TransportError && /timeout/i.test(e.message))
+    )
+}
+
 const delay = (ms: number): Promise<void> =>
     new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -81,8 +109,9 @@ export interface RemapprRpc {
     ): Promise<ControlResponse>
     /** A direct-attach universal (0xE2) request with inbound FRAG reassembly.
      *  `retries` (default 0) re-issues the request on a transient ERR_STATE — the
-     *  §10 relay-timeout a flapping 2.4 GHz link produces. Only pass it for
-     *  idempotent reads (never the AUTH handshake or a mutation). */
+     *  §10 relay-timeout a flapping 2.4 GHz link produces. Only pass it for a
+     *  call that is safe to repeat (`repeatable`): a read or an absolute SET,
+     *  never the AUTH handshake, a procedure step or a config chunk. */
     callUniversalPlain(
         namespace: number,
         verb: number,
@@ -426,10 +455,7 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
                 // A reply frame (or a FRAG continuation) lost on a flapping relay
                 // makes nextFrame() reject with a timeout. Retry that transient
                 // like ERR_STATE; rethrow a closed transport or a spent budget.
-                const retriable =
-                    e instanceof FragmentLostError ||
-                    (e instanceof TransportError && /timeout/i.test(e.message))
-                if (!retriable || attempt >= maxAttempts) throw e
+                if (!isLinkDrop(e) || attempt >= maxAttempts) throw e
             }
             await delay(RELAY_RETRY_BACKOFF_MS)
         }

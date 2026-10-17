@@ -16,7 +16,7 @@ import {
     statusName,
     type RateLimits,
 } from './protocol'
-import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
+import { repeatable, type RemapprRpc } from './rpc'
 
 export type { RateLimits }
 
@@ -31,7 +31,7 @@ export async function getRateLimits(
         Namespace.COMMON,
         Cmd.GET_RATE_LIMITS,
         undefined,
-        targetNode ? { targetNode, retries: RELAY_READ_RETRIES } : undefined,
+        repeatable(targetNode),
     )
     if (reply.status !== Status.OK)
         throw new Error(`GET_RATE_LIMITS → ${statusName(reply.status)}`)
@@ -50,7 +50,7 @@ export async function setReportRate(
         Namespace.COMMON,
         Cmd.SET_REPORT_RATE,
         buildReportRateArg(hz),
-        targetNode ? { targetNode } : undefined,
+        repeatable(targetNode),
     )
     if (reply.status !== Status.OK)
         throw new Error(`SET_REPORT_RATE → ${statusName(reply.status)}`)

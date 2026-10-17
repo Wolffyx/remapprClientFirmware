@@ -51,7 +51,7 @@ import {
     type SensorSettingRecord,
     type SensorStatusRecord,
 } from './protocol'
-import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
+import { once, repeatable, type CallTarget, type RemapprRpc } from './rpc'
 import {
     registryMetric,
     registryProcedure,
@@ -72,24 +72,15 @@ export function servesSensor(discovery: DiscoveryResult): boolean {
     return !!ns?.some((n) => n.namespace === Namespace.SENSOR)
 }
 
-/** One SENSOR verb. A read for a node behind the dongle (`targetNode` > 0)
- *  is relayed with retries; a change is only ever sent to the device itself. */
+/** One SENSOR verb, to the device itself or (`to`) a node behind the dongle. */
 async function call(
     rpc: RemapprRpc,
     verb: number,
     name: string,
     arg: Uint8Array,
-    targetNode = 0,
+    to?: CallTarget,
 ): Promise<Uint8Array> {
-    const opts = targetNode
-        ? { targetNode, retries: RELAY_READ_RETRIES }
-        : undefined
-    const reply = await rpc.callUniversalPlain(
-        Namespace.SENSOR,
-        verb,
-        arg,
-        opts,
-    )
+    const reply = await rpc.callUniversalPlain(Namespace.SENSOR, verb, arg, to)
     if (reply.status !== Status.OK)
         throw new Error(`${name} → ${statusName(reply.status)}`)
     return reply.data
@@ -110,7 +101,7 @@ export async function listSensors(
                 SensorVerb.GET_SENSORS,
                 'GET_SENSORS',
                 bytes(out.length),
-                targetNode,
+                repeatable(targetNode),
             ),
         )
         out.push(...page.sensors)
@@ -132,7 +123,7 @@ export async function getSensorSetting(
             SensorVerb.GET_SETTING,
             'GET_SETTING',
             bytes(sensor, position),
-            targetNode,
+            repeatable(targetNode),
         ),
     )
 }
@@ -150,7 +141,7 @@ export async function getSensorProcedure(
             SensorVerb.GET_PROCEDURE,
             'GET_PROCEDURE',
             bytes(sensor, position),
-            targetNode,
+            repeatable(targetNode),
         ),
     )
 }
@@ -167,7 +158,7 @@ export async function getSensorMetrics(
             SensorVerb.GET_METRICS,
             'GET_METRICS',
             bytes(sensor),
-            targetNode,
+            repeatable(targetNode),
         ),
     )
 }
@@ -185,17 +176,19 @@ export async function getSensorProcedureStatus(
             SensorVerb.GET_PROCEDURE_STATUS,
             'GET_PROCEDURE_STATUS',
             bytes(sensor, procedure),
-            targetNode,
+            repeatable(targetNode),
         ),
     )
 }
 
-/** SENSOR.SET_SETTING (live until the next COMMIT): the value applied. */
+/** SENSOR.SET_SETTING (live until the next COMMIT): the value applied. An
+ *  absolute value, so through the dongle it rides the relay retries. */
 export async function setSensorSetting(
     rpc: RemapprRpc,
     sensor: number,
     id: number,
     value: number,
+    targetNode = 0,
 ): Promise<number> {
     return parseSensorApplied(
         await call(
@@ -203,16 +196,20 @@ export async function setSensorSetting(
             SensorVerb.SET_SETTING,
             'SET_SETTING',
             buildSensorSetArg(sensor, id, value),
+            repeatable(targetNode),
         ),
     )
 }
 
-/** SENSOR.RUN_PROCEDURE one step: the status after it. */
+/** SENSOR.RUN_PROCEDURE one step: the status after it. A step must not run
+ *  twice (a second capture or finish is not the first), so it is never
+ *  retried; after a lost reply, read the procedure's status instead. */
 export async function runSensorProcedure(
     rpc: RemapprRpc,
     sensor: number,
     procedure: number,
     step: number,
+    targetNode = 0,
 ): Promise<SensorStatusRecord> {
     return parseSensorStatus(
         await call(
@@ -220,6 +217,7 @@ export async function runSensorProcedure(
             SensorVerb.RUN_PROCEDURE,
             'RUN_PROCEDURE',
             bytes(sensor, procedure, step),
+            once(targetNode),
         ),
     )
 }
@@ -401,16 +399,12 @@ function idOf(
 }
 
 /** The `service.sensor` facade. `writable` false keeps the reads and rejects
- *  every change. `targetNode` relays the reads to a node behind the dongle;
- *  changes there are not supported, so such a view is read-only. */
+ *  every change. `targetNode` addresses a node behind the dongle. */
 export function buildSensorApi(
     rpc: RemapprRpc,
     opts: { targetNode?: number; writable: boolean },
 ): SensorApi {
     const node = opts.targetNode ?? 0
-    if (node && opts.writable) {
-        throw new Error('A sensor behind the dongle can only be read.')
-    }
     const guard = (): void => {
         if (!opts.writable) {
             throw new Error(
@@ -427,7 +421,7 @@ export function buildSensorApi(
             guard()
             const wire = typeof value === 'boolean' ? Number(value) : value
             const id = idOf(name, sensorSettingId, 'setting')
-            const applied = await setSensorSetting(rpc, sensor, id, wire)
+            const applied = await setSensorSetting(rpc, sensor, id, wire, node)
             return typeof value === 'boolean' ? applied !== 0 : applied
         },
         async runProcedure(sensor, name, step) {
@@ -438,6 +432,7 @@ export function buildSensorApi(
                     sensor,
                     procedureId(name),
                     STEPS[step],
+                    node,
                 ),
             )
         },

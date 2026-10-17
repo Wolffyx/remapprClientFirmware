@@ -18,11 +18,13 @@ import { loadOrCreateIdentity, RemapprSession } from './auth'
 import { loadDeviceConfig, makeKeylessConfig } from './configRead'
 import { buildDeviceConfigApi } from './deviceConfig'
 import { deviceKind } from './deviceKind'
+import {
+    buildJoystickService,
+    buildMouseService,
+    hasConfigStore,
+    type DeviceSite,
+} from './deviceServices'
 import { discover, type DiscoveryResult } from './discovery'
-import { buildMouseMotionApi } from './mouse'
-import { buildJoystickApi, servesJoystick } from './joystick'
-import { buildSensorApi, servesSensor } from './sensor'
-import { readInputLayout } from './inputLayout'
 import { warmRemapprIdentity } from './identity'
 import { buildClusterApi } from './clusterView'
 import { buildNodesApi } from './nodeView'
@@ -45,9 +47,6 @@ import {
 } from './protocol'
 import { createRemapprRpc, type RemapprRpc } from './rpc'
 import { RemapprKeyboardService } from './service'
-import { RemapprMouseService } from './mouseService'
-import { RemapprJoystickService } from './joystickService'
-import { getRateLimits, setReportRate } from './reportRate'
 
 const PROBE_TIMEOUT_MS = 1000
 
@@ -129,12 +128,6 @@ async function probeDongleFallback(rpc: RemapprRpc): Promise<DiscoveryResult> {
     }
 }
 
-/** The device has a config store (GET_LIMITS max_config_bytes > 0). A dongle on
- *  firmware from before the device config has none. */
-function hasConfigStore(discovery: DiscoveryResult): boolean {
-    return (discovery.limits?.maxConfigBytes ?? 0) > 0
-}
-
 // pattern-check: skip — builds the two keyless service variants this adapter
 // constructs; plain construction, no new abstraction.
 /** The dongle's own service: its node roster and its settings. No §19 session;
@@ -167,79 +160,17 @@ function buildDongleService(
     })
 }
 
-/** True unless the device lists its namespaces and MOUSE is not among them
- *  (firmware that predates the list serves it unconditionally). */
-export function servesMouse(discovery: DiscoveryResult): boolean {
-    const ns = discovery.personality?.namespaces
-    return !ns?.length || ns.some((n) => n.namespace === Namespace.MOUSE)
-}
-
-/** A mouse on its own transport: edited in the device editor, drawn from its
- *  own layout when it reports one. */
-async function buildMouseService(
-    rpc: RemapprRpc,
-    probed: ProbedRemappr,
-): Promise<RemapprMouseService> {
-    const { discovery, deviceInfo } = probed
-    const layout = await readInputLayout(rpc, discovery.personality?.namespaces)
-    const sensor = servesSensor(discovery)
-        ? buildSensorApi(rpc, { writable: true })
-        : undefined
-    return new RemapprMouseService({
-        deviceInfo,
-        limits: discovery.limits,
-        device: hasConfigStore(discovery)
-            ? buildDeviceConfigApi(rpc, {
-                  personality: 'mouse',
-                  name: deviceInfo.name,
-                  writable: true,
-                  ...(sensor ? { sensors: () => sensor.getSensors() } : {}),
-              })
-            : undefined,
-        motion: servesMouse(discovery)
-            ? buildMouseMotionApi(rpc, { writable: true })
-            : undefined,
-        sensor,
-        rate: {
-            get: () => getRateLimits(rpc),
-            set: (hz) => setReportRate(rpc, hz),
-        },
-        writable: true,
-        hwCaps: discovery.personality?.hwCaps,
-        layout,
-        onTransportClosed: (cb) => rpc.onClosed(cb),
+/** Where a mouse or a joystick on its own transport talks: its own RPC, which
+ *  the service closes on disconnect. */
+function ownSite(rpc: RemapprRpc, probed: ProbedRemappr): DeviceSite {
+    return {
+        rpc,
+        discovery: probed.discovery,
+        deviceInfo: probed.deviceInfo,
+        targetNode: 0,
         closeTransport: () =>
             rpc.close({ abortTransport: true }).catch(() => undefined),
-    })
-}
-
-/** A joystick on its own transport: edited in the device editor, drawn from
- *  its own layout, with live calibration. */
-async function buildJoystickService(
-    rpc: RemapprRpc,
-    probed: ProbedRemappr,
-): Promise<RemapprJoystickService> {
-    const { discovery, deviceInfo } = probed
-    const layout = await readInputLayout(rpc, discovery.personality?.namespaces)
-    return new RemapprJoystickService({
-        deviceInfo,
-        limits: discovery.limits,
-        device: hasConfigStore(discovery)
-            ? buildDeviceConfigApi(rpc, {
-                  personality: 'joystick',
-                  name: deviceInfo.name,
-                  writable: true,
-              })
-            : undefined,
-        joystick: servesJoystick(discovery)
-            ? buildJoystickApi(rpc, { writable: true })
-            : undefined,
-        writable: true,
-        layout,
-        onTransportClosed: (cb) => rpc.onClosed(cb),
-        closeTransport: () =>
-            rpc.close({ abortTransport: true }).catch(() => undefined),
-    })
+    }
 }
 
 /** Open an RPC and negotiate the device. Returns null (releasing the stream
@@ -363,9 +294,9 @@ export const remapprAdapter: FirmwareAdapter = {
             // surfaces its node roster, the mouse its motion controls, the
             // joystick its axes and calibration, each its own settings.
             if (kind === 'dongle') return buildDongleService(rpc, probed)
-            if (kind === 'mouse') return await buildMouseService(rpc, probed)
+            if (kind === 'mouse') return await buildMouseService(ownSite(rpc, probed))
             if (kind === 'joystick') {
-                return await buildJoystickService(rpc, probed)
+                return await buildJoystickService(ownSite(rpc, probed))
             }
 
             // §19 is capability-gated: a dev/no-auth firmware (CAP_AUTH clear)

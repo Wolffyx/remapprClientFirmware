@@ -1,7 +1,7 @@
 // pattern-check: skip — test wiring: a fake RemapprRpc routes the relayed
 // discovery + config reads (§6.2 COMMON relay) to a real buildRemapprBlob fixture,
 // so the node-view path is exercised end-to-end (roster → relayed read → decode →
-// read-only service) without hardware. No GoF abstraction.
+// service) without hardware. No GoF abstraction.
 import { describe, expect, it } from 'vitest'
 
 import { parseKeymap } from '../../config'
@@ -96,8 +96,25 @@ interface FakeRpc {
     closeCalls: number
 }
 
+/** A 16-byte GET_LIMITS record with a config store (max_config_bytes 4096). */
+function limitsBytes(): Uint8Array {
+    const d = new Uint8Array(16)
+    const dv = new DataView(d.buffer)
+    dv.setUint16(0, 48, true) // max unsealed chunk
+    dv.setUint16(4, 64, true) // transport frame cap
+    dv.setUint16(6, 16, true) // blob align
+    dv.setUint16(8, 4096, true) // max config bytes
+    return d
+}
+
 function makeRpc(
-    opts: { roster?: Uint8Array; personality?: number; namespaces?: number[] } = {},
+    opts: {
+        roster?: Uint8Array
+        personality?: number
+        namespaces?: number[]
+        /** The node reports a config store (GET_LIMITS). */
+        configStore?: boolean
+    } = {},
 ): FakeRpc {
     const state: FakeRpc = {
         targets: [],
@@ -148,6 +165,13 @@ function makeRpc(
                         0,
                     ]),
                 )
+            }
+            if (
+                namespace === Namespace.COMMON &&
+                verb === CommonVerb.GET_LIMITS &&
+                opts.configStore
+            ) {
+                return ok(limitsBytes())
             }
             if (namespace === Namespace.COMMON && verb === Cmd.READ_CONFIG_CHUNK) {
                 const dv = new DataView(arg.buffer, arg.byteOffset, arg.byteLength)
@@ -298,21 +322,20 @@ describe('buildNodesApi.open (read-only node view)', () => {
 })
 
 describe('buildNodesApi.open (mouse node)', () => {
-    it('opens a mouse as a read-only mouse view, not a keymap', async () => {
-        const fake = makeRpc({ roster: ROSTER, personality: 2 })
+    it('opens a mouse as the mouse service, editable through the relay', async () => {
+        const fake = makeRpc({ roster: ROSTER, personality: 2, configStore: true })
         const svc = await buildNodesApi(fake.rpc).open(0x0007)
 
         expect(svc.kind).toBe('mouse')
         expect(svc.deviceInfo.name).toBe('Remappr Mouse 0x0007')
-        expect(svc.capabilities.readOnly).toBe(true)
+        expect(svc.capabilities.readOnly).toBeUndefined()
         expect(svc.device?.personality).toBe('mouse')
-        expect(svc.device?.writable).toBe(false)
-        expect(svc.motion?.writable).toBe(false)
-        // Shown in the device editor, but nothing can be written through it.
-        expect(svc.controls).toBeDefined()
-        expect(svc.controls?.setBinding).toBeUndefined()
-        expect(svc.device?.draft).toBeUndefined()
-        // Discovery only: no keymap read, no geometry fetch.
+        expect(svc.device?.writable).toBe(true)
+        expect(svc.motion?.writable).toBe(true)
+        expect(svc.controls?.setBinding).toBeDefined()
+        expect(svc.device?.draft).toBeDefined()
+        // A change goes out (the fake answers ERR_CMD), addressed to the node.
+        await expect(svc.motion?.setDpi(800)).rejects.toThrow(/SET_DPI/)
         expect(fake.targets.every((t) => t === 0x0007)).toBe(true)
         await svc.disconnect()
         expect(fake.closeCalls).toBe(0)
@@ -320,25 +343,24 @@ describe('buildNodesApi.open (mouse node)', () => {
 })
 
 describe('buildNodesApi.open (joystick node)', () => {
-    it('opens a joystick as a read-only joystick view, not a keymap', async () => {
+    it('opens a joystick as the joystick service, editable through the relay', async () => {
         const fake = makeRpc({
             roster: ROSTER,
             personality: 5,
             namespaces: [Namespace.JOYSTICK],
+            configStore: true,
         })
         const svc = await buildNodesApi(fake.rpc).open(0x0009)
 
         expect(svc.kind).toBe('joystick')
         expect(svc.deviceInfo.name).toBe('Remappr Joystick 0x0009')
-        expect(svc.capabilities.readOnly).toBe(true)
+        expect(svc.capabilities.readOnly).toBeUndefined()
         expect(svc.device?.personality).toBe('joystick')
-        expect(svc.device?.writable).toBe(false)
-        expect(svc.controls).toBeDefined()
-        expect(svc.controls?.setBinding).toBeUndefined()
-        expect(svc.device?.draft).toBeUndefined()
-        // The live verbs read through the relay and refuse every change.
-        expect(svc.joystick?.writable).toBe(false)
-        await expect(svc.joystick?.calibrate('begin')).rejects.toThrow(/USB/)
+        expect(svc.device?.writable).toBe(true)
+        expect(svc.controls?.setBinding).toBeDefined()
+        expect(svc.device?.draft).toBeDefined()
+        expect(svc.joystick?.writable).toBe(true)
+        await expect(svc.joystick?.calibrate('begin')).rejects.toThrow(/CALIBRATE/)
         await expect(svc.joystick?.getState()).rejects.toThrow(/GET_AXIS_STATE/)
         expect(fake.targets.every((t) => t === 0x0009)).toBe(true)
         await svc.disconnect()
