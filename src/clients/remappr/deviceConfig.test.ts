@@ -370,13 +370,24 @@ describe('buildDeviceConfigApi.write through the dongle', () => {
         expect(dev.calls.at(-1)?.cmd).toBe(Cmd.GET_DEVICE_INFO)
     })
 
-    it('rejects a COMMIT the node never saw', async () => {
+    it('pushes again when the node never saw the COMMIT', async () => {
+        const dev = fakeDevice({
+            drop: (cmd, nth) =>
+                cmd === Cmd.COMMIT_CONFIG && nth === 0 ? 'request' : undefined,
+        })
+        expect(await nodeApi(dev).write(MOUSE_DOC)).toBe(1)
+        expect(count(dev, Cmd.WRITE_CONFIG_BEGIN)).toBe(2)
+        expect(dev.version).toBe(1)
+    })
+
+    it('gives up when no COMMIT gets through', async () => {
         const dev = fakeDevice({
             drop: (cmd) => (cmd === Cmd.COMMIT_CONFIG ? 'request' : undefined),
         })
         await expect(nodeApi(dev).write(MOUSE_DOC)).rejects.toThrow(
             'COMMIT_CONFIG failed: ERR_STATE',
         )
+        expect(count(dev, Cmd.COMMIT_CONFIG)).toBe(3)
         expect(dev.active).toBeNull()
     })
 

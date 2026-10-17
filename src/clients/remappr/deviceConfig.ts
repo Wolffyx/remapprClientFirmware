@@ -48,10 +48,18 @@ type DevicePersonality = ConfigDevice['personality']
 const WRITE_CHUNK =
     Math.floor((64 - 1 - UCH_LEN - 4) / BLOB_ALIGN) * BLOB_ALIGN
 
-/** Tries at staging a config on a node behind the dongle. The link can drop a
- *  reply after the node acted on it (a chunk then may or may not be staged),
- *  so a relayed push starts over from BEGIN, which drops whatever was staged. */
+/** Tries at a push to a node behind the dongle. The link can lose a request
+ *  or the reply to it (a chunk then may or may not be staged, a COMMIT may or
+ *  may not have landed), so a relayed push starts over from BEGIN, which drops
+ *  whatever was staged. Bench: ~0.5 % of relayed calls lost on a noisy 2.4 GHz
+ *  channel set, in bursts. */
 const RELAY_PUSH_ATTEMPTS = 3
+
+/** Pause before a relayed push starts over, so a burst of loss can pass. */
+const RELAY_PUSH_BACKOFF_MS = 250
+
+const delay = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms))
 
 /** What a config verb gets back when the relay lost its reply: the dongle's
  *  own answer for a node that did not reply, which says nothing of whether
@@ -83,9 +91,9 @@ function configCall(rpc: RemapprRpc, node: number): ConfigCall {
     }
 }
 
-/** One try at staging `blob`: BEGIN, every chunk, VALIDATE. The step the
- *  device refused, or null once the blob is staged and valid. */
-async function stageOnce(
+/** One try at a push: BEGIN, every chunk, VALIDATE, COMMIT. The step the
+ *  device refused, or null once the blob is active. */
+async function pushOnce(
     call: ConfigCall,
     blob: Uint8Array,
 ): Promise<Refusal | null> {
@@ -101,8 +109,11 @@ async function stageOnce(
             return { step: 'WRITE_CONFIG_CHUNK', status: chunk.status }
     }
     const validate = await call(Cmd.VALIDATE_CONFIG)
-    if (validate.status === Status.OK) return null
-    return { step: 'VALIDATE_CONFIG', status: validate.status }
+    if (validate.status !== Status.OK)
+        return { step: 'VALIDATE_CONFIG', status: validate.status }
+    const commit = await call(Cmd.COMMIT_CONFIG)
+    if (commit.status === Status.OK) return null
+    return { step: 'COMMIT_CONFIG', status: commit.status }
 }
 
 /** The error a refused push ends in. A config the device found invalid is
@@ -118,21 +129,6 @@ async function refusalError(
     return new ProtocolError(
         `The device refused the settings (VALIDATE_CONFIG: ${status})`,
     )
-}
-
-/** Stage `blob`, starting over from BEGIN while ERR_STATE comes back (on the
- *  relay: a dropped reply) and tries are left. */
-async function stage(
-    call: ConfigCall,
-    blob: Uint8Array,
-    attempts: number,
-): Promise<void> {
-    for (let attempt = 1; ; attempt++) {
-        const refused = await stageOnce(call, blob)
-        if (refused === null) return
-        if (refused.status === Status.ERR_STATE && attempt < attempts) continue
-        throw await refusalError(call, refused)
-    }
 }
 
 export interface DeviceConfigTarget {
@@ -238,12 +234,26 @@ export function buildDeviceConfigApi(
         }
     }
 
-    /** Through the dongle a lost COMMIT reply reads as ERR_STATE whether or not
-     *  the node committed, so ask it which version is active. */
-    async function committed(status: number, version: number): Promise<boolean> {
-        if (!node || status !== Status.ERR_STATE) return false
+    /** Whether `version` is active: a COMMIT that did not answer OK may still
+     *  have landed (through the dongle, its reply lost; or a late first COMMIT
+     *  beat a resent one). */
+    async function committed(version: number): Promise<boolean> {
         const now = await deviceInfo()
         return now.hasActive && now.configVersion === version
+    }
+
+    /** Push `blob` as `version`. Through the dongle, while ERR_STATE comes back
+     *  (a lost request or reply) and tries are left, start over from BEGIN. */
+    async function push(blob: Uint8Array, version: number): Promise<void> {
+        const attempts = node ? RELAY_PUSH_ATTEMPTS : 1
+        for (let attempt = 1; ; attempt++) {
+            const refused = await pushOnce(call, blob)
+            if (refused === null) return
+            if (refused.step === 'COMMIT_CONFIG' && (await committed(version))) return
+            if (refused.status !== Status.ERR_STATE || attempt >= attempts)
+                throw await refusalError(call, refused)
+            await delay(RELAY_PUSH_BACKOFF_MS)
+        }
     }
 
     async function write(config: ConfigDevice): Promise<number> {
@@ -270,11 +280,8 @@ export function buildDeviceConfigApi(
             buildRemapprDeviceBlob(parsed.data, { configVersion: version, sensors }),
         )
 
-        await stage(call, blob, node ? RELAY_PUSH_ATTEMPTS : 1)
-        const commit = await call(Cmd.COMMIT_CONFIG)
-        if (commit.status === Status.OK) return version
-        if (await committed(commit.status, version)) return version
-        throw new ProtocolError(`COMMIT_CONFIG failed: ${statusName(commit.status)}`)
+        await push(blob, version)
+        return version
     }
 
     return {

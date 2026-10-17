@@ -454,7 +454,7 @@ is safe to send twice:
 |---|---|
 | A read; a SET of an absolute value (`SET_DPI`, `SET_REPORT_RATE`, SENSOR `SET_SETTING`, JOYSTICK `SET_AXIS_MAP` / `SET_DEADZONE`) | retried up to 4 times on `ERR_STATE` or a 500 ms timeout (`repeatable`) |
 | A procedure step (SENSOR `RUN_PROCEDURE`, JOYSTICK `CALIBRATE`) | sent once (`once`); after a loss, read the status |
-| A config push | each verb sent once; on `ERR_STATE` or a timeout before COMMIT the push starts over from `WRITE_CONFIG_BEGIN` (3 tries); a COMMIT answered `ERR_STATE` counts when `GET_DEVICE_INFO` then shows the pushed version |
+| A config push | each verb sent once; a COMMIT not answered `OK` counts when `GET_DEVICE_INFO` then shows the pushed version; otherwise, on `ERR_STATE` or a timeout at any step (COMMIT included), the push starts over from `WRITE_CONFIG_BEGIN` after a 250 ms pause (3 tries) |
 
 A late reply to an abandoned request is dropped by its request id. The node's
 radio session drops a resent frame it already took (its replay counter), so a
