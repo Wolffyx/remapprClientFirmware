@@ -13,6 +13,7 @@ import type {
     DeviceActionGroup,
     SensorSpec,
 } from '@firmware/devices/types'
+import { hidUsageCodec } from '../../../catalog/hidUsageCodec'
 
 /** The demo sensor, described the way a Remappr sensor describes itself
  *  (SENSOR namespace): every setting type, an advanced one, a gated option,
@@ -285,13 +286,60 @@ export const AXIS_OUTPUTS = [
     option('volume', 'Volume', 'media'),
 ] as const
 
+/** The plain keys among the demo's keyboard and media actions, by canonical
+ *  key id: these carry their HID usage, so the editor offers them in the
+ *  keycode grid. Shortcuts (Ctrl + C …) and Mic mute stay list picks. */
+const KEY_IDS: Readonly<Record<string, string>> = {
+    'key:Esc': 'key.keyboard_escape',
+    'key:Enter': 'key.keyboard_return_enter',
+    'key:Space': 'key.keyboard_spacebar',
+    'key:Tab': 'key.keyboard_tab',
+    'key:Shift': 'mod.lshift',
+    'key:Ctrl': 'mod.lctrl',
+    'key:Alt': 'mod.lalt',
+    'key:Win': 'mod.lgui',
+    'key:Gui': 'mod.rgui',
+    'key:Bksp': 'key.keyboard_backspace',
+    'key:;': 'key.keyboard_semicolon_and_colon',
+    "key:'": 'key.keyboard_left_apos_and_double',
+    'key:,': 'key.keyboard_comma_and_lessthan',
+    'key:.': 'key.keyboard_period_and_greaterthan',
+    'key:/': 'key.keyboard_forwardslash_and_questionmark',
+    'key:↑': 'key.keyboard_uparrow',
+    'key:↓': 'key.keyboard_downarrow',
+    'key:←': 'key.keyboard_leftarrow',
+    'key:→': 'key.keyboard_rightarrow',
+    ...Object.fromEntries(
+        [...'QWERTYUIOPASDFGHJKLZXCVBNM'].map((l) => [
+            `key:${l}`,
+            `key.keyboard_${l.toLowerCase()}`,
+        ]),
+    ),
+    'media:Play / Pause': 'media.transport.play_pause',
+    'media:Next track': 'media.transport.next',
+    'media:Prev track': 'media.transport.prev',
+    'media:Volume up': 'media.volume_increment',
+    'media:Volume down': 'media.volume_decrement',
+    'media:Mute': 'media.mute',
+}
+
+const usageOf = (id: ActionId): number | undefined => {
+    const key = KEY_IDS[id]
+    return key ? hidUsageCodec.encode(key)?.value : undefined
+}
+
 const actions: DeviceAction[] = GROUPS.flatMap((g) =>
-    g.items.map((label) => ({
-        id: act(g.id, label),
-        label,
-        group: g.id,
-        category: g.category,
-    })),
+    g.items.map((label) => {
+        const id = act(g.id, label)
+        const usage = usageOf(id)
+        return {
+            id,
+            label,
+            group: g.id,
+            category: g.category,
+            ...(usage === undefined ? {} : { usage }),
+        }
+    }),
 )
 
 export const DEMO_CATALOG: ControlsCatalog = {

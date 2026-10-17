@@ -268,6 +268,11 @@ export interface DeviceAction {
     /** A group id from the catalog's groups. */
     readonly group: string
     readonly category: DeviceActionCategory
+    /** The HID usage this action sends, packed `(page << 16) | id`, when it is
+     *  a plain key (keyboard, consumer/media). The editor then offers it in
+     *  the keycode grid; an action without one is picked from its group's
+     *  list. Must be unique within a catalog. */
+    readonly usage?: number
 }
 
 /** One choice of an analog output, a lift-off distance, … */
