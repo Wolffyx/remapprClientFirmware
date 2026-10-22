@@ -10,6 +10,7 @@ describe('part registry', () => {
     it('names every class the firmware registry has, others as "other"', () => {
         expect(sensorClass(1)).toBe('pointer')
         expect(sensorClass(5)).toBe('matrix')
+        expect(sensorClass(6)).toBe('encoder')
         expect(sensorClass(0x7f)).toBe('other')
     })
 

@@ -352,6 +352,7 @@ export type SensorClass =
     | 'imu'
     | 'analog'
     | 'matrix'
+    | 'encoder'
     | 'other'
 
 /** A setting as the device holds it now. */

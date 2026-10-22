@@ -226,6 +226,7 @@ const CLASSES: Readonly<Record<number, SensorClass>> = {
     3: 'imu',
     4: 'analog',
     5: 'matrix',
+    6: 'encoder',
 }
 
 const UNITS: Readonly<Record<number, SensorUnit>> = {
