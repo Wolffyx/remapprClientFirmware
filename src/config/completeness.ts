@@ -30,6 +30,7 @@ const LABELS: Record<string, string> = {
     via: 'VIA',
     vial: 'Vial',
     keychron: 'Keychron',
+    remappr: 'Remappr',
 }
 
 /** The firmwares the export should cover: the builder's multi-select, else the
