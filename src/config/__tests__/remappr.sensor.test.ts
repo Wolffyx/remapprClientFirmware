@@ -9,7 +9,7 @@ import {
     parseKeymap,
 } from '../index'
 import { readBlobFrames, DecodeCode } from '../compilers/remappr/decode'
-import { TableId } from '../compilers/remappr/blobWriter'
+import { BlobBuilder, TableId } from '../compilers/remappr/blobWriter'
 import { sensorEntries } from '../compilers/remappr/sensor'
 
 const MOUSE = {
@@ -57,6 +57,8 @@ const PAW: SensorInfo = {
     index: 0,
     cls: 'pointer',
     model: 'PAW3395',
+    channels: 1,
+    io: [],
     settings: [
         setting('resolution', { personality: true, min: 50, max: 26000 }),
         setting('liftCutoff', {
@@ -292,5 +294,36 @@ describe('node.sensor.defaults', () => {
         )
         expect(ov).not.toContain('remappr,setting-defaults')
         expect(ov).not.toContain('dt-bindings/remappr/sensor.h')
+    })
+})
+
+describe('TBL_PART channels', () => {
+    const frame = (blob: Uint8Array) =>
+        readBlobFrames(blob).frames.find((f) => f.id === TableId.Sensor)!
+
+    it('stays version 1 while every channel is 0, so older firmware reads it', () => {
+        const blob = new BlobBuilder()
+            .sensorTable([{ sensor: 0, id: 0x10, value: 20 }])
+            .finalize(2, 1, 1)
+        expect(frame(blob).version).toBe(1)
+        expect(tableOf(blob, TableId.Sensor)).toEqual([
+            0x01, 0x00, 0x00, 0x10, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00,
+        ])
+    })
+
+    it('becomes version 2 with the channel byte when an entry names one', () => {
+        const blob = new BlobBuilder()
+            .sensorTable([
+                { sensor: 1, id: 0x43, value: 5 },
+                { sensor: 1, id: 0x43, ch: 3, value: 9 },
+            ])
+            .finalize(2, 1, 1)
+        expect(frame(blob).version).toBe(2)
+        // prettier-ignore
+        expect(tableOf(blob, TableId.Sensor)).toEqual([
+            0x02, 0x00,
+            0x01, 0x43, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+            0x01, 0x43, 0x03, 0x00, 0x09, 0x00, 0x00, 0x00,
+        ])
     })
 })

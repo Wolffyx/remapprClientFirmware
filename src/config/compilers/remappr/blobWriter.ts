@@ -545,12 +545,14 @@ export const JOY_FLAG_RADIAL = 1 << 1
 export const JOYSTICK_TBL_HDR_LEN = 2
 export const JOYSTICK_TBL_AXIS_LEN = 8
 
-// pattern-check: skip plain wire-DTO interface mirroring the TBL_SENSOR layout
-/** One TBL_SENSOR (id 29) entry: a setting's value for one of the device's
- *  sensors. `id` is the registry id (sensorRegistry.ts). */
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_PART layout
+/** One TBL_PART (id 29, was TBL_SENSOR) entry: a setting's value for one of
+ *  the device's parts, on channel `ch` (0 unless the setting is per channel).
+ *  `id` is the registry id (sensorRegistry.ts). */
 export interface SensorTableEntry {
     sensor: number
     id: number
+    ch?: number
     value: number
 }
 export const SENSOR_TBL_HDR_LEN = 2
@@ -840,16 +842,19 @@ export class BlobBuilder {
     }
 
     // pattern-check: skip one more table-emit method on the existing Builder
-    /** TBL_SENSOR (id 29) v1: u8 count, u8 reserved, then per entry u8 sensor,
-     *  u8 id, u16 reserved, i32 value — matching firmware decode_sensor.c. */
+    /** TBL_PART (id 29): u16 count, then per entry u8 part, u8 id, u8 ch,
+     *  u8 reserved, i32 value — matching firmware decode_sensor.c. Version 1
+     *  while every channel is 0 (the same bytes firmware before the PART
+     *  namespace reads), else 2 (that firmware then keeps its defaults). */
     sensorTable(entries: readonly SensorTableEntry[]): this {
-        this.tableBegin(TableId.Sensor, 1)
-        this.w.u8(entries.length)
-        this.w.u8(0) // reserved
+        const channels = entries.some((e) => (e.ch ?? 0) !== 0)
+        this.tableBegin(TableId.Sensor, channels ? 2 : 1)
+        this.w.u16(entries.length)
         for (const e of entries) {
             this.w.u8(e.sensor)
             this.w.u8(e.id)
-            this.w.u16(0) // reserved
+            this.w.u8(e.ch ?? 0)
+            this.w.u8(0) // reserved
             this.w.u32(e.value)
         }
         this.tableEnd()

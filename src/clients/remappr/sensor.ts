@@ -1,10 +1,12 @@
 // Pattern check: Facade (Tier 1) — extended — buildSensorApi backs `service.sensor` the way buildJoystickApi backs `service.joystick`.
 //
-// Sensor-settings plan §3: a device's sensors over the SENSOR namespace —
-// what each has (settings, procedures, readings), live changes, procedures
-// and readings. Personality-neutral: a mouse's optical sensor and a keyboard's
-// trackball use the same verbs. The namespace is provisional (ns_version 0),
-// so it is used only when the personality map lists it. SET_SETTING and
+// A device's parts over the PART namespace (0x0A, was SENSOR; firmware
+// docs/part-wire-v1.md) — what each has (settings, procedures, readings, IO),
+// live changes, procedures and readings, on each channel of a part that
+// carries several. Personality-neutral: a mouse's optical sensor and a
+// joystick's axes use the same verbs. Frozen at ns_version 1; a device at
+// ns_version 0 (the provisional SENSOR layouts) still works: the GET_PARTS
+// reply's version says which, and the args follow it. SET_SETTING and
 // RUN_PROCEDURE are mutating — product builds seal them (§19); served
 // plaintext while the device's control auth is dev-disabled.
 //
@@ -14,6 +16,7 @@
 
 import type {
     SensorInfo,
+    SensorIo,
     SensorMetricSpec,
     SensorProcedureSpec,
     SensorSettingInfo,
@@ -27,8 +30,12 @@ import type {
 } from '../../service'
 import type { DiscoveryResult } from './discovery'
 import {
+    buildSensorRunArg,
     buildSensorSetArg,
     Namespace,
+    parseSensorIoPage,
+    parseSensorSuggestions,
+    SENSOR_CH_ALL,
     parseSensorApplied,
     parseSensorMetrics,
     parseSensorProcedure,
@@ -46,6 +53,7 @@ import {
     Status,
     statusName,
     type SensorMetricRecord,
+    type SensorIoRecord,
     type SensorProcedureRecord,
     type SensorRecord,
     type SensorSettingRecord,
@@ -57,6 +65,7 @@ import {
     registryProcedure,
     registrySetting,
     sensorClass,
+    sensorIoKind,
     sensorMetricKey,
     sensorProcedureId,
     sensorProcedureKey,
@@ -88,47 +97,61 @@ async function call(
 
 const bytes = (...b: number[]): Uint8Array => new Uint8Array(b)
 
-/** SENSOR.GET_SENSORS, every page. */
+/** What a device's PART namespace speaks: ns_version 1 (channels) or 0 (the
+ *  provisional SENSOR layouts), learned from its GET_PARTS reply. */
+export interface SensorWire {
+    nsVersion?: number
+}
+
+/** An optional channel byte: absent for channel 0 (every ns_version reads
+ *  that), else appended. */
+const withCh = (arg: number[], ch?: number): Uint8Array =>
+    bytes(...arg, ...(ch ? [ch] : []))
+
+/** PART.GET_PARTS, every page. Records the device's ns_version in `wire`. */
 export async function listSensors(
     rpc: RemapprRpc,
     targetNode = 0,
+    wire: SensorWire = {},
 ): Promise<SensorRecord[]> {
     const out: SensorRecord[] = []
     for (;;) {
-        const page = parseSensorsPage(
-            await call(
-                rpc,
-                SensorVerb.GET_SENSORS,
-                'GET_SENSORS',
-                bytes(out.length),
-                repeatable(targetNode),
-            ),
+        const raw = await call(
+            rpc,
+            SensorVerb.GET_SENSORS,
+            'GET_SENSORS',
+            bytes(out.length),
+            repeatable(targetNode),
         )
+        wire.nsVersion = raw[0] >= 2 ? 1 : 0
+        const page = parseSensorsPage(raw)
         out.push(...page.sensors)
         // A page that adds nothing would ask for the same page forever.
         if (out.length >= page.total || page.sensors.length === 0) return out
     }
 }
 
-/** SENSOR.GET_SETTING: the setting at `position` in the sensor's list. */
+/** PART.GET_SETTING: the setting at `position` in the part's list, on
+ *  channel `ch`. */
 export async function getSensorSetting(
     rpc: RemapprRpc,
     sensor: number,
     position: number,
     targetNode = 0,
+    ch?: number,
 ): Promise<SensorSettingRecord> {
     return parseSensorSetting(
         await call(
             rpc,
             SensorVerb.GET_SETTING,
             'GET_SETTING',
-            bytes(sensor, position),
+            withCh([sensor, position], ch),
             repeatable(targetNode),
         ),
     )
 }
 
-/** SENSOR.GET_PROCEDURE: the procedure at `position` in the sensor's list. */
+/** PART.GET_PROCEDURE: the procedure at `position` in the part's list. */
 export async function getSensorProcedure(
     rpc: RemapprRpc,
     sensor: number,
@@ -146,42 +169,92 @@ export async function getSensorProcedure(
     )
 }
 
-/** SENSOR.GET_METRICS: each reading and the most it reads. */
+/** PART.GET_METRICS: each reading of channel `ch` and the most it reads. */
 export async function getSensorMetrics(
     rpc: RemapprRpc,
     sensor: number,
     targetNode = 0,
+    ch?: number,
 ): Promise<SensorMetricRecord[]> {
     return parseSensorMetrics(
         await call(
             rpc,
             SensorVerb.GET_METRICS,
             'GET_METRICS',
-            bytes(sensor),
+            withCh([sensor], ch),
             repeatable(targetNode),
         ),
     )
 }
 
-/** SENSOR.GET_PROCEDURE_STATUS. */
+/** PART.GET_IO, every page (ns_version 1). */
+export async function getSensorIo(
+    rpc: RemapprRpc,
+    sensor: number,
+    targetNode = 0,
+): Promise<SensorIoRecord[]> {
+    const out: SensorIoRecord[] = []
+    for (;;) {
+        const page = parseSensorIoPage(
+            await call(
+                rpc,
+                SensorVerb.GET_IO,
+                'GET_IO',
+                bytes(sensor, out.length),
+                repeatable(targetNode),
+            ),
+        )
+        out.push(...page.io)
+        if (out.length >= page.total || page.io.length === 0) return out
+    }
+}
+
+/** PART.GET_PROCEDURE_STATUS (of channel `ch`; 0xFF every channel). */
 export async function getSensorProcedureStatus(
     rpc: RemapprRpc,
     sensor: number,
     procedure: number,
     targetNode = 0,
+    ch?: number,
 ): Promise<SensorStatusRecord> {
     return parseSensorStatus(
         await call(
             rpc,
             SensorVerb.GET_PROCEDURE_STATUS,
             'GET_PROCEDURE_STATUS',
-            bytes(sensor, procedure),
+            withCh([sensor, procedure], ch),
             repeatable(targetNode),
         ),
     )
 }
 
-/** SENSOR.SET_SETTING (live until the next COMMIT): the value applied. An
+/** PART.GET_PROCEDURE_RESULT: what procedure `procedure`'s last result on
+ *  channel `ch` suggests for the part's own settings (ns_version 1). */
+export async function getSensorSuggestions(
+    rpc: RemapprRpc,
+    sensor: number,
+    procedure: number,
+    ch: number,
+    targetNode = 0,
+) {
+    return parseSensorSuggestions(
+        await call(
+            rpc,
+            SensorVerb.GET_PROCEDURE_RESULT,
+            'GET_PROCEDURE_RESULT',
+            bytes(sensor, procedure, ch),
+            repeatable(targetNode),
+        ),
+    )
+}
+
+/** Channel and ns_version of a SET / RUN: the device's layout. */
+export interface SensorCallOpts {
+    ch?: number
+    nsVersion?: number
+}
+
+/** PART.SET_SETTING (live until the next COMMIT): the value applied. An
  *  absolute value, so through the dongle it rides the relay retries. */
 export async function setSensorSetting(
     rpc: RemapprRpc,
@@ -189,19 +262,20 @@ export async function setSensorSetting(
     id: number,
     value: number,
     targetNode = 0,
+    opts: SensorCallOpts = {},
 ): Promise<number> {
     return parseSensorApplied(
         await call(
             rpc,
             SensorVerb.SET_SETTING,
             'SET_SETTING',
-            buildSensorSetArg(sensor, id, value),
+            buildSensorSetArg(sensor, id, value, opts.ch, opts.nsVersion),
             repeatable(targetNode),
         ),
     )
 }
 
-/** SENSOR.RUN_PROCEDURE one step: the status after it. A step must not run
+/** PART.RUN_PROCEDURE one step: the status after it. A step must not run
  *  twice (a second capture or finish is not the first), so it is never
  *  retried; after a lost reply, read the procedure's status instead. */
 export async function runSensorProcedure(
@@ -210,13 +284,14 @@ export async function runSensorProcedure(
     procedure: number,
     step: number,
     targetNode = 0,
+    opts: SensorCallOpts = {},
 ): Promise<SensorStatusRecord> {
     return parseSensorStatus(
         await call(
             rpc,
             SensorVerb.RUN_PROCEDURE,
             'RUN_PROCEDURE',
-            bytes(sensor, procedure, step),
+            buildSensorRunArg(sensor, procedure, step, opts.ch, opts.nsVersion),
             once(targetNode),
         ),
     )
@@ -266,6 +341,32 @@ export function sensorSettingInfo(rec: SensorSettingRecord): SensorSettingInfo {
         ...(reg?.help ? { help: reg.help } : {}),
         value: valueOf(rec.type, rec.value),
         personality: (rec.flags & SensorFlag.PERSONALITY) !== 0,
+        ...((rec.flags & SensorFlag.PER_CHANNEL) !== 0 ? { perChannel: true } : {}),
+    }
+}
+
+/** A per-channel setting: channel 0's record as the info, every channel's
+ *  value and default beside it. */
+export function sensorChannelSettingInfo(
+    recs: readonly SensorSettingRecord[],
+): SensorSettingInfo {
+    return {
+        ...sensorSettingInfo(recs[0]),
+        channels: recs.map((r) => ({
+            value: valueOf(r.type, r.value),
+            default: valueOf(r.type, r.dflt),
+        })),
+    }
+}
+
+export function sensorIo(rec: SensorIoRecord): SensorIo {
+    return {
+        kind: sensorIoKind(rec.kind),
+        output: (rec.kind & 0x80) !== 0,
+        firstChannel: rec.firstCh,
+        count: rec.count,
+        a: rec.a,
+        b: rec.b,
     }
 }
 
@@ -284,6 +385,7 @@ export function sensorProcedureSpec(
         label: reg?.label ?? rec.name,
         phases,
         hasResult: (rec.flags & SensorProcFlag.HAS_RESULT) !== 0,
+        ...((rec.flags & SensorProcFlag.PER_CHANNEL) !== 0 ? { perChannel: true } : {}),
     }
 }
 
@@ -331,8 +433,27 @@ async function metricsOrNone(
     }
 }
 
-/** One sensor in full: one GET per setting and procedure (the wire carries
- *  one per reply: a setting fills most of the 48-byte unsealed chunk). */
+/** A setting on every channel: channel 0's record first (it says whether
+ *  the setting is per channel at all). */
+async function settingInfo(
+    rpc: RemapprRpc,
+    rec: SensorRecord,
+    position: number,
+    targetNode: number,
+): Promise<SensorSettingInfo> {
+    const first = await getSensorSetting(rpc, rec.index, position, targetNode)
+    if ((first.flags & SensorFlag.PER_CHANNEL) === 0 || rec.channels < 2)
+        return sensorSettingInfo(first)
+    const recs = [first]
+    for (let ch = 1; ch < rec.channels; ch++) {
+        recs.push(await getSensorSetting(rpc, rec.index, position, targetNode, ch))
+    }
+    return sensorChannelSettingInfo(recs)
+}
+
+/** One part in full: one GET per setting (and channel) and procedure (the
+ *  wire carries one per reply: a setting fills most of the 48-byte unsealed
+ *  chunk). */
 async function describeSensor(
     rpc: RemapprRpc,
     rec: SensorRecord,
@@ -340,11 +461,7 @@ async function describeSensor(
 ): Promise<SensorInfo> {
     const settings: SensorSettingInfo[] = []
     for (let i = 0; i < rec.settings; i++) {
-        settings.push(
-            sensorSettingInfo(
-                await getSensorSetting(rpc, rec.index, i, targetNode),
-            ),
-        )
+        settings.push(await settingInfo(rpc, rec, i, targetNode))
     }
     const procedures: SensorProcedureSpec[] = []
     for (let i = 0; i < rec.procedures; i++) {
@@ -359,23 +476,29 @@ async function describeSensor(
               sensorMetricSpec,
           )
         : []
+    const io = rec.io
+        ? (await getSensorIo(rpc, rec.index, targetNode)).map(sensorIo)
+        : []
     return {
         index: rec.index,
         cls: sensorClass(rec.cls),
         model: rec.name,
+        channels: rec.channels,
+        io,
         settings,
         procedures,
         metrics,
     }
 }
 
-/** Every sensor of the device, described. */
+/** Every part of the device, described. Records its ns_version in `wire`. */
 export async function describeSensors(
     rpc: RemapprRpc,
     targetNode = 0,
+    wire: SensorWire = {},
 ): Promise<SensorInfo[]> {
     const out: SensorInfo[] = []
-    for (const rec of await listSensors(rpc, targetNode)) {
+    for (const rec of await listSensors(rpc, targetNode, wire)) {
         out.push(await describeSensor(rpc, rec, targetNode))
     }
     return out
@@ -386,7 +509,11 @@ const STEPS: Readonly<Record<SensorProcedureStep, number>> = {
     next: SensorStep.NEXT,
     cancel: SensorStep.CANCEL,
     reset: SensorStep.RESET,
+    undo: SensorStep.UNDO,
 }
+
+const chOf = (channel?: number | 'all'): number | undefined =>
+    channel === 'all' ? SENSOR_CH_ALL : channel
 
 function idOf(
     key: string,
@@ -414,17 +541,27 @@ export function buildSensorApi(
     }
     const procedureId = (name: string): number =>
         idOf(name, sensorProcedureId, 'procedure')
+    // The layout a SET / RUN takes: learned from GET_PARTS (once, if no
+    // describe ran first).
+    const wire: SensorWire = {}
+    const nsVersion = async (): Promise<number> => {
+        if (wire.nsVersion === undefined) await listSensors(rpc, node, wire)
+        return wire.nsVersion ?? 0
+    }
     return {
         writable: opts.writable,
-        getSensors: () => describeSensors(rpc, node),
-        async setSetting(sensor, name, value) {
+        getSensors: () => describeSensors(rpc, node, wire),
+        async setSetting(sensor, name, value, channel) {
             guard()
-            const wire = typeof value === 'boolean' ? Number(value) : value
+            const wireValue = typeof value === 'boolean' ? Number(value) : value
             const id = idOf(name, sensorSettingId, 'setting')
-            const applied = await setSensorSetting(rpc, sensor, id, wire, node)
+            const applied = await setSensorSetting(rpc, sensor, id, wireValue, node, {
+                ch: channel,
+                nsVersion: await nsVersion(),
+            })
             return typeof value === 'boolean' ? applied !== 0 : applied
         },
-        async runProcedure(sensor, name, step) {
+        async runProcedure(sensor, name, step, channel) {
             guard()
             return sensorProcedureStatus(
                 await runSensorProcedure(
@@ -433,25 +570,38 @@ export function buildSensorApi(
                     procedureId(name),
                     STEPS[step],
                     node,
+                    { ch: chOf(channel), nsVersion: await nsVersion() },
                 ),
             )
         },
-        async getProcedureStatus(sensor, name) {
+        async getProcedureStatus(sensor, name, channel) {
             return sensorProcedureStatus(
                 await getSensorProcedureStatus(
                     rpc,
                     sensor,
                     procedureId(name),
                     node,
+                    chOf(channel),
                 ),
             )
         },
-        async getMetrics(sensor): Promise<readonly SensorReading[]> {
-            return (await getSensorMetrics(rpc, sensor, node)).map((m) => ({
+        async getMetrics(sensor, channel): Promise<readonly SensorReading[]> {
+            return (await getSensorMetrics(rpc, sensor, node, channel)).map((m) => ({
                 name: sensorMetricKey(m.id),
                 value: m.value,
                 max: m.max,
             }))
+        },
+        async getSuggestions(sensor, name, channel) {
+            if ((await nsVersion()) < 1) return []
+            const recs = await getSensorSuggestions(
+                rpc,
+                sensor,
+                procedureId(name),
+                channel ?? 0,
+                node,
+            )
+            return recs.map((r) => ({ name: sensorSettingKey(r.id), value: r.value }))
         },
     }
 }

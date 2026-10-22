@@ -199,6 +199,51 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         type: 'int',
         help: 'How long a key must read released before the release counts.',
     },
+    {
+        id: 0x40,
+        name: 'axisInvert',
+        macro: 'AXIS_INVERT',
+        label: 'Invert',
+        type: 'bool',
+        help: 'Reverse the axis direction.',
+    },
+    {
+        id: 0x41,
+        name: 'axisRadial',
+        macro: 'AXIS_RADIAL',
+        label: 'Radial stick',
+        type: 'bool',
+        help: 'Pair with the next axis as one stick: deadzones and curve act on the distance from centre.',
+    },
+    {
+        id: 0x42,
+        name: 'axisCurve',
+        macro: 'AXIS_CURVE',
+        label: 'Response curve',
+        type: 'enum',
+        options: [
+            { code: 0, name: 'linear', label: 'Linear' },
+            { code: 1, name: 'aggressive', label: 'Aggressive' },
+            { code: 2, name: 'relaxed', label: 'Relaxed' },
+            { code: 3, name: 'precise', label: 'Precise' },
+        ],
+    },
+    {
+        id: 0x43,
+        name: 'deadzoneInner',
+        macro: 'DEADZONE_INNER',
+        label: 'Centre deadzone',
+        type: 'int',
+        help: 'How far from the centre the axis must move before it reads.',
+    },
+    {
+        id: 0x44,
+        name: 'deadzoneOuter',
+        macro: 'DEADZONE_OUTER',
+        label: 'Edge deadzone',
+        type: 'int',
+        help: 'The band at the edge that already reads as full.',
+    },
 ]
 
 export const SENSOR_PROCEDURES: readonly RegistryProcedure[] = [
@@ -211,6 +256,15 @@ export const SENSOR_PROCEDURES: readonly RegistryProcedure[] = [
             'Keep moving the mouse while it measures.',
         ],
     },
+    {
+        id: 0x02,
+        name: 'axisCalibration',
+        label: 'Axis calibration',
+        phases: [
+            'Move the stick to every edge, slowly, then press Next.',
+            'Let the stick rest at the centre while it measures.',
+        ],
+    },
 ]
 
 export const SENSOR_METRICS: readonly RegistryMetric[] = [
@@ -218,7 +272,24 @@ export const SENSOR_METRICS: readonly RegistryMetric[] = [
     { id: 0x02, name: 'lifted', label: 'Lifted' },
     { id: 0x03, name: 'shutter', label: 'Shutter' },
     { id: 0x04, name: 'brightness', label: 'Brightness' },
+    { id: 0x10, name: 'raw', label: 'Raw reading' },
+    { id: 0x11, name: 'calMin', label: 'Calibrated low' },
+    { id: 0x12, name: 'calCentre', label: 'Calibrated centre' },
+    { id: 0x13, name: 'calMax', label: 'Calibrated high' },
+    { id: 0x14, name: 'fuzz', label: 'Noise filter' },
 ]
+
+/** IO kinds (GET_IO): bit 7 marks what a part accepts. */
+const IO_KINDS: Readonly<Record<number, string>> = {
+    0x01: 'key',
+    0x02: 'abs',
+    0x03: 'rel',
+    0x04: 'switch',
+    0x81: 'pixels',
+    0x82: 'level',
+    0x83: 'pulse',
+    0x84: 'display',
+}
 
 const CLASSES: Readonly<Record<number, SensorClass>> = {
     1: 'pointer',
@@ -227,6 +298,13 @@ const CLASSES: Readonly<Record<number, SensorClass>> = {
     4: 'analog',
     5: 'matrix',
     6: 'encoder',
+    7: 'buttons',
+    8: 'ledStrip',
+    9: 'led',
+    10: 'haptic',
+    11: 'display',
+    12: 'slider',
+    13: 'battery',
 }
 
 const UNITS: Readonly<Record<number, SensorUnit>> = {
@@ -311,3 +389,5 @@ export function sensorWireValue(
     if (typeof value === 'number') return value
     return registrySetting(key)?.options?.find((o) => o.name === value)?.code
 }
+
+export const sensorIoKind = (code: number): string => IO_KINDS[code] ?? hexKey(code)

@@ -212,7 +212,7 @@ function decodeMouseTables(
     }
     const st = table(TableId.Sensor)
     if (st) {
-        if (st.version !== 1) return DecodeCode.TABLE_VER
+        if (st.version < 1 || st.version > 2) return DecodeCode.TABLE_VER
         const sensor = readSensorTable(bytes, st.start, st.end)
         if (typeof sensor === 'string') return DecodeCode.TABLE_FRAME
         if (sensor.settings) out.sensor = sensor

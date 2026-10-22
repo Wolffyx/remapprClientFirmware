@@ -336,6 +336,8 @@ export interface SensorProcedureSpec {
     readonly phases: readonly string[]
     /** A finished run leaves a result the unit keeps (never in a config). */
     readonly hasResult: boolean
+    /** It runs on one channel (or every one) of a part that carries several. */
+    readonly perChannel?: boolean
 }
 
 /** A live reading, for a meter. */
@@ -353,6 +355,13 @@ export type SensorClass =
     | 'analog'
     | 'matrix'
     | 'encoder'
+    | 'buttons'
+    | 'ledStrip'
+    | 'led'
+    | 'haptic'
+    | 'display'
+    | 'slider'
+    | 'battery'
     | 'other'
 
 /** A setting as the device holds it now. */
@@ -362,6 +371,25 @@ export interface SensorSettingInfo extends SensorSettingSpec {
     /** Driven by the personality's own feature (a mouse's DPI or report
      *  rate), not set as a sensor setting. */
     readonly personality: boolean
+    /** One value per channel (an axis's deadzone): `value` / `default` are
+     *  channel 0's, `channels` every channel's, by index. */
+    readonly perChannel?: boolean
+    readonly channels?: readonly {
+        readonly value: SensorSettingValue
+        readonly default: SensorSettingValue
+    }[]
+}
+
+/** One run of channels a part emits or accepts (GET_IO): `kind` by registry
+ *  name (`abs`, `display`, …; a hex key for one this client does not know). */
+export interface SensorIo {
+    readonly kind: string
+    readonly output: boolean
+    readonly firstChannel: number
+    readonly count: number
+    /** Kind-specific: a display's width / height, an ABS axis's resolution. */
+    readonly a: number
+    readonly b: number
 }
 
 /** One sensor of a device and everything it describes. */
@@ -372,6 +400,10 @@ export interface SensorInfo {
     readonly cls: SensorClass
     /** The part, e.g. "PAW3395". */
     readonly model: string
+    /** Same units it carries (6 analog axes); 1 for a single unit. */
+    readonly channels: number
+    /** What it emits and accepts; empty from firmware that does not say. */
+    readonly io: readonly SensorIo[]
     readonly settings: readonly SensorSettingInfo[]
     readonly procedures: readonly SensorProcedureSpec[]
     readonly metrics: readonly SensorMetricSpec[]

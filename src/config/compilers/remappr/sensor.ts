@@ -116,8 +116,7 @@ export function readSensorTable(
     if (end - start < SENSOR_TBL_HDR_LEN) return 'sensor table header truncated'
     const r = new ByteReader(bytes)
     r.seek(start)
-    const count = r.u8()
-    r.u8() // reserved
+    const count = r.u16()
     if (start + SENSOR_TBL_HDR_LEN + count * SENSOR_TBL_ENTRY_LEN > end) {
         return 'sensor table truncated'
     }
@@ -126,10 +125,13 @@ export function readSensorTable(
     for (let i = 0; i < count; i++) {
         const sensor = r.u8()
         const id = r.u8()
-        r.u16() // reserved
+        const ch = r.u8()
+        r.u8() // reserved
         const value = r.u32() | 0
         index ??= sensor
-        if (sensor !== index) continue
+        // A document holds channel 0's values; a part's other channels
+        // belong to its own section (the axes of a joystick).
+        if (sensor !== index || ch !== 0) continue
         const bool = registrySetting(id)?.type === 'bool'
         settings[sensorSettingKey(id)] = bool ? value !== 0 : value
     }

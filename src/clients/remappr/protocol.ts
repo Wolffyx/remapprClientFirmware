@@ -1385,60 +1385,75 @@ export function parseCalSuggestion(d: Uint8Array): CalSuggestion[] {
     }))
 }
 
-/* ── SENSOR namespace (sensor-settings plan §3) ──────────────────────────── */
+/* ── PART namespace (0x0A, was SENSOR; firmware docs/part-wire-v1.md) ───── */
 
-/** SENSOR-namespace verbs — namespace-scoped, 0xE2-only, PROVISIONAL (the
- *  manifest lists the namespace at ns_version 0). Every verb names the sensor
- *  by its index; reads are plaintext-open, SET_SETTING and RUN_PROCEDURE are
- *  sealed and mutating. Every reply but SET_SETTING's starts with a version
- *  byte (1); a newer firmware may append, so a reader stops where it knows. */
+/** PART-namespace verbs — namespace-scoped, 0xE2-only. FROZEN at ns_version 1
+ *  (ns_version 0 = the provisional SENSOR layouts, still read: every reply
+ *  carries its own version byte, and the args a v0 device takes are built by
+ *  `nsVersion`). Every verb names the part by its index and, where it matters,
+ *  the channel (0 for a single-unit part); reads are plaintext-open,
+ *  SET_SETTING and RUN_PROCEDURE are sealed and mutating. */
 export const SensorVerb = {
     /** Arg: u8 first. Reply: see parseSensorsPage; ask again from first + n. */
     GET_SENSORS: 0x01,
-    /** Arg: u8 sensor | u8 position (in its settings list). See
-     *  parseSensorSetting. */
+    /** Arg: u8 part | u8 position [| u8 ch]. See parseSensorSetting. */
     GET_SETTING: 0x02,
-    /** Arg: u8 sensor | u8 id | i32 value. Reply: i32 applied (snapped to what
-     *  the hardware holds). Live until the next COMMIT, never stored. */
+    /** Arg: u8 part | u8 id | u8 ch | i32 value (v0: no ch). Reply: i32
+     *  applied (snapped to what the hardware holds). Live until the next
+     *  COMMIT, never stored. */
     SET_SETTING: 0x03,
-    /** Arg: u8 sensor | u8 position. See parseSensorProcedure. */
+    /** Arg: u8 part | u8 position. See parseSensorProcedure. */
     GET_PROCEDURE: 0x04,
-    /** Arg: u8 sensor | u8 id | u8 step (SensorStep). Reply: the status. */
+    /** Arg: u8 part | u8 id | u8 step (SensorStep) | u8 ch (v0: no ch; 0xFF
+     *  every channel). Reply: the status. */
     RUN_PROCEDURE: 0x05,
-    /** Arg: u8 sensor | u8 id. See parseSensorStatus. */
+    /** Arg: u8 part | u8 id [| u8 ch]. See parseSensorStatus. */
     GET_PROCEDURE_STATUS: 0x06,
-    /** Arg: u8 sensor. See parseSensorMetrics. ERR_STATE while a procedure
-     *  holds the sensor. */
+    /** Arg: u8 part [| u8 ch]. See parseSensorMetrics. ERR_STATE while a
+     *  procedure holds the part. */
     GET_METRICS: 0x07,
+    /** Arg: u8 part [| u8 first]. See parseSensorIoPage. ns_version 1. */
+    GET_IO: 0x08,
+    /** Arg: u8 part | u8 id | u8 ch. See parseSensorSuggestions. ns_version 1. */
+    GET_PROCEDURE_RESULT: 0x09,
 } as const
 
-/** Setting types (enum remappr_sensor_type). */
+/** Channel argument meaning every channel (RUN_PROCEDURE). */
+export const SENSOR_CH_ALL = 0xff
+
+/** Setting types (enum remappr_part_type). */
 export const SensorTypeCode = {
     BOOL: 1,
     INT: 2,
     ENUM: 3,
 } as const
 
-/** Setting flags (REMAPPR_SENSOR_FLAG_*). PERSONALITY: set by the
- *  personality's own feature (DPI, report rate), not as a sensor setting. */
+/** Setting flags (REMAPPR_PART_FLAG_*). PERSONALITY: set by the
+ *  personality's own feature (DPI, report rate), not as a part setting.
+ *  PER_CHANNEL: one value per channel. */
 export const SensorFlag = {
     ADVANCED: 1 << 0,
     NEEDS_PROCEDURE: 1 << 1,
     PERSONALITY: 1 << 2,
+    PER_CHANNEL: 1 << 3,
 } as const
 
 /** Procedure flags. HAS_RESULT: a finished run leaves a result the unit
- *  keeps (in its own storage, never in a config). */
+ *  keeps (in its own storage, never in a config). PER_CHANNEL: it runs on one
+ *  channel, or every one. */
 export const SensorProcFlag = {
     HAS_RESULT: 1 << 0,
+    PER_CHANNEL: 1 << 1,
 } as const
 
-/** RUN_PROCEDURE steps. */
+/** RUN_PROCEDURE steps. UNDO: back to the result before the last finish,
+ *  RESET or UNDO (ns_version 1). */
 export const SensorStep = {
     BEGIN: 0,
     NEXT: 1,
     CANCEL: 2,
     RESET: 3,
+    UNDO: 4,
 } as const
 
 /** Procedure states (GET_PROCEDURE_STATUS). */
@@ -1461,15 +1476,17 @@ export const SensorStatusFlag = {
     HAS_RESULT: 1 << 0,
 } as const
 
-/** One sensor from GET_SENSORS: its class (1 pointer, 2 touch, 3 IMU,
- *  4 analog) and how many settings, procedures and metrics it lists. */
+/** One part from GET_PARTS: its class, how many channels it carries and how
+ *  many settings, procedures, metrics and IO runs it lists. */
 export interface SensorRecord {
     index: number
     cls: number
     modelId: number
+    channels: number
     settings: number
     procedures: number
     metrics: number
+    io: number
     name: string
 }
 
@@ -1488,47 +1505,60 @@ function sensorName(d: Uint8Array, o: number, what: string): string {
     return ascii(d, o + 1, d[o])
 }
 
-function sensorReplyVersion(d: Uint8Array, min: number, what: string): void {
+/** The reply's version byte, one of `known`, or throws. */
+function sensorReplyVersion(
+    d: Uint8Array,
+    min: number,
+    what: string,
+    known: readonly number[] = [1],
+): number {
     if (d.length < min) throw new Error(`${what} reply too short`)
-    if (d[0] !== 1) throw new Error(`unknown ${what} version ${d[0]}`)
+    if (!known.includes(d[0])) throw new Error(`unknown ${what} version ${d[0]}`)
+    return d[0]
 }
 
-const SENSOR_REC_LEN = 8
+/** Record bytes before the name: v1 (ns_version 0) and v2 (channels, io). */
+const SENSOR_REC_LEN: Readonly<Record<number, number>> = { 1: 8, 2: 10 }
 
-/** GET_SENSORS reply: u8 ver | u8 total | u8 n | n × {u8 index | u8 class |
- *  u16 model_id | u8 settings | u8 procedures | u8 metrics | u8 name_len |
- *  name}. */
+/** GET_PARTS reply: u8 ver | u8 total | u8 n | n × {u8 index | u8 class |
+ *  u16 model_id | [v2: u8 channels] | u8 settings | u8 procedures | u8 metrics
+ *  | [v2: u8 io] | u8 name_len | name}. */
 export function parseSensorsPage(d: Uint8Array): SensorsPage {
-    sensorReplyVersion(d, 3, 'sensors')
+    const ver = sensorReplyVersion(d, 3, 'sensors', [1, 2])
+    const len = SENSOR_REC_LEN[ver]
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
     const sensors: SensorRecord[] = []
     let o = 3
     for (let i = 0; i < d[2]; i++) {
-        if (d.length < o + SENSOR_REC_LEN) throw new Error('sensors reply too short')
-        const name = sensorName(d, o + 7, 'sensors')
+        if (d.length < o + len) throw new Error('sensors reply too short')
+        const c = ver === 2 ? 1 : 0 // the channel byte shifts the counts
+        const name = sensorName(d, o + len - 1, 'sensors')
         sensors.push({
             index: d[o],
             cls: d[o + 1],
             modelId: dv.getUint16(o + 2, true),
-            settings: d[o + 4],
-            procedures: d[o + 5],
-            metrics: d[o + 6],
+            channels: ver === 2 ? Math.max(1, d[o + 4]) : 1,
+            settings: d[o + 4 + c],
+            procedures: d[o + 5 + c],
+            metrics: d[o + 6 + c],
+            io: ver === 2 ? d[o + 8] : 0,
             name,
         })
-        o += SENSOR_REC_LEN + name.length
+        o += len + name.length
     }
     return { total: d[1], sensors }
 }
 
-/** One setting from GET_SETTING, as the device describes it. `value` is the
- *  one in force, `dflt` what a reset goes back to (the board's default).
- *  INT carries min / max / step; ENUM its option codes, which of them
- *  (bit i = options[i]) need `procedure`'s stored result first. */
+/** One setting from GET_SETTING, as the device describes it, on channel
+ *  `ch`. `value` is the one in force, `dflt` what a reset goes back to (the
+ *  board's default). INT carries min / max / step; ENUM its option codes,
+ *  which of them (bit i = options[i]) need `procedure`'s stored result first. */
 export interface SensorSettingRecord {
     id: number
     type: number
     flags: number
     unit: number
+    ch: number
     value: number
     dflt: number
     min?: number
@@ -1540,25 +1570,30 @@ export interface SensorSettingRecord {
     name: string
 }
 
-const SETTING_HDR_LEN = 13
+/** Header bytes: v1 (ns_version 0) and v2 (a channel after unit). */
+const SETTING_HDR_LEN: Readonly<Record<number, number>> = { 1: 13, 2: 14 }
 const SETTING_INT_LEN = 12
 
-/** GET_SETTING reply: u8 ver | u8 id | u8 type | u8 flags | u8 unit | i32
- *  value | i32 default, then INT: i32 min | i32 max | i32 step; ENUM: u8 n |
- *  n × u8 code | u8 gated_mask | u8 procedure; then u8 name_len | name. */
+/** GET_SETTING reply: u8 ver | u8 id | u8 type | u8 flags | u8 unit | [v2: u8
+ *  ch] | i32 value | i32 default, then INT: i32 min | i32 max | i32 step; ENUM:
+ *  u8 n | n × u8 code | u8 gated_mask | u8 procedure; then u8 name_len | name. */
 export function parseSensorSetting(d: Uint8Array): SensorSettingRecord {
-    sensorReplyVersion(d, SETTING_HDR_LEN, 'sensor setting')
+    const ver = sensorReplyVersion(d, 13, 'sensor setting', [1, 2])
+    const hdr = SETTING_HDR_LEN[ver]
+    if (d.length < hdr) throw new Error('sensor setting reply too short')
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const at = hdr - 8 // value, then default
     const rec: SensorSettingRecord = {
         id: d[1],
         type: d[2],
         flags: d[3],
         unit: d[4],
-        value: dv.getInt32(5, true),
-        dflt: dv.getInt32(9, true),
+        ch: ver === 2 ? d[5] : 0,
+        value: dv.getInt32(at, true),
+        dflt: dv.getInt32(at + 4, true),
         name: '',
     }
-    let o = SETTING_HDR_LEN
+    let o = hdr
     if (rec.type === SensorTypeCode.INT) {
         if (d.length < o + SETTING_INT_LEN)
             throw new Error('sensor setting reply too short')
@@ -1654,23 +1689,101 @@ export function parseSensorMetrics(d: Uint8Array): SensorMetricRecord[] {
     })
 }
 
+/** One run of channels a part emits (kind bit 7 clear) or accepts (set):
+ *  `a` / `b` are kind-specific (a display's width / height, say). */
+export interface SensorIoRecord {
+    kind: number
+    firstCh: number
+    count: number
+    flags: number
+    a: number
+    b: number
+}
+
+export interface SensorIoPage {
+    total: number
+    io: SensorIoRecord[]
+}
+
+const IO_REC_LEN = 8
+
+/** GET_IO reply: u8 ver | u8 total | u8 n | n × {u8 kind | u8 first_ch |
+ *  u8 count | u8 flags | u16 a | u16 b}. */
+export function parseSensorIoPage(d: Uint8Array): SensorIoPage {
+    sensorReplyVersion(d, 3, 'sensor io')
+    const n = d[2]
+    if (d.length < 3 + n * IO_REC_LEN) throw new Error('sensor io reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const io = Array.from({ length: n }, (_, i) => {
+        const o = 3 + i * IO_REC_LEN
+        return {
+            kind: d[o],
+            firstCh: d[o + 1],
+            count: d[o + 2],
+            flags: d[o + 3],
+            a: dv.getUint16(o + 4, true),
+            b: dv.getUint16(o + 6, true),
+        }
+    })
+    return { total: d[1], io }
+}
+
+/** One setting value a finished procedure suggests. */
+export interface SensorSuggestionRecord {
+    id: number
+    value: number
+}
+
+const SUGGEST_REC_LEN = 5
+
+/** GET_PROCEDURE_RESULT reply: u8 ver | u8 n | n × {u8 setting_id | i32 value}. */
+export function parseSensorSuggestions(d: Uint8Array): SensorSuggestionRecord[] {
+    sensorReplyVersion(d, 2, 'sensor result')
+    const n = d[1]
+    if (d.length < 2 + n * SUGGEST_REC_LEN)
+        throw new Error('sensor result reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    return Array.from({ length: n }, (_, i) => ({
+        id: d[2 + i * SUGGEST_REC_LEN],
+        value: dv.getInt32(3 + i * SUGGEST_REC_LEN, true),
+    }))
+}
+
 /** SET_SETTING reply: i32 applied (no version byte). */
 export function parseSensorApplied(d: Uint8Array): number {
     if (d.length < 4) throw new Error('sensor set reply too short')
     return new DataView(d.buffer, d.byteOffset, d.byteLength).getInt32(0, true)
 }
 
-/** SET_SETTING arg: u8 sensor | u8 id | i32 value. */
+/** SET_SETTING arg: u8 part | u8 id | u8 ch | i32 value; a device at
+ *  ns_version 0 takes no channel (and only channel 0 exists there). */
 export function buildSensorSetArg(
     sensor: number,
     id: number,
     value: number,
+    ch = 0,
+    nsVersion = 1,
 ): Uint8Array {
-    const out = new Uint8Array(6)
+    const withCh = nsVersion >= 1
+    const out = new Uint8Array(withCh ? 7 : 6)
     out[0] = sensor
     out[1] = id
-    new DataView(out.buffer).setInt32(2, value, true)
+    if (withCh) out[2] = ch
+    new DataView(out.buffer).setInt32(withCh ? 3 : 2, value, true)
     return out
+}
+
+/** RUN_PROCEDURE arg: u8 part | u8 id | u8 step | u8 ch (ns_version 0: no ch). */
+export function buildSensorRunArg(
+    sensor: number,
+    procedure: number,
+    step: number,
+    ch = 0,
+    nsVersion = 1,
+): Uint8Array {
+    return nsVersion >= 1
+        ? new Uint8Array([sensor, procedure, step, ch])
+        : new Uint8Array([sensor, procedure, step])
 }
 
 /** Standard HID report-rate steps (Hz), ascending — mirrors the firmware's

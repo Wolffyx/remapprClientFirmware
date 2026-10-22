@@ -70,6 +70,8 @@ export class DemoSensor implements SensorApi {
                 index: 0,
                 cls: 'pointer',
                 model: 'Demo sensor',
+                channels: 1,
+                io: [],
                 settings,
                 procedures: this.described.procedures,
                 metrics: this.described.metrics,
@@ -139,6 +141,10 @@ export class DemoSensor implements SensorApi {
         )
     }
 
+    getSuggestions(): Promise<readonly { name: string; value: number }[]> {
+        return Promise.resolve([])
+    }
+
     // --- procedures ---------------------------------------------------------
 
     private readonly steps: Readonly<
@@ -160,6 +166,10 @@ export class DemoSensor implements SensorApi {
         cancel: () => {
             this.run = null
             this.last = IDLE
+        },
+        // The demo keeps one result, so there is nothing earlier to go back to.
+        undo: () => {
+            throw new Error('Nothing to undo')
         },
         reset: (name) => {
             this.run = null

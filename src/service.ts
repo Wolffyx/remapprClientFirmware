@@ -710,7 +710,7 @@ export interface JoystickApi {
 
 /** A RUN_PROCEDURE step: begin (phase 1), next (end the phase in hand),
  *  cancel (stop; a stored result stays), reset (forget the stored result). */
-export type SensorProcedureStep = 'begin' | 'next' | 'cancel' | 'reset'
+export type SensorProcedureStep = 'begin' | 'next' | 'cancel' | 'reset' | 'undo'
 
 /** A procedure's progress. `phase` counts from 1 while it runs (0 else);
  *  `progress` / `total` are what a counting phase has done (0 / 0 when the
@@ -752,17 +752,33 @@ export interface SensorApi {
         sensor: number,
         name: string,
         value: SensorSettingValue,
+        channel?: number,
     ): Promise<SensorSettingValue>
     /** One step of a procedure; resolves to its status after the step.
-     *  Rejects a step out of turn. */
+     *  Rejects a step out of turn. `channel` 'all' runs a per-channel
+     *  procedure on every channel at once. */
     runProcedure(
         sensor: number,
         name: string,
         step: SensorProcedureStep,
+        channel?: number | 'all',
     ): Promise<SensorProcedureStatus>
-    getProcedureStatus(sensor: number, name: string): Promise<SensorProcedureStatus>
-    /** The live readings. Rejects while a procedure holds the sensor. */
-    getMetrics(sensor: number): Promise<readonly SensorReading[]>
+    getProcedureStatus(
+        sensor: number,
+        name: string,
+        channel?: number | 'all',
+    ): Promise<SensorProcedureStatus>
+    /** The live readings (of one channel). Rejects while a procedure holds
+     *  the sensor. */
+    getMetrics(sensor: number, channel?: number): Promise<readonly SensorReading[]>
+    /** What a finished procedure suggests for the part's own settings, by
+     *  setting name (an axis calibration's deadzones); empty when it measured
+     *  none or the firmware cannot say. */
+    getSuggestions(
+        sensor: number,
+        name: string,
+        channel?: number,
+    ): Promise<readonly { name: string; value: number }[]>
 }
 
 // Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as

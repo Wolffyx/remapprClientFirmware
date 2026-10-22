@@ -347,6 +347,8 @@ const PAW: SensorInfo = {
     index: 0,
     cls: 'pointer',
     model: 'PAW3395',
+    channels: 1,
+    io: [],
     settings: [
         {
             name: 'resolution',
@@ -429,6 +431,7 @@ function fakeSensor() {
         runProcedure: () => Promise.reject(new Error('unused')),
         getProcedureStatus: () => Promise.reject(new Error('unused')),
         getMetrics: () => Promise.resolve([]),
+        getSuggestions: () => Promise.resolve([]),
     }
     return { api, sets }
 }
