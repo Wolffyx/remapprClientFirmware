@@ -175,6 +175,30 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         type: 'int',
         help: REST_HELP,
     },
+    {
+        id: 0x30,
+        name: 'scanPeriodMs',
+        macro: 'SCAN_PERIOD_MS',
+        label: 'Scan period',
+        type: 'int',
+        help: 'Time between full scans of the key matrix.',
+    },
+    {
+        id: 0x31,
+        name: 'debouncePressMs',
+        macro: 'DEBOUNCE_PRESS_MS',
+        label: 'Press debounce',
+        type: 'int',
+        help: 'How long a key must read pressed before the press counts.',
+    },
+    {
+        id: 0x32,
+        name: 'debounceReleaseMs',
+        macro: 'DEBOUNCE_RELEASE_MS',
+        label: 'Release debounce',
+        type: 'int',
+        help: 'How long a key must read released before the release counts.',
+    },
 ]
 
 export const SENSOR_PROCEDURES: readonly RegistryProcedure[] = [
@@ -201,6 +225,7 @@ const CLASSES: Readonly<Record<number, SensorClass>> = {
     2: 'touch',
     3: 'imu',
     4: 'analog',
+    5: 'matrix',
 }
 
 const UNITS: Readonly<Record<number, SensorUnit>> = {

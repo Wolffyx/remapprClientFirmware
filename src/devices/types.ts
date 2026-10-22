@@ -346,7 +346,13 @@ export interface SensorMetricSpec {
     readonly max: number
 }
 
-export type SensorClass = 'pointer' | 'touch' | 'imu' | 'analog' | 'other'
+export type SensorClass =
+    | 'pointer'
+    | 'touch'
+    | 'imu'
+    | 'analog'
+    | 'matrix'
+    | 'other'
 
 /** A setting as the device holds it now. */
 export interface SensorSettingInfo extends SensorSettingSpec {
