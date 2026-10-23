@@ -1,6 +1,7 @@
 // pattern-check: skip — node-enumeration test fixtures against a fake rpc.
 import { describe, expect, it } from 'vitest'
 import {
+    changeChannels,
     clearAllBonds,
     enterDongleBootloader,
     forgetNode,
@@ -248,13 +249,14 @@ describe('dongle pairing control (DONGLE namespace)', () => {
     })
 
     it('getLinkStats decodes the header and per-channel records', async () => {
-        // version 1, 2 channels, gen 7, pool 6, window 64 LE, fail 25%, rsvd.
+        // version 1, 2 channels, gen 7, pool 6, window 64 LE, fail 25%, flags:
+        // a channel change rolling out.
         const reply = new Uint8Array([
-            1, 2, 7, 6, 64, 0, 25, 0,
-            // ch 2: ok 300 (0x012c), fail 5
-            2, 0, 0x2c, 0x01, 5, 0,
-            // ch 79: ok 10, fail 260 (0x0104)
-            79, 0, 10, 0, 0x04, 0x01,
+            1, 2, 7, 6, 64, 0, 25, 1,
+            // ch 2: last verdict 12 %, ok 300 (0x012c), fail 5
+            2, 12, 0x2c, 0x01, 5, 0,
+            // ch 79: no verdict yet (0xff), ok 10, fail 260 (0x0104)
+            79, 0xff, 10, 0, 0x04, 0x01,
         ])
         const rpc = fakeRpc(async (ns, verb, arg) => {
             expect(ns).toBe(Namespace.DONGLE)
@@ -267,10 +269,54 @@ describe('dongle pairing control (DONGLE namespace)', () => {
         expect(stats.poolCount).toBe(6)
         expect(stats.window).toBe(64)
         expect(stats.failPercent).toBe(25)
+        expect(stats.changeInProgress).toBe(true)
         expect(stats.channels).toEqual([
-            { channel: 2, ok: 300, fail: 5 },
-            { channel: 79, ok: 10, fail: 260 },
+            { channel: 2, ok: 300, fail: 5, lastFailPercent: 12 },
+            { channel: 79, ok: 10, fail: 260, lastFailPercent: null },
         ])
+    })
+
+    it('changeChannels sends the mode and decodes the planned map', async () => {
+        const calls: (Uint8Array | undefined)[] = []
+        const rpc = fakeRpc(async (ns, verb, arg) => {
+            expect(ns).toBe(Namespace.DONGLE)
+            expect(verb).toBe(DongleVerb.CHANGE_CHANNELS)
+            calls.push(arg)
+            // version 1, 2 planned, gen 9 when done, 8 channels
+            return {
+                status: Status.OK,
+                data: new Uint8Array([1, 2, 9, 8, 2, 62, 14, 20, 26, 50, 38, 44]),
+            }
+        })
+        const change = await changeChannels(rpc, {
+            kind: 'list',
+            channels: [62, 2, 14, 20, 26, 38, 44, 50],
+        })
+        expect(change).toEqual({
+            planned: 2,
+            mapGeneration: 9,
+            channels: [2, 62, 14, 20, 26, 50, 38, 44],
+        })
+        await changeChannels(rpc, { kind: 'bad' })
+        expect(Array.from(calls[0]!)).toEqual([1, 8, 62, 2, 14, 20, 26, 38, 44, 50])
+        expect(Array.from(calls[1]!)).toEqual([0])
+    })
+
+    it('changeChannels rejects a busy dongle or a short reply', async () => {
+        const busy = fakeRpc(async () => ({
+            status: Status.ERR_STATE,
+            data: new Uint8Array(),
+        }))
+        await expect(changeChannels(busy, { kind: 'bad' })).rejects.toThrow(
+            /CHANGE_CHANNELS → ERR_STATE/,
+        )
+        const truncated = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([1, 1, 3, 8, 2, 8]),
+        }))
+        await expect(changeChannels(truncated, { kind: 'bad' })).rejects.toThrow(
+            /truncated/,
+        )
     })
 
     it('getLinkStats rejects a truncated or unknown-version reply', async () => {

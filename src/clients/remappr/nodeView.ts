@@ -20,6 +20,7 @@ import {
 } from './deviceServices'
 import { discover, type DiscoveryResult } from './discovery'
 import {
+    changeChannels,
     clearAllBonds,
     forgetNode,
     getLinkStats,
@@ -28,6 +29,7 @@ import {
     openPairWindow,
     setDongleNkro,
     unpairRadio,
+    type ChannelChange,
     type LinkStats,
     type PipeTable,
 } from './nodes'
@@ -188,6 +190,13 @@ export function buildNodesApi(rpc: RemapprRpc): NodesApi {
 
         getLinkStats(): Promise<LinkStats> {
             return getLinkStats(rpc)
+        },
+
+        changeChannels(channels?: number[]): Promise<ChannelChange> {
+            return changeChannels(
+                rpc,
+                channels ? { kind: 'list', channels } : { kind: 'bad' },
+            )
         },
 
         getPipeTable(): Promise<PipeTable> {
