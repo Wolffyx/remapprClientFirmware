@@ -19,6 +19,7 @@ import type {
     JoystickButtonAction,
 } from '../../config/types'
 import { JOYSTICK_AXIS_IDS } from '../../config/compilers/remappr/joystick'
+import { BATTERY_SHOW_ACTION } from '../../devices/battery'
 import { defaultLayout } from '../../devices/defaultLayout'
 import type {
     ButtonBinding,
@@ -139,6 +140,7 @@ const ACTION_ID: {
     button: (a) => `${BTN}${a.button}`,
     hat: (a) => `${HAT}${a.dir}`,
     axis: (a) => `${AXIS}${a.axis}:${a.value}`,
+    batteryShow: () => BATTERY_SHOW_ACTION,
 }
 
 /** A gamepad action as a catalog id (null = nothing, Disabled). */
@@ -154,6 +156,7 @@ export function parseActionId(
     id: string | null,
 ): JoystickButtonAction | undefined {
     if (id === null) return { action: 'none' }
+    if (id === BATTERY_SHOW_ACTION) return { action: 'batteryShow' }
     if (id.startsWith(BTN))
         return { action: 'button', button: Number(id.slice(BTN.length)) }
     if (id.startsWith(HAT))

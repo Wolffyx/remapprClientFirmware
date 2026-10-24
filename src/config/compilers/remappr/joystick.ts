@@ -19,6 +19,7 @@ import {
     ACT_GAMEPAD_BUTTON,
     ACT_GAMEPAD_HAT,
     ACT_NONE,
+    ACT_SYSTEM,
     type ActionBindingRecord,
     JOY_AXIS_OFF,
     JOY_FLAG_INVERT,
@@ -26,6 +27,7 @@ import {
     JOYSTICK_TBL_AXIS_LEN,
     JOYSTICK_TBL_HDR_LEN,
     type JoystickTable,
+    SystemAction,
 } from './blobWriter'
 import { ByteReader, type TableFrame } from './decode'
 
@@ -134,6 +136,11 @@ const TO_WIRE: {
         code: JOYSTICK_AXIS_IDS.indexOf(a.axis),
         arg0: a.value & 0xffff,
     }),
+    batteryShow: () => ({
+        kind: ACT_SYSTEM,
+        code: SystemAction.battery_show,
+        arg0: 0,
+    }),
 }
 
 function toWire(a: JoystickButtonAction): Wire {
@@ -162,6 +169,8 @@ const FROM_WIRE: Readonly<
         const value = arg0 >= 0x8000 ? arg0 - 0x10000 : arg0
         return axis ? { action: 'axis', axis, value } : null
     },
+    [ACT_SYSTEM]: (code) =>
+        code === SystemAction.battery_show ? { action: 'batteryShow' } : null,
 }
 
 /**

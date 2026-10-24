@@ -845,11 +845,12 @@ export interface ConfigMouse {
     [k: string]: unknown
 }
 
-/** What a mouse button can do besides report a button (a DEVICE action,
- *  firmware action.h enum remappr_device_action). `dpi` is required for
- *  dpiSet and sniper. */
+/** What a mouse button can do besides report a button: a DEVICE action
+ *  (firmware action.h enum remappr_device_action; `dpi` is required for
+ *  dpiSet and sniper), or batteryShow (SYSTEM: show the charge on the
+ *  mouse's LEDs / display). */
 export interface MouseButtonAction {
-    action: 'dpiCycle' | 'dpiUp' | 'dpiDown' | 'dpiSet' | 'sniper'
+    action: 'dpiCycle' | 'dpiUp' | 'dpiDown' | 'dpiSet' | 'sniper' | 'batteryShow'
     dpi?: number
 }
 
@@ -881,12 +882,14 @@ export interface JoystickAxisConfig {
 
 /** What a joystick button can do (TBL_ACTION_BINDING, firmware action.h
  *  GAMEPAD_* kinds): report gamepad button 1..32, hold a hat direction
- *  (0 up, clockwise to 7), hold an axis at a value, or nothing. */
+ *  (0 up, clockwise to 7), hold an axis at a value, show the battery on the
+ *  joystick's LEDs / display (SYSTEM), or nothing. */
 export type JoystickButtonAction =
     | { action: 'none' }
     | { action: 'button'; button: number }
     | { action: 'hat'; dir: number }
     | { action: 'axis'; axis: JoystickAxisId; value: number }
+    | { action: 'batteryShow' }
 
 /** Joystick settings compiled to TBL_JOYSTICK + TBL_ACTION_BINDING
  *  (input-layout plan §4). Calibration belongs to the unit and is never here. */

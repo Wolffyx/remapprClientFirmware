@@ -906,7 +906,7 @@ export const BoardSchema = z
 const DPI = z.number().int().min(1).max(0xffff)
 export const MouseButtonActionSchema = z
     .object({
-        action: z.enum(['dpiCycle', 'dpiUp', 'dpiDown', 'dpiSet', 'sniper']),
+        action: z.enum(['dpiCycle', 'dpiUp', 'dpiDown', 'dpiSet', 'sniper', 'batteryShow']),
         dpi: DPI.optional(),
     })
     .refine((a) => a.dpi !== undefined || !['dpiSet', 'sniper'].includes(a.action), {
@@ -1123,6 +1123,7 @@ export const JoystickButtonActionSchema = z
             button: z.number().int().min(1).max(32),
         }),
         z.object({ action: z.literal('hat'), dir: z.number().int().min(0).max(7) }),
+        z.object({ action: z.literal('batteryShow') }),
         z.object({
             action: z.literal('axis'),
             axis: z.enum(JOYSTICK_AXES),

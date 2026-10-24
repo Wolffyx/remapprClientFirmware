@@ -3,7 +3,7 @@
 // its own setting. Firmware-neutral: any device whose firmware describes a
 // battery part has one, nothing here names a firmware.
 import type { BatteryState, SensorApi, SensorReading } from '../service'
-import type { SensorInfo } from './types'
+import type { ControlsCatalog, SensorInfo } from './types'
 
 /** The device's battery part, if it describes one. */
 export const batteryPart = (
@@ -38,3 +38,28 @@ export async function readBattery(
 /** Low = at or below the threshold and not charging. */
 export const isBatteryLow = (b: BatteryState, lowPct: number): boolean =>
     !b.charging && b.level <= lowPct
+
+/** The catalog id of "show the charge on the device's LEDs / display", for
+ *  any device whose firmware lets a button do it. */
+export const BATTERY_SHOW_ACTION = 'sys:battery'
+
+/** `catalog` with the show-battery action, in a "Device" group. The adapter
+ *  decides when (its device has a battery, or a button already binds it). */
+export function withBatteryShow(catalog: ControlsCatalog): ControlsCatalog {
+    return {
+        ...catalog,
+        groups: [
+            ...catalog.groups,
+            { id: 'device', label: 'Device', category: 'system' },
+        ],
+        actions: [
+            ...catalog.actions,
+            {
+                id: BATTERY_SHOW_ACTION,
+                label: 'Show battery',
+                group: 'device',
+                category: 'system',
+            },
+        ],
+    }
+}

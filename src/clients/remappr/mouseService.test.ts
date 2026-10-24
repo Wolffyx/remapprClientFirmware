@@ -302,6 +302,31 @@ describe('RemapprMouseService', () => {
         ).toEqual({ battery: true, powerOff: true })
     })
 
+    it('offers show-battery only with a battery, or when a button binds it', async () => {
+        const ids = async (hwCaps?: number, doc: ConfigDevice = DOC) =>
+            (await make({ hwCaps }, doc).svc.controls.getCatalog()).actions.map(
+                (a) => a.id,
+            )
+        expect(await ids(HwCap.USB)).not.toContain('sys:battery')
+        expect(await ids(HwCap.USB | HwCap.BATTERY)).toContain('sys:battery')
+        const bound = applyMouseBinding(DOC, 'back', { a: 'sys:battery' })
+        expect(await ids(HwCap.USB, bound)).toContain('sys:battery')
+    })
+
+    it('binds show-battery to a button and gives the button back', () => {
+        const doc = applyMouseBinding(DOC, 'back', { a: 'sys:battery' })
+        expect(doc.mouse?.buttonActions?.[3]).toEqual({ action: 'batteryShow' })
+        expect(mouseBindings(doc.mouse, MOTION, null).back).toEqual({
+            a: 'sys:battery',
+        })
+        const dpi = mouseCatalog(MOTION, null, doc.mouse).actions.filter(
+            (a) => a.group === 'dpi',
+        )
+        expect(dpi.map((a) => a.id)).not.toContain('sys:battery')
+        const back = applyMouseBinding(doc, 'back', { a: 'btn:3' })
+        expect(back.mouse).toEqual(DOC.mouse)
+    })
+
     it('draws a sensor only when the mouse reports a pointer', async () => {
         const ids = async (hwCaps?: number) => {
             const { svc } = make({ hwCaps })

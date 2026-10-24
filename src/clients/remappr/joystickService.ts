@@ -7,6 +7,7 @@
 // .joystick); the live readout polls GET_AXIS_STATE while someone listens.
 import type { ConfigDevice } from '../../config/device'
 import { ProtocolError } from '../../errors'
+import { withBatteryShow } from '../../devices/battery'
 import { KeylessServiceBase } from '../../devices/keylessService'
 import {
     createLayoutOverride,
@@ -289,12 +290,26 @@ export class RemapprJoystickService extends KeylessServiceBase {
         }
     }
 
+    /** Show-battery is offered when the joystick has a battery, or a button
+     *  already binds it (so the bound action keeps its label). */
+    private offersBatteryShow(): boolean {
+        return (
+            !!this.capabilities.power?.battery ||
+            !!this.draft?.joystick?.buttonActions?.some(
+                (a) => a?.action === 'batteryShow',
+            )
+        )
+    }
+
     private readControls(): ControlsApi {
         return {
             getModel: () => Promise.resolve(this.layout.model()),
             getCatalog: async () => {
                 await this.load()
-                return joystickCatalog(this.draft?.joystick, this.inputs)
+                const catalog = joystickCatalog(this.draft?.joystick, this.inputs)
+                return this.offersBatteryShow()
+                    ? withBatteryShow(catalog)
+                    : catalog
             },
             getProfiles: () =>
                 Promise.resolve({ profiles: [PROFILE], activeId: PROFILE.id }),

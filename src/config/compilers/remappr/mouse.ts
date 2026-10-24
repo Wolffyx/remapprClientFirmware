@@ -7,11 +7,12 @@
 // divisor and the button map; version 3 the DPI stages. A config is written at
 // the lowest version its fields need, so firmware that only reads an older one
 // still takes it. A mouse device's button actions ride TBL_ACTION_BINDING
-// (id 17, kind DEVICE). Byte layout mirrors firmware
+// (id 17, kind DEVICE; show-battery is kind SYSTEM). Byte layout mirrors firmware
 // include/remappr/config_blob.h (TBL_MOUSE, TBL_ACTION_BINDING) and action.h.
 import type { ConfigMouse, MouseButtonAction } from '../../types'
 import {
     ACT_DEVICE,
+    ACT_SYSTEM,
     type ActionBindingRecord,
     DeviceAction,
     MOUSE_BUTTON_OFF,
@@ -21,6 +22,7 @@ import {
     MOUSE_TBL_V3_TAIL_LEN,
     MouseFlag,
     type MouseTable,
+    SystemAction,
 } from './blobWriter'
 import { ByteReader, type TableFrame } from './decode'
 
@@ -141,20 +143,32 @@ const NAME_BY_CODE = Object.fromEntries(
     Object.entries(DeviceAction).map(([name, code]) => [code, name]),
 ) as Record<number, MouseButtonAction['action']>
 
+type Wire = Pick<ActionBindingRecord, 'kind' | 'code' | 'arg0'>
+
+/** A button action on the wire: show-battery is a SYSTEM verb, the rest are
+ *  DEVICE actions carrying their DPI in arg0. */
+function toWire(a: MouseButtonAction): Wire {
+    if (a.action === 'batteryShow') {
+        return { kind: ACT_SYSTEM, code: SystemAction.battery_show, arg0: 0 }
+    }
+    return { kind: ACT_DEVICE, code: DeviceAction[a.action], arg0: a.dpi ?? 0 }
+}
+
+/** A wire record back to a button action; null for one this client does not
+ *  know (another kind, code or system verb). */
+function fromWire(kind: number, code: number, dpi: number): MouseButtonAction | null {
+    if (kind === ACT_SYSTEM) {
+        return code === SystemAction.battery_show ? { action: 'batteryShow' } : null
+    }
+    const action = kind === ACT_DEVICE ? NAME_BY_CODE[code] : undefined
+    if (!action) return null
+    return dpi ? { action, dpi } : { action }
+}
+
 /** The button actions as TBL_ACTION_BINDING records (none = no table). */
 export function mouseActionRecords(m: ConfigMouse): ActionBindingRecord[] {
     return (m.buttonActions ?? []).flatMap((a, position) =>
-        a
-            ? [
-                  {
-                      position,
-                      kind: ACT_DEVICE,
-                      code: DeviceAction[a.action],
-                      arg0: a.dpi ?? 0,
-                      arg1: 0,
-                  },
-              ]
-            : [],
+        a ? [{ position, ...toWire(a), arg1: 0 }] : [],
     )
 }
 
@@ -180,11 +194,9 @@ export function readMouseActions(
         const code = r.u16()
         const dpi = r.u16()
         r.u16() // arg1
-        const action = NAME_BY_CODE[code]
-        if (kind !== ACT_DEVICE || !action || position >= MOUSE_ACTION_POSITIONS) {
-            continue
-        }
-        out[position] = dpi ? { action, dpi } : { action }
+        const action = fromWire(kind, code, dpi)
+        if (!action || position >= MOUSE_ACTION_POSITIONS) continue
+        out[position] = action
     }
     return out.some(Boolean) ? out : undefined
 }
