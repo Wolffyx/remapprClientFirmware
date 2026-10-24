@@ -471,9 +471,15 @@ export interface NodesApi {
     setNkro(enabled?: boolean): Promise<boolean>
 
     /** Read the dongle's radio link stats: the live hop map with per-channel
-     *  packet-error counters and a generation counter that bumps on every
-     *  adaptive channel swap. Idempotent read for a diagnostics view. */
+     *  packet-error counters, each channel's last verdict and a generation
+     *  counter. Idempotent read for a diagnostics view. */
     getLinkStats(): Promise<RadioLinkStats>
+
+    /** Move every connected node to new channels: the failing ones replaced
+     *  (omit `channels`), or an explicit map. The receiver never changes them
+     *  on its own (nodes remember them); it rolls a change out a channel at a
+     *  time. Rejects while a change runs or on a refused list. */
+    changeChannels(channels?: number[]): Promise<RadioChannelChange>
 
     /** Read the dongle's raw radio pipe table: every pipe bonded or not, plus
      *  the pairing-window state — the diagnosis view behind `list()` (incomplete
@@ -489,19 +495,33 @@ export interface RadioChannelStat {
     channel: number
     ok: number
     fail: number
+    /** Failure % of the last full window, or null before the first verdict. */
+    lastFailPercent: number | null
 }
 
 /** Radio link diagnostics for a multi-node receiver (NodesApi.getLinkStats). */
 export interface RadioLinkStats {
-    /** Hop-map generation — bumps (mod 256) on every adaptive channel swap. */
+    /** Hop-map generation — bumps (mod 256) once per changed channel. */
     mapGeneration: number
     /** Replacement candidates outside the active map. */
     poolCount: number
-    /** Samples per channel before a keep/swap verdict. */
+    /** Samples per channel before a verdict. */
     window: number
-    /** Failure percentage that triggers an adaptive swap. */
+    /** Failure percentage over which a channel counts as bad. */
     failPercent: number
+    /** A channel change is still rolling out. */
+    changeInProgress: boolean
     channels: RadioChannelStat[]
+}
+
+/** A started channel change (NodesApi.changeChannels). */
+export interface RadioChannelChange {
+    /** Channels that will change; 0 = nothing to change. */
+    planned: number
+    /** Map generation once done. */
+    mapGeneration: number
+    /** The map being rolled out. */
+    channels: number[]
 }
 
 // pattern-check: skip — plain DTO interfaces mirroring the pipe-table wire

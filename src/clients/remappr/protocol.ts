@@ -460,9 +460,11 @@ export const DongleVerb = {
     SET_NKRO: 0x07,
     /** §16 radio observability, no arg: the live hop map + per-channel PER
      *  window. Reply: 8-byte header {u8 version(=1), u8 map_count, u8 map_gen,
-     *  u8 pool_count, u16 window, u8 fail_pct, u8 rsvd} then map_count 6-byte
-     *  records {u8 channel, u8 rsvd, u16 ok, u16 fail}. map_gen bumps on every
-     *  adaptive channel swap; ok/fail reset after each verdict window. */
+     *  u8 pool_count, u16 window, u8 fail_pct, u8 flags} then map_count 6-byte
+     *  records {u8 channel, u8 last_fail_pct, u16 ok, u16 fail}. flags bit0 = a
+     *  CHANGE_CHANNELS roll-out is running; last_fail_pct 0xFF = no full window
+     *  yet (both bytes read 0 on older firmware). map_gen bumps once per changed
+     *  slot; ok/fail reset after each verdict window. */
     GET_LINK_STATS: 0x08,
     /** Raw radio pipe table, no arg: every pipe 1..7 bonded or not, plus the
      *  pair-window state — the diagnosis view behind LIST_NODES (incomplete
@@ -477,6 +479,14 @@ export const DongleVerb = {
      *  that declares a bootloader entry (listed in its DONGLE verb mask);
      *  elsewhere ERR_CMD. */
     ENTER_BOOTLOADER: 0x0a,
+    /** Move every node to new channels (the map never changes on its own; nodes
+     *  remember it). arg {u8 mode}: 0 = replace the channels whose last window
+     *  failed; 1 = {u8 mode, u8 n, n channels}, an explicit map (n = map size,
+     *  each a map or pool channel). Reply {u8 version(=1), u8 planned,
+     *  u8 map_gen when done, u8 map_count, map_count channels}; rolled out one
+     *  slot every few hop cycles. ERR_STATE while a roll-out runs, ERR_ARG on a
+     *  refused list. */
+    CHANGE_CHANNELS: 0x0b,
 } as const
 
 /** DONGLE.ENTER_BOOTLOADER's confirmation argument, ASCII "DFU!" — anything
@@ -1010,24 +1020,30 @@ export interface ChannelStat {
     channel: number
     ok: number
     fail: number
+    /** Failure % of the channel's last full window, or null before its first
+     *  verdict (older firmware always reads 0). */
+    lastFailPercent: number | null
 }
 
 /** DONGLE.GET_LINK_STATS reply: the live §16 channel map + PER window. */
 export interface LinkStats {
-    /** Active hop-map generation — bumps (mod 256) on every adaptive swap, so
-     *  polling it observes channel-map churn. */
+    /** Active hop-map generation — bumps (mod 256) once per changed slot. */
     mapGeneration: number
     /** Replacement candidates outside the active map. */
     poolCount: number
-    /** Samples per channel before a keep/swap verdict. */
+    /** Samples per channel before a verdict. */
     window: number
-    /** Failure percentage that triggers an adaptive swap. */
+    /** Failure percentage over which a channel counts as bad. */
     failPercent: number
+    /** A CHANGE_CHANNELS roll-out is still moving slots. */
+    changeInProgress: boolean
     channels: ChannelStat[]
 }
 
 const LINK_STATS_HDR = 8
 const CHAN_REC = 6
+const NO_VERDICT = 0xff
+const LINK_F_PLAN = 0x01
 
 export function parseLinkStats(d: Uint8Array): LinkStats {
     if (d.length < LINK_STATS_HDR) throw new Error('link-stats reply too short')
@@ -1043,6 +1059,7 @@ export function parseLinkStats(d: Uint8Array): LinkStats {
             channel: d[off],
             ok: dv.getUint16(off + 2, true),
             fail: dv.getUint16(off + 4, true),
+            lastFailPercent: d[off + 1] === NO_VERDICT ? null : d[off + 1],
         })
     }
     return {
@@ -1050,7 +1067,40 @@ export function parseLinkStats(d: Uint8Array): LinkStats {
         poolCount: d[3],
         window: dv.getUint16(4, true),
         failPercent: d[6],
+        changeInProgress: (d[7] & LINK_F_PLAN) !== 0,
         channels,
+    }
+}
+
+/** What DONGLE.CHANGE_CHANNELS is asked for: the failing channels replaced, or
+ *  an explicit map. */
+export type ChannelChangeRequest = { kind: 'bad' } | { kind: 'list'; channels: number[] }
+
+/** DONGLE.CHANGE_CHANNELS reply: the map being rolled out. */
+export interface ChannelChange {
+    /** Slots that will change (0 = nothing to change, no roll-out). */
+    planned: number
+    /** Map generation once every slot moved. */
+    mapGeneration: number
+    channels: number[]
+}
+
+const CHCH_HDR = 4
+
+export function buildChangeChannelsArg(req: ChannelChangeRequest): Uint8Array {
+    if (req.kind === 'bad') return Uint8Array.of(0)
+    return Uint8Array.of(1, req.channels.length, ...req.channels)
+}
+
+export function parseChannelChange(d: Uint8Array): ChannelChange {
+    if (d.length < CHCH_HDR) throw new Error('change-channels reply too short')
+    if (d[0] !== 1) throw new Error(`unknown change-channels version ${d[0]}`)
+    const count = d[3]
+    if (d.length < CHCH_HDR + count) throw new Error('change-channels reply truncated')
+    return {
+        planned: d[1],
+        mapGeneration: d[2],
+        channels: Array.from(d.subarray(CHCH_HDR, CHCH_HDR + count)),
     }
 }
 
