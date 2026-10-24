@@ -16,6 +16,7 @@ import type {
     MacroApi,
     MouseMotionApi,
     NodesApi,
+    SensorApi,
     UnicodeApi,
 } from '../../service'
 import type {
@@ -131,6 +132,9 @@ export interface RemapprServiceDeps {
     /** Hardware caps word (GET_PERSONALITY_MAP), for its power hardware
      *  (battery, power off); omitted when the device reported none. */
     hwCaps?: number
+    /** SENSOR facade — set where the firmware serves SENSOR (its parts: the
+     *  battery, sensors); omitted otherwise. */
+    sensor?: SensorApi
 }
 
 /** Round `b` up to a multiple of `align` with zero padding (flash alignment). */
@@ -167,6 +171,8 @@ export class RemapprKeyboardService
     /** §5.2-E host input method for `&unicode` bindings — present on a directly-
      *  attached node advertising Cap.UNICODE; omitted otherwise. */
     public readonly unicode?: UnicodeApi
+    /** Parts (battery, sensors) where the firmware serves SENSOR. */
+    public readonly sensor?: SensorApi
     /** Read-only macro list (§24): the active config's macros surfaced to the
      *  Macros tab by their real DT names. Editing (setMacro) lands with the
      *  round-trip; for now `readonly: true`. */
@@ -246,6 +252,7 @@ export class RemapprKeyboardService
         this.nodes = deps.nodes
         this.cluster = deps.cluster
         this.unicode = deps.unicode
+        this.sensor = deps.sensor
         this.limits = deps.limits
         this.deviceInfo = deps.deviceInfo
         this.config = deps.config

@@ -28,6 +28,7 @@ import { discover, type DiscoveryResult } from './discovery'
 import { warmRemapprIdentity } from './identity'
 import { buildClusterApi } from './clusterView'
 import { buildNodesApi } from './nodeView'
+import { buildSensorApi, servesSensor } from './sensor'
 import { buildUnicodeApi } from './unicodeView'
 import {
     BLE_CONTROL_CHAR_UUID,
@@ -321,6 +322,10 @@ export const remapprAdapter: FirmwareAdapter = {
                 maxLayers: loaded.maxLayers,
                 limits: discovery.limits,
                 hwCaps: discovery.personality?.hwCaps,
+                // Its parts (the battery part above all) where it serves SENSOR.
+                sensor: servesSensor(discovery)
+                    ? buildSensorApi(rpc, { writable: true })
+                    : undefined,
                 // A dongle relays to bonded nodes; a direct keyboard returns an
                 // empty roster. Read-only views today (relayed-write HW-pending).
                 nodes: buildNodesApi(rpc),
