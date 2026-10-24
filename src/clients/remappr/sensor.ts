@@ -359,14 +359,20 @@ export function sensorChannelSettingInfo(
     }
 }
 
+/** GET_IO entry flags bit 7: these input channels wake the device. */
+const IO_FLAG_WAKE = 0x80
+
 export function sensorIo(rec: SensorIoRecord): SensorIo {
+    const output = (rec.kind & 0x80) !== 0
+    const wake = !output && (rec.flags & IO_FLAG_WAKE) !== 0
     return {
         kind: sensorIoKind(rec.kind),
-        output: (rec.kind & 0x80) !== 0,
+        output,
         firstChannel: rec.firstCh,
         count: rec.count,
         a: rec.a,
         b: rec.b,
+        ...(wake ? { wake: { latencyMs: rec.b } } : {}),
     }
 }
 

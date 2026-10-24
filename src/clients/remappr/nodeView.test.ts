@@ -66,6 +66,7 @@ function nodeRecordBytes(
     rssi: number,
     tail: number[],
     role = 0,
+    battery = 0xff,
 ): Uint8Array {
     const d = new Uint8Array(NODE_RECORD_LEN)
     const dv = new DataView(d.buffer)
@@ -76,7 +77,7 @@ function nodeRecordBytes(
     d[5] = hop
     d[6] = rssi & 0xff // i8
     for (let i = 0; i < 6; i++) d[7 + i] = tail[i] ?? 0
-    d[13] = 0xff // battery_soc: unknown
+    d[13] = battery // battery_soc, 0xff = unknown
     d[14] = role // §5 election-role low byte
     return d
 }
@@ -238,6 +239,22 @@ describe('buildNodesApi.list', () => {
             isMaster: false,
             nodeRole: 0,
         })
+    })
+
+    it('carries the reported charge and the charging bit', async () => {
+        const roster = new Uint8Array([
+            ...nodeRecordBytes(0x0002, 2, 0x13, 0, -50, [], 0, 73), // +charging 0x10
+            ...nodeRecordBytes(0x0003, 2, 0x03, 0, -50, [], 0, 0),
+            ...nodeRecordBytes(0x0004, 2, 0x13, 0, -50, []), // unknown soc
+        ])
+        const { rpc } = makeRpc({ roster })
+        const nodes = await buildNodesApi(rpc).list()
+
+        expect(nodes.map((n) => n.battery)).toEqual([
+            { level: 73, charging: true },
+            { level: 0, charging: false },
+            undefined,
+        ])
     })
 
     it('names no kind for a personality that is never a node', async () => {

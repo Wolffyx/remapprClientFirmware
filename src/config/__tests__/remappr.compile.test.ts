@@ -422,6 +422,24 @@ describe('remappr system behaviors (BH_SYSTEM)', () => {
         expect(tapOf(1)).toBe(9)
         expect(tapOf(2)).toBe(10)
     })
+
+    it('lowers battery_show to BH_SYSTEM action 11', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "BS", "target": "zmk" },
+                "keyboard": { "id": "bs", "name": "BS",
+                    "keys": [{"x":0,"y":0}] },
+                "layers": [{ "name": "base", "bindings": [{ "type": "battery_show" }] }]
+            }`),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        expect(u16(b, beh[0])).toBe(1)
+        expect(b[beh[0] + 2]).toBe(16) // System
+        expect(u16(b, beh[0] + 2 + 4)).toBe(11) // REMAPPR_SYS_BATTERY_SHOW
+    })
 })
 
 // Mouse behaviors (§44.3): mouse_key/move/scroll lower to BH_MOUSE (type 17)

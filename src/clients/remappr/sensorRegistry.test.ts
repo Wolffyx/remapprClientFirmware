@@ -2,8 +2,10 @@
 import { describe, expect, it } from 'vitest'
 import {
     sensorClass,
+    sensorMetricKey,
     sensorSettingId,
     sensorSettingKey,
+    sensorWireValue,
 } from './sensorRegistry'
 
 describe('part registry', () => {
@@ -22,6 +24,27 @@ describe('part registry', () => {
             'debounceReleaseMs',
         ])
         expect(ids.map(sensorSettingKey).map(sensorSettingId)).toEqual(ids)
+    })
+
+    it('names the sleep, output and battery settings and battery metrics', () => {
+        const ids = [0x33, 0x50, 0x51, 0x60, 0x61, 0x62]
+        expect(ids.map(sensorSettingKey)).toEqual([
+            'sleepScanMs',
+            'sleepMode',
+            'sleepDimPct',
+            'batteryLowPct',
+            'batteryReportMs',
+            'batteryShow',
+        ])
+        expect(ids.map(sensorSettingKey).map(sensorSettingId)).toEqual(ids)
+        expect(sensorWireValue('sleepMode', 'dim')).toBe(1)
+        expect(sensorWireValue('batteryShow', 'low')).toBe(2)
+        expect([0x20, 0x21, 0x22].map(sensorMetricKey)).toEqual([
+            'batteryLevel',
+            'batteryMv',
+            'batteryCharging',
+        ])
+        expect(sensorClass(13)).toBe('battery')
     })
 
     it('keys an id it has no name for by its hex', () => {

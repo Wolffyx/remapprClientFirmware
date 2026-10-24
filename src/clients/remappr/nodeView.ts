@@ -73,6 +73,9 @@ function toNodeView(r: NodeRecord): NodeView {
         hopCount: r.hopCount,
         isMaster: r.master,
         nodeRole: r.nodeRole,
+        ...(r.battery === null
+            ? {}
+            : { battery: { level: r.battery, charging: r.charging } }),
     }
 }
 

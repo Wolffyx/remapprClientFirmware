@@ -6,7 +6,8 @@
 // so the personality is always emitted. The dongle reads TBL_DONGLE (id 25);
 // the mouse reads TBL_MOUSE (id 8), its button actions from TBL_ACTION_BINDING
 // (id 17), TBL_RADIO (id 26) and its sensor's TBL_SENSOR (id 29); the joystick reads TBL_JOYSTICK (id 28) and
-// its button actions from TBL_ACTION_BINDING. Byte layout mirrors
+// its button actions from TBL_ACTION_BINDING. Mouse and joystick both read
+// TBL_POWER (id 30). Byte layout mirrors
 // firmware include/remappr/config_blob.h, lib/config_blob/decode_dongle.c and
 // include/remappr/radio_settings.h.
 import type { SensorInfo } from '../../../devices/types'
@@ -14,6 +15,7 @@ import type { ConfigDevice, ConfigDeviceSensor, DongleSettings } from '../../dev
 import type {
     ConfigJoystick,
     ConfigMouse,
+    ConfigPowerSettings,
     ConfigRadioSettings,
 } from '../../types'
 import {
@@ -23,6 +25,7 @@ import {
     DONGLE_TBL_LEN,
     DongleSet,
     Personality,
+    POWER_TBL_LEN,
     RADIO_TBL_LEN,
     TableId,
 } from './blobWriter'
@@ -40,6 +43,7 @@ import {
     readMouseActions,
     readMouseTable,
 } from './mouse'
+import { powerRecord, readPower } from './power'
 import { radioRecord, readRadio } from './radio'
 import { deviceSensorEntries, readSensorTable } from './sensor'
 import {
@@ -109,6 +113,8 @@ export function buildRemapprDeviceBlob(
     const sensor = deviceSensorEntries(config.sensor, opts.sensors).entries
     if (sensor.length) builder.sensorTable(sensor)
     if (config.joystick) addJoystick(builder, config.joystick)
+    const power = config.power ? powerRecord(config.power) : undefined
+    if (power) builder.powerTable(power)
     return builder.finalize(
         config.schemaVersion,
         BLOB_READER_VERSION,
@@ -131,6 +137,8 @@ export interface DeviceDecodeResult {
     joystick?: ConfigJoystick
     /** The sensor's settings (a mouse blob that carries TBL_SENSOR). */
     sensor?: ConfigDeviceSensor
+    /** Idle / sleep / off timeouts (a mouse or joystick blob with TBL_POWER). */
+    power?: ConfigPowerSettings
     /** The blob's config_version, present on OK. */
     configVersion?: number
 }
@@ -171,8 +179,20 @@ const PERSONALITY_BY_CODE: Record<number, DevicePersonality> = {
 type Frames = (id: number) => TableFrame | undefined
 type DeviceTables = Pick<
     DeviceDecodeResult,
-    'dongle' | 'mouse' | 'radio' | 'joystick' | 'sensor'
+    'dongle' | 'mouse' | 'radio' | 'joystick' | 'sensor' | 'power'
 >
+
+/** TBL_POWER of a mouse or joystick blob, or a decode code; {} when absent. */
+function decodePowerTable(
+    bytes: Uint8Array,
+    table: Frames,
+): Pick<DeviceTables, 'power'> | DecodeCodeValue {
+    const pt = table(TableId.Power)
+    if (!pt) return {}
+    if (pt.version !== 1) return DecodeCode.TABLE_VER
+    if (pt.end - pt.start < POWER_TBL_LEN) return DecodeCode.TABLE_FRAME
+    return { power: readPower(bytes, pt.start) }
+}
 
 function decodeDongleTables(
     bytes: Uint8Array,
@@ -217,7 +237,9 @@ function decodeMouseTables(
         if (typeof sensor === 'string') return DecodeCode.TABLE_FRAME
         if (sensor.settings) out.sensor = sensor
     }
-    return out
+    const power = decodePowerTable(bytes, table)
+    if (typeof power === 'number') return power
+    return { ...out, ...power }
 }
 
 function decodeJoystickTables(
@@ -239,7 +261,9 @@ function decodeJoystickTables(
         if (typeof buttonActions === 'string') return DecodeCode.TABLE_FRAME
         if (buttonActions) joystick = { ...joystick, buttonActions }
     }
-    return joystick ? { joystick } : {}
+    const power = decodePowerTable(bytes, table)
+    if (typeof power === 'number') return power
+    return { ...(joystick ? { joystick } : {}), ...power }
 }
 
 const TABLES_BY_PERSONALITY: Record<

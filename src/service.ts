@@ -223,10 +223,16 @@ export interface WirelessLpm {
     timeoutMs: number
 }
 
+/** A battery's charge, 0..100 %, and whether it is charging. */
+export interface BatteryState {
+    level: number
+    charging: boolean
+}
+
 export interface WirelessStatus {
     transport: WirelessTransport
     btSlot?: 1 | 2 | 3
-    battery?: { level: number; charging: boolean }
+    battery?: BatteryState
 }
 
 export interface WirelessApi {
@@ -418,6 +424,9 @@ export interface NodeView {
     isMaster: boolean
     /** Raw §5 election-role low byte (0 = unknown); `isMaster` is the decoded bit. */
     nodeRole: number
+    /** The charge it last reported; absent until it reports one (a node with
+     *  no battery never does). */
+    battery?: BatteryState
 }
 
 export interface NodesApi {

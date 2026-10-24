@@ -3,12 +3,13 @@
 // editorFields.ts; nothing to abstract.
 //
 // Editor metadata for the device config document (device.ts): the dongle's
-// settings, a mouse's pointer settings and a node's radio settings. The ranges
+// settings, a mouse's pointer settings, a node's radio settings and its
+// power timeouts. The ranges
 // mirror the zod schemas (and so the firmware decoders); the defaults are the
 // firmware's, shown for a field the document leaves out. UI-agnostic: the app
 // and the builder render their own inputs from these tables.
 import type { DongleSettings } from './device'
-import type { ConfigMouse, ConfigRadioSettings } from './types'
+import type { ConfigMouse, ConfigPowerSettings, ConfigRadioSettings } from './types'
 
 /** One numeric setting: its range, unit and the firmware default. */
 export interface DeviceNumberField<K extends string> {
@@ -108,6 +109,55 @@ export const RADIO_FIELDS: DeviceNumberField<RadioNumberKey>[] = [
         unit: '',
     },
 ]
+
+/** One idle timeout of TBL_POWER: picked from a few durations (0 = never),
+ *  inside the firmware's range. */
+export interface PowerField {
+    key: keyof ConfigPowerSettings
+    label: string
+    description: string
+    /** The firmware's build default while the document leaves it out. */
+    defaultValue: number
+    /** The durations offered, ms, 0 = never, in order. */
+    choices: readonly number[]
+}
+
+const S = 1000
+const MIN = 60 * S
+const HOUR = 60 * MIN
+
+export const POWER_FIELDS: readonly PowerField[] = [
+    {
+        key: 'idleMs',
+        label: 'Dim after',
+        description: 'No input this long: lights dim and the sensors rest.',
+        defaultValue: 5 * S,
+        choices: [0, 2 * S, 5 * S, 10 * S, 30 * S, MIN, 5 * MIN],
+    },
+    {
+        key: 'sleepMs',
+        label: 'Sleep after',
+        description: 'No input this long: the device sleeps; the next key or move wakes it at once.',
+        defaultValue: 5 * MIN,
+        choices: [0, 30 * S, MIN, 2 * MIN, 5 * MIN, 10 * MIN, 30 * MIN, HOUR],
+    },
+    {
+        key: 'offMs',
+        label: 'Power off after',
+        description: 'No input this long: the device powers off; a key or a move restarts it (about a second).',
+        defaultValue: 0,
+        choices: [0, 30 * MIN, HOUR, 2 * HOUR, 8 * HOUR, 24 * HOUR],
+    },
+]
+
+/** A timeout for people: "Never", "30 s", "5 min", "2 h", "1 day". */
+export function powerTimeoutLabel(ms: number): string {
+    if (ms === 0) return 'Never'
+    if (ms % (24 * HOUR) === 0) return ms === 24 * HOUR ? '1 day' : `${ms / (24 * HOUR)} days`
+    if (ms % HOUR === 0) return `${ms / HOUR} h`
+    if (ms % MIN === 0) return `${ms / MIN} min`
+    return `${ms / S} s`
+}
 
 /** Radio auto-pair: on unless a config turns it off. */
 export const RADIO_AUTO_PAIR_DEFAULT = true

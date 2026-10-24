@@ -281,6 +281,9 @@ export const ActionObjectSchema = z.discriminatedUnion('type', [
         .object({ type: z.literal('soft_off') })
         .describe('Power off until a hardware reset / dedicated on key.'),
     z
+        .object({ type: z.literal('battery_show') })
+        .describe("Show the battery's charge on the device's own lights or display."),
+    z
         .object({ type: z.literal('studio_unlock') })
         .describe('Unlock the keyboard for ZMK Studio live editing.'),
     z
@@ -1251,6 +1254,41 @@ export const RadioSettingsSchema = z
             'the radio chip.',
     )
 
+// pattern-check: skip plain zod wire-DTO schema mirroring TBL_POWER
+// Ranges mirror the firmware (power.h REMAPPR_POWER_*_MS_MIN/MAX): 0 = never.
+const powerTimeout = (min: number, max: number, what: string) =>
+    z
+        .union([z.literal(0), z.number().int().min(min).max(max)])
+        .optional()
+        .describe(what)
+
+export const PowerSettingsSchema = z
+    .object({
+        idleMs: powerTimeout(
+            1000,
+            3_600_000,
+            'No input this long dims the outputs and rests the sensors, ms ' +
+                '(0 = never, else 1 s..1 h; default 5 s).',
+        ),
+        sleepMs: powerTimeout(
+            10_000,
+            86_400_000,
+            'No input this long puts the device to sleep; the next input wakes ' +
+                'it, ms (0 = never, else 10 s..24 h; default 5 min).',
+        ),
+        offMs: powerTimeout(
+            60_000,
+            604_800_000,
+            'No input this long powers the device off; a key or a move restarts ' +
+                'it, ms (0 = never, else 1 min..7 days; default never).',
+        ),
+    })
+    .describe(
+        'When the device dims, sleeps and powers off on battery (TBL_POWER). ' +
+            'A field left out keeps the firmware default. On external power ' +
+            'nothing sleeps.',
+    )
+
 // pattern-check: skip adding well-known optional fields to an existing zod schema
 export const NodeSchema = z
     .looseObject({
@@ -1263,6 +1301,7 @@ export const NodeSchema = z
         cluster: z.array(ClusterNodeSchema).optional(),
         linkProfile: LinkProfileSchema.optional(),
         radio: RadioSettingsSchema.optional(),
+        power: PowerSettingsSchema.optional(),
         sensor: NodeSensorSchema.optional(),
     })
     .describe(

@@ -200,6 +200,14 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         help: 'How long a key must read released before the release counts.',
     },
     {
+        id: 0x33,
+        name: 'sleepScanMs',
+        macro: 'SLEEP_SCAN_MS',
+        label: 'Sleep scan period',
+        type: 'int',
+        help: 'Time between scans while the device sleeps: longer saves power, shorter wakes faster.',
+    },
+    {
         id: 0x40,
         name: 'axisInvert',
         macro: 'AXIS_INVERT',
@@ -244,6 +252,56 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         type: 'int',
         help: 'The band at the edge that already reads as full.',
     },
+    {
+        id: 0x50,
+        name: 'sleepMode',
+        macro: 'SLEEP_MODE',
+        label: 'In sleep',
+        type: 'enum',
+        help: 'What this light or display shows while the device sleeps.',
+        options: [
+            { code: 0, name: 'off', label: 'Off' },
+            { code: 1, name: 'dim', label: 'Dim' },
+            { code: 2, name: 'on', label: 'On' },
+        ],
+    },
+    {
+        id: 0x51,
+        name: 'sleepDimPct',
+        macro: 'SLEEP_DIM_PCT',
+        label: 'Sleep dim',
+        type: 'int',
+        help: 'Brightness while the device sleeps, when "In sleep" is Dim.',
+    },
+    {
+        id: 0x60,
+        name: 'batteryLowPct',
+        macro: 'BATTERY_LOW_PCT',
+        label: 'Low battery at',
+        type: 'int',
+        help: 'At or below this charge the battery counts as low: the device and the app warn.',
+    },
+    {
+        id: 0x61,
+        name: 'batteryReportMs',
+        macro: 'BATTERY_REPORT_MS',
+        label: 'Battery read period',
+        type: 'int',
+        help: 'Time between battery readings.',
+    },
+    {
+        id: 0x62,
+        name: 'batteryShow',
+        macro: 'BATTERY_SHOW',
+        label: 'Show battery on the device',
+        type: 'enum',
+        help: 'When the device shows its charge on its own lights or display.',
+        options: [
+            { code: 0, name: 'never', label: 'Never' },
+            { code: 1, name: 'onDemand', label: 'With the battery key' },
+            { code: 2, name: 'low', label: 'With the key, and when low' },
+        ],
+    },
 ]
 
 export const SENSOR_PROCEDURES: readonly RegistryProcedure[] = [
@@ -277,6 +335,9 @@ export const SENSOR_METRICS: readonly RegistryMetric[] = [
     { id: 0x12, name: 'calCentre', label: 'Calibrated centre' },
     { id: 0x13, name: 'calMax', label: 'Calibrated high' },
     { id: 0x14, name: 'fuzz', label: 'Noise filter' },
+    { id: 0x20, name: 'batteryLevel', label: 'Charge' },
+    { id: 0x21, name: 'batteryMv', label: 'Cell voltage' },
+    { id: 0x22, name: 'batteryCharging', label: 'Charging' },
 ]
 
 /** IO kinds (GET_IO): bit 7 marks what a part accepts. */

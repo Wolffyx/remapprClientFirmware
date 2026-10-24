@@ -8,7 +8,8 @@
 // TBL_DONGLE, the mouse's TBL_MOUSE, TBL_RADIO (firmware
 // docs/device-config-plan.md) and its sensor's TBL_SENSOR (sensor-settings
 // plan §4), or the joystick's TBL_JOYSTICK and button
-// actions (input-layout plan §4).
+// actions (input-layout plan §4). Mouse and joystick also take `power`, their
+// idle / sleep / off timeouts on battery (TBL_POWER).
 //
 //   {
 //     "schemaVersion": 1,
@@ -45,6 +46,7 @@ import {
     DeviceSensorSchema,
     JoystickSchema,
     MouseSchema,
+    PowerSettingsSchema,
     RadioSettingsSchema,
 } from './schema'
 
@@ -138,15 +140,17 @@ export const DeviceConfigSchema = z
         radio: RadioSettingsSchema.optional(),
         joystick: JoystickSchema.optional(),
         sensor: DeviceSensorSchema.optional(),
+        power: PowerSettingsSchema.optional(),
     })
     .superRefine((d, ctx) => {
         // A section another device reads would be silently ignored: refuse it.
         const own: Record<string, string[]> = {
             dongle: ['dongle'],
-            mouse: ['mouse', 'radio', 'sensor'],
-            joystick: ['joystick'],
+            mouse: ['mouse', 'radio', 'sensor', 'power'],
+            joystick: ['joystick', 'power'],
         }
-        for (const key of ['dongle', 'mouse', 'radio', 'joystick', 'sensor'] as const) {
+        const sections = ['dongle', 'mouse', 'radio', 'joystick', 'sensor', 'power'] as const
+        for (const key of sections) {
             if (d[key] !== undefined && !own[d.personality].includes(key)) {
                 ctx.addIssue({
                     code: 'custom',

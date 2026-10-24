@@ -6,9 +6,11 @@ import {
     compactSection,
     DONGLE_FIELDS,
     MOUSE_SCROLL_DIVISOR_FIELD,
+    POWER_FIELDS,
+    powerTimeoutLabel,
     RADIO_FIELDS,
 } from './deviceFields'
-import { MouseSchema, RadioSettingsSchema } from './schema'
+import { MouseSchema, PowerSettingsSchema, RadioSettingsSchema } from './schema'
 
 type Field = { key: string; min: number; max: number; defaultValue: number }
 
@@ -37,6 +39,19 @@ describe('device editor fields mirror the schemas', () => {
 
     it.each(RADIO_FIELDS)('radio $key', (f) => {
         expectRangeMatches((v) => RadioSettingsSchema.safeParse(v), f)
+    })
+
+    it.each(POWER_FIELDS)('power $key offers only durations the firmware takes', (f) => {
+        expect(f.choices).toContain(f.defaultValue)
+        for (const ms of f.choices) {
+            expect(PowerSettingsSchema.safeParse({ [f.key]: ms }).success).toBe(true)
+        }
+    })
+
+    it('labels power durations', () => {
+        expect([0, 5000, 300_000, 7_200_000, 86_400_000, 172_800_000].map(powerTimeoutLabel)).toEqual(
+            ['Never', '5 s', '5 min', '2 h', '1 day', '2 days'],
+        )
     })
 
     it('mouse scroll divisor', () => {

@@ -24,6 +24,7 @@ import type { KeyAction, Layer } from '../../types'
 import {
     buildRemapprKeyAction,
     HID_KP,
+    REMAPPR_KIND_BATTERY_SHOW,
     REMAPPR_KIND_KEYPRESS,
     REMAPPR_KIND_LAYER_MOMENTARY,
     REMAPPR_KIND_LAYER_TAP,
@@ -163,6 +164,8 @@ function lowerAction(
             return composite(REMAPPR_KIND_MOD_MORPH, pools.modMorphs, a.ref)
         case 'transparent':
             return transparent()
+        case 'battery_show':
+            return buildRemapprKeyAction(REMAPPR_KIND_BATTERY_SHOW, [], layerNames)
         default:
             warn(
                 `"${a.type}" is not representable in the editor runtime; shown as transparent (preserved in config)`,
@@ -271,6 +274,8 @@ function raiseAction(
             const ref = pools.modMorphs[ka.params[0] ?? 0]?.id
             return ref ? { type: 'mod_morph', ref } : null
         }
+        case REMAPPR_KIND_BATTERY_SHOW:
+            return { type: 'battery_show' }
         default:
             return null
     }

@@ -88,6 +88,7 @@ describe('node enumeration (DONGLE namespace)', () => {
             rssi: -40,
             deviceIdTail: '010203040506',
             battery: 85,
+            charging: false,
             master: false,
             nodeRole: 0,
         })

@@ -149,6 +149,8 @@ export type CanonAction =
     | { type: 'bootloader' }
     | { type: 'reset' }
     | { type: 'soft_off' }
+    /** Show the battery's charge on the device's own lights / display. */
+    | { type: 'battery_show' }
     | { type: 'studio_unlock' }
     | { type: 'grave_escape' }
     | { type: 'key_repeat' }
@@ -964,6 +966,22 @@ export interface ConfigRadioSettings {
     beaconLossMs?: number
 }
 
+// pattern-check: skip plain wire-DTO mirroring the TBL_POWER layout
+/** When the device dims, sleeps and powers off on battery (TBL_POWER,
+ *  firmware include/remappr/power.h). Every timeout is ms of no input; 0 =
+ *  never; one left out keeps the firmware's build default (idle 5 s, sleep
+ *  5 min, off never). On external power nothing sleeps, whatever these say. */
+export interface ConfigPowerSettings {
+    /** No input this long: outputs dim, sensors rest. 0 or 1 s..1 h. */
+    idleMs?: number
+    /** No input this long: the device sleeps and wakes on the next input.
+     *  0 or 10 s..24 h. */
+    sleepMs?: number
+    /** No input this long: the device powers off (wake = reboot). 0 or
+     *  1 min..7 days. */
+    offMs?: number
+}
+
 /** One {typo → correction} pair of the on-device dictionary (§5.2-E). */
 export interface CanonAutocorrectEntry {
     typo: string
@@ -999,6 +1017,8 @@ export interface ConfigNode {
     /** The node's 2.4 GHz link settings (TBL_RADIO): auto-pair, repeats,
      *  keepalive, beacon loss. */
     radio?: ConfigRadioSettings
+    /** Idle / sleep / off timeouts on battery (TBL_POWER). */
+    power?: ConfigPowerSettings
     /** The sensor's product defaults (TBL_SENSOR, the board's
      *  remappr,setting-defaults). */
     sensor?: ConfigNodeSensor

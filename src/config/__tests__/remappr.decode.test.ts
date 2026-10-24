@@ -501,6 +501,14 @@ describe('remappr round-trip (encode → decode → re-encode is byte-stable)', 
         }`)
     })
 
+    it('battery_show round-trips (BH_SYSTEM 11)', () => {
+        roundTrips(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "BS", "target": "zmk" }, ${kb(1)},
+            "layers": [{ "name": "base", "bindings": [{ "type": "battery_show" }] }]
+        }`)
+    })
+
     // pattern-check: skip — round-trip test data for the §5.2 vocabulary
     it('round-trips the §5.2 vocabulary (behavior_type 20..36)', () => {
         const json = `{
@@ -1072,6 +1080,32 @@ describe('decodeRemapprBlob TBL_CLUSTER (id 21, §N4c mode-A)', () => {
                 `[{ "uid": "deadbeef", "positionBase": 8, "rows": 4, "cols": 5 }]`,
             ),
         )
+    })
+})
+
+describe('decodeRemapprBlob node power (TBL_POWER, sleep-wake design)', () => {
+    // pattern-check: skip — decode/round-trip fixtures, no production logic
+    const nodeJson = (node: string): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "N", "target": "zmk" }, ${kb(2)},
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+        "node": ${node}
+    }`
+
+    it('lowers node.power to TBL_POWER and decodes it back', () => {
+        const cfg = parseKeymap(nodeJson('{ "power": { "idleMs": 5000, "offMs": 0 } }'))
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node?.power).toEqual({ idleMs: 5000, offMs: 0 })
+    })
+
+    it('emits no TBL_POWER for an empty section', () => {
+        const { blob } = buildRemapprBlob(parseKeymap(nodeJson('{ "power": {} }')), {
+            configVersion: 1,
+        })
+        expect(decodeRemapprBlob(blob).config?.node?.power).toBeUndefined()
     })
 })
 

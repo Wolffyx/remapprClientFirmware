@@ -49,6 +49,7 @@ export const TableId = {
     // 27 is promised to TBL_UPDATE.
     Joystick: 28, // joystick axes + hat (input-layout plan §4)
     Sensor: 29, // sensor settings (sensor-settings plan §4)
+    Power: 30, // idle / sleep / off timeouts (sleep-wake design)
 } as const
 
 /** enum remappr_personality (firmware include/remappr/role.h). */
@@ -105,6 +106,24 @@ export interface RadioTableRecord {
     inputRepeats: number
     keepaliveMs: number
     beaconLossMs: number
+}
+
+/** TBL_POWER `set` bits (power.h REMAPPR_POWER_SET_*): which timeouts the
+ *  config sets; a clear bit keeps the device's build default. */
+export const PowerSet = {
+    idle: 1 << 0,
+    sleep: 1 << 1,
+    off: 1 << 2,
+} as const
+export const POWER_TBL_LEN = 16
+
+/** One TBL_POWER payload. A timeout is only meaningful when its PowerSet bit
+ *  is in `set`; 0 = never. */
+export interface PowerTableRecord {
+    set: number
+    idleMs: number
+    sleepMs: number
+    offMs: number
 }
 
 /** TBL_PERSONALITY byte 1 role_flags (config_blob.h REMAPPR_CFG_ROLE_*). */
@@ -242,6 +261,7 @@ export const SystemAction = {
     // the compiler does not emit it), so the absolute ext-power codes resume at 9.
     ext_power_on: 9,
     ext_power_off: 10,
+    battery_show: 11, // &battery: show the charge on the device's LEDs / display
 } as const
 
 // enum remappr_mouse_op (behavior_table.h) — carried in BH_MOUSE `tap`.
@@ -1123,6 +1143,23 @@ export class BlobBuilder {
         this.w.u8(on(RadioSet.inputRepeats) ? r.inputRepeats : 0)
         this.w.u16(on(RadioSet.keepalive) ? r.keepaliveMs : 0)
         this.w.u16(on(RadioSet.beaconLoss) ? r.beaconLossMs : 0)
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_POWER (id 30), 16 bytes: u16 set, u8 flags (0), u8 reserved, u32
+     *  idle_ms, u32 sleep_ms, u32 off_ms (0 = never). Mirrors the firmware
+     *  include/remappr/power.h. */
+    powerTable(r: PowerTableRecord): this {
+        const on = (bit: number): boolean => (r.set & bit) !== 0
+        this.tableBegin(TableId.Power, 1)
+        this.w.u16(r.set)
+        this.w.u8(0)
+        this.w.u8(0)
+        this.w.u32(on(PowerSet.idle) ? r.idleMs : 0)
+        this.w.u32(on(PowerSet.sleep) ? r.sleepMs : 0)
+        this.w.u32(on(PowerSet.off) ? r.offMs : 0)
         this.tableEnd()
         return this
     }

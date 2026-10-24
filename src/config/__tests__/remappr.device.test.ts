@@ -273,6 +273,60 @@ describe('mouse device document (device-config plan, step 3)', () => {
     })
 })
 
+describe('power timeouts (TBL_POWER, sleep-wake design)', () => {
+    const POWER = { idleMs: 3000, sleepMs: 600_000, offMs: 0 }
+    const doc = (personality: 'mouse' | 'joystick', power: object) => ({
+        schemaVersion: 1,
+        kind: 'remappr.device',
+        meta: { name: 'Battery device' },
+        personality,
+        power,
+    })
+    // The firmware layout (tests/config_blob/src/blob_builder.h bb_power).
+    // prettier-ignore
+    const POWER_TABLE = [
+        0x1e, 0x00, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, // TBL_POWER v1, 16 B
+        0x07, 0x00, 0x00, 0x00,                         // set idle|sleep|off
+        0xb8, 0x0b, 0x00, 0x00,                         // idle 3000
+        0xc0, 0x27, 0x09, 0x00,                         // sleep 600000
+        0x00, 0x00, 0x00, 0x00,                         // off never
+    ]
+
+    it('encodes TBL_POWER for a mouse and a joystick, and decodes it back', () => {
+        for (const personality of ['mouse', 'joystick'] as const) {
+            const cfg = parseDeviceConfig(JSON.stringify(doc(personality, POWER)))
+            const blob = buildRemapprDeviceBlob(cfg, { configVersion: 2 })
+            expect(Array.from(blob.subarray(32))).toEqual(POWER_TABLE)
+            const r = decodeRemapprDeviceBlob(blob)
+            expect(r.code).toBe(DecodeCode.OK)
+            expect(r.power).toEqual(POWER)
+        }
+    })
+
+    it('keeps only the set timeouts and emits nothing for an empty section', () => {
+        const cfg = parseDeviceConfig(JSON.stringify(doc('mouse', { sleepMs: 20_000 })))
+        const blob = buildRemapprDeviceBlob(cfg, { configVersion: 2 })
+        expect(Array.from(blob.subarray(40, 44))).toEqual([0x02, 0x00, 0x00, 0x00])
+        expect(decodeRemapprDeviceBlob(blob).power).toEqual({ sleepMs: 20_000 })
+        const empty = buildRemapprDeviceBlob(
+            parseDeviceConfig(JSON.stringify(doc('mouse', {}))),
+            { configVersion: 2 },
+        )
+        expect(empty.length).toBe(32)
+        expect(decodeRemapprDeviceBlob(empty).power).toBeUndefined()
+    })
+
+    it('refuses timeouts the firmware refuses, and power on a dongle', () => {
+        const bad = [{ idleMs: 999 }, { sleepMs: 9_999 }, { offMs: 604_800_001 }, { idleMs: 1.5 }]
+        for (const power of bad) {
+            expect(() => parseDeviceConfig(JSON.stringify(doc('mouse', power)))).toThrow()
+        }
+        expect(() =>
+            parseDeviceConfig(JSON.stringify({ ...doc('mouse', POWER), personality: 'dongle' })),
+        ).toThrow()
+    })
+})
+
 describe('joystick device config', () => {
     const JOY = {
         schemaVersion: 1,

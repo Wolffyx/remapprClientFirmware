@@ -390,6 +390,9 @@ export interface SensorIo {
     /** Kind-specific: a display's width / height, an ABS axis's resolution. */
     readonly a: number
     readonly b: number
+    /** These input channels wake the device from sleep (flags bit 7, WAKE),
+     *  within `wakeLatencyMs` at worst (`b` of a WAKE input). */
+    readonly wake?: { readonly latencyMs: number }
 }
 
 /** One sensor of a device and everything it describes. */

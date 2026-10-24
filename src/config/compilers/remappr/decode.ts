@@ -39,6 +39,7 @@ import type {
     ConfigKeymap,
     ConfigLinkProfile,
     ConfigLinkProfileOverride,
+    ConfigPowerSettings,
     ConfigRadioSettings,
     ConfigMouse,
     ConfigNode,
@@ -81,10 +82,12 @@ import {
     LINK_PROFILE_TBL_HDR_LEN,
     LINK_PROFILE_OVR_WIRE,
     LinkProfileId,
+    POWER_TBL_LEN,
     RADIO_TBL_LEN,
     bytesToHex,
     type BehaviorRecord,
 } from './blobWriter'
+import { readPower } from './power'
 import { readRadio } from './radio'
 import { readMouseTable } from './mouse'
 
@@ -356,6 +359,7 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
             if (name === 'reset') return { type: 'reset' }
             if (name === 'bootloader') return { type: 'bootloader' }
             if (name === 'soft_off') return { type: 'soft_off' }
+            if (name === 'battery_show') return { type: 'battery_show' }
             if (name === 'ext_power_toggle')
                 return { type: 'ext_power', action: 'toggle' }
             if (name === 'ext_power_on')
@@ -889,6 +893,10 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const radioT = table(TableId.Radio)
     const radio = radioT ? readRadioTable(bytes, radioT, diag) : undefined
 
+    // ── POWER (optional, id 30, sleep-wake design) → node.power ──
+    const powerT = table(TableId.Power)
+    const power = powerT ? readPowerTable(bytes, powerT, diag) : undefined
+
     // ── ACTION_BINDING (optional, id 17, §F) → top-level actionBindings[] ──
     const actionT = table(TableId.ActionBinding)
     const actionBindings = actionT ? readActionBindings(bytes, actionT) : []
@@ -911,7 +919,8 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         pers.forwardMode ||
         cluster ||
         linkProfile ||
-        radio
+        radio ||
+        power
             ? {
                   ...(pers.personality ? { personality: pers.personality } : {}),
                   ...(pers.role ? { role: pers.role } : {}),
@@ -920,6 +929,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
                   ...(cluster ? { cluster } : {}),
                   ...(linkProfile ? { linkProfile } : {}),
                   ...(radio ? { radio } : {}),
+                  ...(power ? { power } : {}),
               }
             : undefined
 
@@ -1234,6 +1244,26 @@ function readRadioTable(
         return undefined
     }
     return readRadio(bytes, t.start)
+}
+
+// pattern-check: skip frame checks around the shared power reader
+// TBL_POWER (id 30): the 16-byte timeouts (compilers/remappr/power.ts). A
+// longer frame is a later version's; a wrong version or a short frame is
+// reported, not thrown.
+function readPowerTable(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigPowerSettings | undefined {
+    if (t.version !== 1) {
+        diag.error(`power table version ${t.version} not supported`)
+        return undefined
+    }
+    if (t.end - t.start < POWER_TBL_LEN) {
+        diag.error('power table truncated')
+        return undefined
+    }
+    return readPower(bytes, t.start)
 }
 
 interface DecodedNames {

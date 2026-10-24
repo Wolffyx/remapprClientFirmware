@@ -71,6 +71,7 @@ import {
     type PosholdRecord,
 } from './blobWriter'
 import { encodeAutocorrectDictionary } from './autocorrect'
+import { powerRecord } from './power'
 import { radioRecord } from './radio'
 import { mouseRecord } from './mouse'
 import { sensorEntries } from './sensor'
@@ -799,6 +800,7 @@ function lowerAction(
         case 'reset':
         case 'bootloader':
         case 'soft_off':
+        case 'battery_show':
             // Device action fired on press via the engine's system callback;
             // the action code rides in `tap`.
             return rec({
@@ -1487,6 +1489,9 @@ function encodeBlob(
     // A section that sets nothing emits no table, which already means defaults.
     const radio = nodeCfg?.radio ? radioRecord(nodeCfg.radio) : undefined
     if (radio) builder.radioTable(radio)
+    // TBL_POWER (sleep-wake design): idle / sleep / off timeouts on battery.
+    const power = nodeCfg?.power ? powerRecord(nodeCfg.power) : undefined
+    if (power) builder.powerTable(power)
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
     if (leaders.length > 0) builder.leaderTable(leaders)

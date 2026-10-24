@@ -17,7 +17,7 @@ import {
     Status,
 } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
-import { buildSensorApi, describeSensors, servesSensor } from './sensor'
+import { buildSensorApi, describeSensors, sensorIo, servesSensor } from './sensor'
 
 const ascii = (s: string): number[] => [...s].map((c) => c.charCodeAt(0))
 
@@ -259,6 +259,13 @@ describe('part wire (PART namespace v1)', () => {
             { id: 0x43, value: 7 },
             { id: 0x44, value: 3 },
         ])
+    })
+
+    it('marks WAKE inputs with their latency, never an output', () => {
+        const key = { kind: 0x01, firstCh: 0, count: 4, flags: 0x80, a: 0, b: 10 }
+        expect(sensorIo(key)).toMatchObject({ kind: 'key', wake: { latencyMs: 10 } })
+        expect(sensorIo({ ...key, flags: 0 })).not.toHaveProperty('wake')
+        expect(sensorIo({ ...key, kind: 0x84, b: 64 })).not.toHaveProperty('wake')
     })
 
     it('builds SET and RUN args with a channel', () => {

@@ -934,6 +934,8 @@ export interface NodeRecord {
     /** Battery state-of-charge 0..100, or null when the node has not reported
      *  one (firmware sends 0xFF = unknown). */
     battery: number | null
+    /** Its last battery report said charging (flags NODE_F_CHARGING). */
+    charging: boolean
     /** The node holds a §5 MAIN election bit, so the dongle treats it as the
      *  master. A v2/legacy node carries no role and always reads false. */
     master: boolean
@@ -950,6 +952,9 @@ export const NODE_RECORD_LEN = 15
 /** Flags-byte bit that marks the §5 master node (mirrors firmware
  *  REMAPPR_DONGLE_NODE_F_MASTER). */
 const NODE_F_MASTER = 0x08
+/** Flags-byte bit: the node's last battery report said charging (firmware
+ *  REMAPPR_DONGLE_NODE_F_CHARGING; an older dongle never sets it). */
+const NODE_F_CHARGING = 0x10
 
 export function parseNodeRecord(d: Uint8Array, off = 0): NodeRecord {
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
@@ -969,6 +974,7 @@ export function parseNodeRecord(d: Uint8Array, off = 0): NodeRecord {
         rssi: (d[off + 6] << 24) >> 24, // sign-extend i8
         deviceIdTail: tail,
         battery: batt === 0xff ? null : batt,
+        charging: (flags & NODE_F_CHARGING) !== 0,
         master: (flags & NODE_F_MASTER) !== 0,
         nodeRole: d[off + 14],
     }

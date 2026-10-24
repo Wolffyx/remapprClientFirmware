@@ -50,6 +50,8 @@ const KEYWORD_ACTIONS: Record<string, Obj> = {
     reset: { type: 'reset' },
     softoff: { type: 'soft_off' },
     soft_off: { type: 'soft_off' },
+    battery: { type: 'battery_show' },
+    battery_show: { type: 'battery_show' },
     graveescape: { type: 'grave_escape' },
     grave_escape: { type: 'grave_escape' },
     layerlock: { type: 'layer_lock' },
@@ -429,6 +431,7 @@ const KEYWORD_BY_TYPE: Record<string, string> = {
     bootloader: 'bootloader',
     reset: 'reset',
     soft_off: 'softoff',
+    battery_show: 'battery',
     grave_escape: 'graveescape',
     layer_lock: 'layerlock',
 }
