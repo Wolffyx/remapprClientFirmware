@@ -40,7 +40,12 @@ import {
     sensorBindingSettings,
 } from './mouseControls'
 import type { InputLayout } from './inputLayout'
-import type { Limits, MotionConfig, RateLimits } from './protocol'
+import {
+    type Limits,
+    type MotionConfig,
+    powerCapability,
+    type RateLimits,
+} from './protocol'
 
 export interface MouseServiceDeps {
     deviceInfo: DeviceInfo
@@ -131,6 +136,7 @@ export class RemapprMouseService extends KeylessServiceBase {
                 },
             },
         )
+        const power = powerCapability(deps.hwCaps)
         this.capabilities = {
             lock: 'none',
             rename: false,
@@ -141,6 +147,7 @@ export class RemapprMouseService extends KeylessServiceBase {
             saveMode: 'manual',
             persistence: true,
             ...(editable ? {} : { readOnly: true }),
+            ...(power ? { power } : {}),
         }
         this.device =
             deps.device && editable

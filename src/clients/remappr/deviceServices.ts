@@ -116,6 +116,7 @@ export async function buildJoystickService(
             ? buildJoystickApi(rpc, { targetNode, writable: true })
             : undefined,
         writable: true,
+        hwCaps: discovery.personality?.hwCaps,
         layout,
         ...(targetNode ? { pollMs: RELAY_POLL_MS } : {}),
         onTransportClosed: (cb) => rpc.onClosed(cb),

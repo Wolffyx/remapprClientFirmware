@@ -37,7 +37,7 @@ import {
     joystickSticks,
     stickSuggestions,
 } from './joystickControls'
-import type { InputLayoutEntry, Limits } from './protocol'
+import { type InputLayoutEntry, type Limits, powerCapability } from './protocol'
 
 export interface JoystickServiceDeps {
     deviceInfo: DeviceInfo
@@ -46,6 +46,8 @@ export interface JoystickServiceDeps {
     device?: DeviceConfigApi
     /** Live JOYSTICK verbs; absent when the firmware does not serve them. */
     joystick?: JoystickVerbs
+    /** GET_PERSONALITY_MAP hw caps (battery, power off); absent = not reported. */
+    hwCaps?: number
     /** False for a read-only view. */
     writable: boolean
     /** Where the controls sit (GET_INPUT_LAYOUT). */
@@ -111,6 +113,7 @@ export class RemapprJoystickService extends KeylessServiceBase {
                 onChanged: () => this.emit({ type: 'model' }),
             },
         )
+        const power = powerCapability(deps.hwCaps)
         this.capabilities = {
             lock: 'none',
             rename: false,
@@ -121,6 +124,7 @@ export class RemapprJoystickService extends KeylessServiceBase {
             saveMode: 'manual',
             persistence: true,
             ...(editable ? {} : { readOnly: true }),
+            ...(power ? { power } : {}),
         }
         this.device =
             deps.device && editable

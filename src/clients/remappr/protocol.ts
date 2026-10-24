@@ -152,6 +152,7 @@ export const HwCap = {
     BATTERY: 1 << 15,
     FLASH_STORAGE: 1 << 16,
     ANALOG_AXES: 1 << 17,
+    POWER_OFF: 1 << 18,
     HID_GAMEPAD: 1 << 24,
 } as const
 
@@ -163,6 +164,18 @@ export function reportsHwCap(
 ): boolean | undefined {
     if (!hwCaps) return undefined
     return (hwCaps & cap) !== 0
+}
+
+/** The device's power hardware from its hw caps (battery, power off with an
+ *  input wake), or undefined when it reported none. */
+export function powerCapability(
+    hwCaps: number | undefined,
+): { battery: boolean; powerOff: boolean } | undefined {
+    if (!hwCaps) return undefined
+    return {
+        battery: (hwCaps & HwCap.BATTERY) !== 0,
+        powerOff: (hwCaps & HwCap.POWER_OFF) !== 0,
+    }
 }
 
 /* ── universal (proto-v2) ───────────────────────────────────────────────── */

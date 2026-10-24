@@ -291,6 +291,17 @@ describe('RemapprMouseService', () => {
         expect(writes[0]!.personality).toBe('mouse')
     })
 
+    it('reports its power hardware from the hw caps', () => {
+        expect(make({}).svc.capabilities.power).toBeUndefined()
+        expect(make({ hwCaps: HwCap.USB }).svc.capabilities.power).toEqual({
+            battery: false,
+            powerOff: false,
+        })
+        expect(
+            make({ hwCaps: HwCap.BATTERY | HwCap.POWER_OFF }).svc.capabilities.power,
+        ).toEqual({ battery: true, powerOff: true })
+    })
+
     it('draws a sensor only when the mouse reports a pointer', async () => {
         const ids = async (hwCaps?: number) => {
             const { svc } = make({ hwCaps })

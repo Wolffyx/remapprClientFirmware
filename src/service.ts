@@ -101,6 +101,10 @@ export interface Capabilities {
      *  Set only by simulated adapters; the UI gates on this, never on a firmware
      *  name. */
     demo?: boolean
+    /** Power hardware the device reports: a battery (so it sleeps, and the
+     *  power timeouts mean something) and whether it can power off and wake
+     *  on an input. Absent when the device does not say. */
+    power?: { battery: boolean; powerOff: boolean }
     /** Extra guidance shown on the "unlock to continue" screen for firmwares
      *  whose unlock has a prerequisite the user must set up themselves (ZMK
      *  needs a studio-unlock binding in the keymap). Omitted when unlocking is
