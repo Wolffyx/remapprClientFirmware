@@ -29,7 +29,7 @@ import type {
     Layer,
     LockState,
 } from '@firmware/types'
-import { ProtocolError } from '@firmware/errors'
+import { ProtocolError, TransportError } from '@firmware/errors'
 
 import {
     type BehaviorMap,
@@ -173,7 +173,7 @@ export class ZmkKeyboardService implements KeyboardService {
         const deadline = new Promise<never>((_, reject) => {
             timer = setTimeout(() => {
                 reject(
-                    new ProtocolError(
+                    new TransportError(
                         `The keyboard did not answer within ${RPC_DEADLINE_MS / 1000} s`,
                     ),
                 )
