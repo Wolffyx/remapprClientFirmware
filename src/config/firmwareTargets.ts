@@ -38,13 +38,13 @@ export const BUILDER_FIRMWARE_TARGETS: BuilderFirmwareTarget[] = [
     {
         id: 'zmk',
         name: 'ZMK',
-        blurb: 'Wireless · devicetree keymap',
+        blurb: 'Wireless · keymap file',
         wireless: true,
     },
     {
         id: 'remappr',
         name: 'Remappr',
-        blurb: 'Wireless · Zephyr shield + config blob',
+        blurb: 'Wireless · board files and a settings file',
         wireless: true,
     },
 ]

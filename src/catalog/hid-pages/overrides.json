@@ -66,7 +66,7 @@
         },
         "50": {
             "short": "NUHS",
-            "long": "NonUS Hash"
+            "long": "Non-US # and ~ key"
         },
         "51": {
             "short": ";"
@@ -155,57 +155,66 @@
             "long": "KP Enter"
         },
         "89": {
-            "short": "1 En",
-            "med": "1 End"
+            "short": "1 End",
+            "med": "1 End",
+            "long": "Keypad 1 / End"
         },
         "90": {
-            "short": "2 ↓"
+            "short": "2 ↓",
+            "long": "Keypad 2 / Down"
         },
         "91": {
-            "short": "3 PD",
-            "med": "3 PgDn"
+            "short": "3 PgDn",
+            "med": "3 PgDn",
+            "long": "Keypad 3 / Page Down"
         },
         "92": {
-            "short": "4 ←"
+            "short": "4 ←",
+            "long": "Keypad 4 / Left"
         },
         "93": {
             "short": "5"
         },
         "94": {
-            "short": "6 →"
+            "short": "6 →",
+            "long": "Keypad 6 / Right"
         },
         "95": {
-            "short": "7 Hm",
-            "med": "7 Home"
+            "short": "7 Home",
+            "med": "7 Home",
+            "long": "Keypad 7 / Home"
         },
         "96": {
-            "short": "8 ↑"
+            "short": "8 ↑",
+            "long": "Keypad 8 / Up"
         },
         "97": {
-            "short": "9 PU",
-            "med": "9 PgUp"
+            "short": "9 PgUp",
+            "med": "9 PgUp",
+            "long": "Keypad 9 / Page Up"
         },
         "98": {
-            "short": "0 In",
+            "short": "0 Ins",
             "med": "0 Ins",
-            "long": "0 Insert"
+            "long": "Keypad 0 / Insert"
         },
         "99": {
-            "short": ". Dl",
+            "short": ". Del",
             "med": ". Del",
-            "long": ". Delete"
+            "long": "Keypad . / Delete"
         },
         "101": {
             "short": "Appl",
             "med": "Appl",
-            "long": "Applicat'n"
+            "long": "Application (menu) key"
         },
         "102": {
             "short": "Power",
             "med": "Power"
         },
         "100": {
-            "short": "NUBS"
+            "short": "NUBS",
+            "long": "Non-US \\ and | key"
         },
         "103": {
             "short": "KP=",

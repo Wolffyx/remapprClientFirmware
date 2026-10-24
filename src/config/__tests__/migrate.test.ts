@@ -345,7 +345,7 @@ describe('migrate: studio_unlock is rejected on remappr', () => {
             (d) => d.level === 'error' && /studio_unlock/.test(d.message),
         )
         expect(err).toBeDefined()
-        expect(err?.message).toMatch(/RUCP control/)
+        expect(err?.message).toMatch(/control connection/)
     })
 })
 

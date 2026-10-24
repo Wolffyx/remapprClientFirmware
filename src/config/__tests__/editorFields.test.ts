@@ -75,7 +75,7 @@ describe('timing defaults metadata', () => {
         // enforces coverage, so a count check is enough at runtime.
         expect(TIMING_FIELDS).toHaveLength(12)
         const groups = groupedTimingFields().map(([g]) => g)
-        expect(groups).toContain('Engine timing (§7.4.1)')
+        expect(groups).toContain('Engine timing')
     })
 
     it('fieldSupported: core field always; featured follows the bitmask', () => {
@@ -337,7 +337,7 @@ describe('link/latency profile helpers (§8 N6)', () => {
     it('rejects an out-of-range override (static table)', () => {
         expect(
             linkProfileError({ profile: 'balanced', overrides: [{ knob: 0, value: 50 }] }),
-        ).toMatch(/USART baud/)
+        ).toMatch(/Wire speed/)
     })
 
     it('rejects a value outside the live GET_LINK_LIMITS range', () => {
@@ -347,18 +347,18 @@ describe('link/latency profile helpers (§8 N6)', () => {
                 { profile: 'balanced', overrides: [{ knob: 0, value: 1000000 }] },
                 [{ knob: 0, min: 200000, max: 900000 }],
             ),
-        ).toMatch(/USART baud/)
+        ).toMatch(/Wire speed/)
     })
 
     it('enforces the two cross-knob dependency rules', () => {
         // candidacy (40) < heartbeat (100) → depend error.
         expect(
             linkProfileError({ profile: 'balanced', overrides: [{ knob: 4, value: 40 }] }),
-        ).toMatch(/Candidacy/)
+        ).toMatch(/Settle time/)
         // handover (500) < demotion (1000) → depend error.
         expect(
             linkProfileError({ profile: 'balanced', overrides: [{ knob: 6, value: 500 }] }),
-        ).toMatch(/Handover/)
+        ).toMatch(/between handovers/)
     })
 })
 

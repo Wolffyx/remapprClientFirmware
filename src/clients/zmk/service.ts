@@ -44,6 +44,9 @@ import { zmkNeutralToConfig } from './raise'
 import { serializeKeymap } from '@firmware/config'
 import { generateZMKConfigFile, generateZMKKeymapFile } from './export'
 
+/** Longest wait for one RPC reply; a flash save answers well inside it. */
+export const RPC_DEADLINE_MS = 10_000
+
 const ZMK_CAPABILITIES: Capabilities = {
     lock: 'editor',
     rename: true,
@@ -154,10 +157,34 @@ export class ZmkKeyboardService implements KeyboardService {
         this.notificationLoop = this.runNotificationLoop()
     }
 
+    // A reply that never comes would hold the client library's request lock
+    // (one lock for every ZMK connection) and stall each later request without
+    // a word, so every edit hangs until a reconnect. Past the deadline the
+    // link counts as dead: it is closed, the waiting request fails, and the
+    // app sees the device go instead of freezing.
     private async call(
         request: Omit<Request, 'requestId'>,
     ): Promise<RequestResponse> {
-        return call_rpc(this.connection, request)
+        const rpc = call_rpc(this.connection, request)
+        // The deadline may settle first; the library's own failure (the closed
+        // link) then has nobody waiting on it.
+        rpc.catch(() => undefined)
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const deadline = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+                reject(
+                    new ProtocolError(
+                        `The keyboard did not answer within ${RPC_DEADLINE_MS / 1000} s`,
+                    ),
+                )
+                void this.disconnect()
+            }, RPC_DEADLINE_MS)
+        })
+        try {
+            return await Promise.race([rpc, deadline])
+        } finally {
+            clearTimeout(timer)
+        }
     }
 
     private async runNotificationLoop(): Promise<void> {

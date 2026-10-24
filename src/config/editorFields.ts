@@ -48,7 +48,7 @@ export interface TimingFieldDef {
 
 const GROUP_TAP = 'Tap-hold & combo'
 const GROUP_DEBOUNCE = 'Debounce'
-const GROUP_ENGINE = 'Engine timing (§7.4.1)'
+const GROUP_ENGINE = 'Engine timing'
 
 export const TIMING_FIELDS = [
     {
@@ -78,7 +78,7 @@ export const TIMING_FIELDS = [
     {
         key: 'releaseDebounceMs',
         label: 'Release debounce',
-        description: '0 keeps the firmware / devicetree value.',
+        description: '0 keeps the firmware’s own value.',
         group: GROUP_DEBOUNCE,
         min: 0,
         max: 80,
@@ -86,7 +86,7 @@ export const TIMING_FIELDS = [
     {
         key: 'pressDebounceMs',
         label: 'Press debounce',
-        description: '0 keeps the firmware / devicetree value.',
+        description: '0 keeps the firmware’s own value.',
         group: GROUP_DEBOUNCE,
         min: 0,
         max: 80,
@@ -94,7 +94,7 @@ export const TIMING_FIELDS = [
     {
         key: 'matrixPressDebounceMs',
         label: 'Matrix press debounce',
-        description: '0 keeps the firmware / devicetree value.',
+        description: '0 keeps the firmware’s own value.',
         group: GROUP_DEBOUNCE,
         min: 0,
         max: 80,
@@ -102,15 +102,15 @@ export const TIMING_FIELDS = [
     {
         key: 'matrixReleaseDebounceMs',
         label: 'Matrix release debounce',
-        description: '0 keeps the firmware / devicetree value.',
+        description: '0 keeps the firmware’s own value.',
         group: GROUP_DEBOUNCE,
         min: 0,
         max: 80,
     },
     {
         key: 'capsWordIdleMs',
-        label: 'Caps-word idle',
-        description: 'Auto-exit caps-word after this idle time; 0 = never.',
+        label: 'Caps word idle',
+        description: 'Turn caps word off after this idle time; 0 = never.',
         group: GROUP_ENGINE,
         min: 0,
         max: 5000,
@@ -146,7 +146,7 @@ export const TIMING_FIELDS = [
     {
         key: 'matrixPollPeriodMs',
         label: 'Matrix poll period',
-        description: 'Matrix scan interval; 0 keeps the devicetree value.',
+        description: 'Matrix scan interval; 0 keeps the firmware’s own value.',
         group: GROUP_ENGINE,
         min: 0,
         max: 100,
@@ -196,6 +196,15 @@ export const FLAVOR_OPTIONS: readonly Flavor[] = [
     'tap-preferred',
     'tap-unless-interrupted',
 ]
+
+/** Plain, sentence-case display names for each hold-tap flavor (the stored
+ *  values above stay the firmware's own tokens). */
+export const FLAVOR_LABELS: Readonly<Record<Flavor, string>> = {
+    balanced: 'Balanced',
+    'hold-preferred': 'Hold wins',
+    'tap-preferred': 'Tap wins',
+    'tap-unless-interrupted': 'Tap, unless another key is pressed',
+}
 
 /** Editable numeric timing fields on a hold-tap def. */
 export interface HoldTapNumField {
@@ -297,18 +306,22 @@ export function modMorphPatch(
  *  tap). The field accepts any token; an editor may show a def's current value
  *  even if it is not in this list. */
 export const HOLD_TAP_BEHAVIOR_TOKENS: readonly {
+    /** The raw behavior token stored in the def. */
     value: string
+    /** Combined "token — meaning" text (kept for existing consumers). */
     label: string
+    /** Plain, sentence-case name, for UIs that show it beside the raw token. */
+    name: string
 }[] = [
-    { value: '&kp', label: '&kp — key press' },
-    { value: '&mo', label: '&mo — momentary layer' },
-    { value: '&lt', label: '&lt — layer-tap' },
-    { value: '&mt', label: '&mt — mod-tap' },
-    { value: '&sk', label: '&sk — sticky key' },
-    { value: '&sl', label: '&sl — sticky layer' },
-    { value: '&kt', label: '&kt — key toggle' },
-    { value: '&trans', label: '&trans — transparent' },
-    { value: '&none', label: '&none — disabled' },
+    { value: '&kp', label: '&kp — key press', name: 'Key press' },
+    { value: '&mo', label: '&mo — momentary layer', name: 'Momentary layer' },
+    { value: '&lt', label: '&lt — layer-tap', name: 'Layer tap' },
+    { value: '&mt', label: '&mt — mod-tap', name: 'Mod tap' },
+    { value: '&sk', label: '&sk — sticky key', name: 'Sticky key' },
+    { value: '&sl', label: '&sl — sticky layer', name: 'Sticky layer' },
+    { value: '&kt', label: '&kt — key toggle', name: 'Key toggle' },
+    { value: '&trans', label: '&trans — transparent', name: 'Transparent' },
+    { value: '&none', label: '&none — disabled', name: 'None' },
 ]
 
 /** A unique id `${prefix}${n}` that collides with no `existing[i].id`. */
@@ -479,13 +492,13 @@ export const ROLE_OPTIONS: readonly {
 }[] = [
     {
         value: 'coordinator',
-        label: 'Coordinator',
-        help: 'Cluster main — merges every node’s input and drives the host link.',
+        label: 'Main node',
+        help: 'Combines every node’s input and talks to the computer.',
     },
     {
         value: 'follower',
         label: 'Follower',
-        help: 'Forwards its input upstream to the coordinator; no local host.',
+        help: 'Sends its input to the main node; it does not talk to the computer itself.',
     },
 ]
 
@@ -497,13 +510,13 @@ export const FORWARD_MODE_OPTIONS: readonly {
 }[] = [
     {
         value: 'resolved',
-        label: 'Resolved HID (mode B)',
-        help: 'The follower resolves its own keymap and forwards HID usages (default).',
+        label: 'Send finished key presses',
+        help: 'The follower looks up its own keymap and sends finished key presses; the main node passes them on (default).',
     },
     {
         value: 'physical',
-        label: 'Physical positions (mode A)',
-        help: 'The follower forwards raw matrix positions; the coordinator resolves them against the cluster keymap. Needs a cluster map below.',
+        label: 'Send key positions',
+        help: 'The follower sends which key position was pressed; the main node looks it up in the shared keymap. Needs a node map below.',
     },
 ]
 
@@ -582,19 +595,19 @@ export const LINK_PROFILE_OPTIONS: readonly {
     {
         value: 'gaming',
         label: 'Gaming',
-        help: 'Fast election cadence + max baud for lowest latency. Requires wired / charging power.',
+        help: 'Fastest choice of main node and top wire speed for the lowest latency. Needs wired or charging power.',
     },
     {
         value: 'powerSave',
         label: 'Power save',
-        help: 'Slower cadences to save battery.',
+        help: 'Checks in less often to save battery.',
     },
 ]
 
 /** Power-tier knob values (enum remappr_power_tier), rendered as a select. */
 export const POWER_TIER_OPTIONS: readonly { value: number; label: string }[] = [
     { value: 0, label: 'Any (battery or wired)' },
-    { value: 1, label: 'Wired / charging only' },
+    { value: 1, label: 'Wired or charging only' },
 ]
 
 // pattern-check: skip plain metadata table describing the link-profile knobs
@@ -616,16 +629,16 @@ export interface LinkKnobField {
 export const LINK_KNOB_FIELDS: readonly LinkKnobField[] = [
     {
         knob: LinkProfileKnob.usartBaud,
-        label: 'USART baud',
-        help: 'Node-bus wire speed between coordinator and followers.',
+        label: 'Wire speed',
+        help: 'How fast nodes talk over the wire (baud).',
         unit: 'baud',
         min: 115200,
         max: 2000000,
     },
     {
         knob: LinkProfileKnob.tElectMs,
-        label: 'Election window',
-        help: '§6 campaign window before a coordinator is chosen.',
+        label: 'Wait before choosing a main node',
+        help: 'How long the nodes wait before one becomes the main node.',
         unit: 'ms',
         min: 20,
         max: 1000,
@@ -633,22 +646,22 @@ export const LINK_KNOB_FIELDS: readonly LinkKnobField[] = [
     {
         knob: LinkProfileKnob.electHeartbeatMs,
         label: 'Heartbeat period',
-        help: '§6 coordinator beacon / heartbeat period.',
+        help: 'How often the main node tells the others it is still there.',
         unit: 'ms',
         min: 40,
         max: 1000,
     },
     {
         knob: LinkProfileKnob.electMissLimit,
-        label: 'Missed-beacon limit',
-        help: 'Missed heartbeats before a follower fails over.',
+        label: 'Missed check-ins allowed',
+        help: 'How many check-ins a follower can miss before another node takes over as main.',
         min: 1,
         max: 16,
     },
     {
         knob: LinkProfileKnob.candidacyStableMs,
-        label: 'Candidacy-stable window',
-        help: 'Link-stable time before a node may campaign (≥ heartbeat period).',
+        label: 'Settle time before a node can become main',
+        help: 'How long a node’s link must be stable before it can become the main node (at least the heartbeat period).',
         unit: 'ms',
         min: 40,
         max: 5000,
@@ -656,15 +669,15 @@ export const LINK_KNOB_FIELDS: readonly LinkKnobField[] = [
     {
         knob: LinkProfileKnob.demotionDelayMs,
         label: 'Demotion delay',
-        help: 'Voluntary-demotion settle delay.',
+        help: 'How long a main node waits after stepping down before things settle.',
         unit: 'ms',
         min: 100,
         max: 10000,
     },
     {
         knob: LinkProfileKnob.handoverMinIntervalMs,
-        label: 'Handover min interval',
-        help: 'Minimum spacing between handovers (≥ demotion delay).',
+        label: 'Minimum time between handovers',
+        help: 'Shortest gap between two changes of main node (at least the demotion delay).',
         unit: 'ms',
         min: 100,
         max: 20000,
@@ -672,7 +685,7 @@ export const LINK_KNOB_FIELDS: readonly LinkKnobField[] = [
     {
         knob: LinkProfileKnob.powerTier,
         label: 'Power tier',
-        help: 'Wired-only profiles need external / charging power (enforced at save).',
+        help: 'Wired-only profiles need external or charging power (checked when you save).',
         min: 0,
         max: 1,
         enumOptions: POWER_TIER_OPTIONS,
@@ -743,7 +756,7 @@ export function linkProfileError(
 ): string | null {
     for (const o of lp.overrides ?? []) {
         const f = LINK_KNOB_FIELDS.find((k) => k.knob === o.knob)
-        if (!f) return `unknown knob id ${o.knob}`
+        if (!f) return `Unknown setting ${o.knob}`
         if (!Number.isInteger(o.value) || o.value < 0)
             return `${f.label} must be a whole number`
     }
@@ -759,11 +772,11 @@ export function linkProfileError(
         linkKnobValue(lp, LinkProfileKnob.candidacyStableMs) <
         linkKnobValue(lp, LinkProfileKnob.electHeartbeatMs)
     )
-        return 'Candidacy-stable window must be ≥ the heartbeat period'
+        return 'Settle time before a node can become main must be at least the heartbeat period'
     if (
         linkKnobValue(lp, LinkProfileKnob.handoverMinIntervalMs) <
         linkKnobValue(lp, LinkProfileKnob.demotionDelayMs)
     )
-        return 'Handover min interval must be ≥ the demotion delay'
+        return 'Minimum time between handovers must be at least the demotion delay'
     return null
 }

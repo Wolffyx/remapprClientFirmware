@@ -355,7 +355,7 @@ describe('decodeRemapprBlob TBL_RGB emit + TBL_PERSONALITY (§4c)', () => {
             "node": { "personality": "joystick" }
         }`)
         const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
-        expect(diagnostics.some((d) => /personality/.test(d.message))).toBe(true)
+        expect(diagnostics.some((d) => /device type/.test(d.message))).toBe(true)
         const { config } = decodeRemapprBlob(blob)
         expect(config?.node?.personality).toBeUndefined()
     })

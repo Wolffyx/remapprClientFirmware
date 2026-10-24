@@ -85,6 +85,11 @@ import type {
     CanonTapHold,
 } from '../../types'
 import { MODIFIERS, resolveKeycode, type Modifier } from '../../keycodes'
+import { BUILDER_FIRMWARE_TARGETS } from '../../firmwareTargets'
+
+/** This export target's display name, for user-facing diagnostics. */
+const TARGET =
+    BUILDER_FIRMWARE_TARGETS.find((t) => t.id === 'remappr')?.name ?? 'Remappr'
 
 const COMBO_ANY_LAYER = 0xff
 const HID_PAGE_KEYBOARD = 7
@@ -127,13 +132,13 @@ function keyUsage(
 ): number | null {
     const u = HID_USAGE_BY_CANONICAL.get(keyId)
     if (!u) {
-        diag.error(`no HID usage for key "${keyId}"`, path)
+        diag.error(`${TARGET} has no key code for the key "${keyId}".`, path)
         return null
     }
     if (u.page !== HID_PAGE_KEYBOARD) {
         diag.error(
-            `key "${keyId}" is on HID page ${u.page} — only keyboard-page ` +
-                `usages can be a macro / tap / sequence target (§44.4)`,
+            `The key "${keyId}" can't be used here: only keyboard keys can be ` +
+                `a macro, tap or sequence target.`,
             path,
         )
         return null
@@ -229,7 +234,7 @@ function lowerMacroStep(
             return [{ op: MacroOp.PauseForRelease, arg: 0 }]
         default:
             diag.error(
-                `macro step "${step.type}" not yet on the wire — §44.3 gap`,
+                `${TARGET} can't play the macro step "${step.type}" yet.`,
                 path,
             )
             return []
@@ -263,8 +268,8 @@ function lowerMacroSteps(
         if (s.type === 'param') {
             if ((s.from ?? 1) !== 1 || (s.to ?? 1) !== 1) {
                 diag.error(
-                    `multi-parameter macros (param ${s.from ?? 1}→${s.to ?? 1}) ` +
-                        `are not supported — only the one-param 1→1 form`,
+                    `${TARGET} supports macros with one parameter only ` +
+                        `(this one maps parameter ${s.from ?? 1}→${s.to ?? 1}).`,
                     path,
                 )
                 return
@@ -301,7 +306,7 @@ function lowerMacroSteps(
     })
     if (pendingParam)
         diag.warn(
-            `macro "${m.id}": trailing param marker has no following key step`,
+            `Macro "${m.id}": the parameter marker at the end has no key step after it.`,
             ['macros', mi, 'steps'],
         )
     return steps
@@ -469,8 +474,8 @@ function lowerHoldTap(
 
     if (tapTok !== 'kp') {
         diag.error(
-            `hold_tap "${action.ref}" tap behavior "${def.bindings[1]}" is not ` +
-                `&kp — a firmware hold-tap taps a single key`,
+            `Hold-tap "${action.ref}": the tap "${def.bindings[1]}" must be a ` +
+                `key press (&kp) — ${TARGET} hold-taps tap a single key.`,
             path,
         )
         return rec({ type: BehaviorType.None })
@@ -478,8 +483,8 @@ function lowerHoldTap(
     const tap = tokenUsage(action.tapParam)
     if (tap === null) {
         diag.error(
-            `hold_tap "${action.ref}" tap key "${action.tapParam}" is not a ` +
-                `keyboard usage`,
+            `Hold-tap "${action.ref}": the tap key "${action.tapParam}" is not ` +
+                `a keyboard key.`,
             path,
         )
         return rec({ type: BehaviorType.None })
@@ -509,8 +514,8 @@ function lowerHoldTap(
         const bit = u !== null ? usageToModBit(u) : null
         if (bit === null) {
             diag.error(
-                `hold_tap "${action.ref}" hold "${action.holdParam}" is not a ` +
-                    `modifier — only mod or layer holds are on the wire`,
+                `Hold-tap "${action.ref}": the hold "${action.holdParam}" is not ` +
+                    `a modifier — ${TARGET} can only hold a modifier or a layer.`,
                 path,
             )
             return rec({ type: BehaviorType.None })
@@ -525,7 +530,7 @@ function lowerHoldTap(
                 : undefined)
         if (li === undefined) {
             diag.error(
-                `hold_tap "${action.ref}" hold layer "${action.holdParam}" is unknown`,
+                `Hold-tap "${action.ref}": unknown hold layer "${action.holdParam}".`,
                 path,
             )
             return rec({ type: BehaviorType.None })
@@ -533,8 +538,8 @@ function lowerHoldTap(
         return rec({ type: BehaviorType.LayerTap, ...common, hold: li })
     }
     diag.error(
-        `hold_tap "${action.ref}" hold behavior "${def.bindings[0]}" is not on ` +
-            `the wire (firmware hold is a modifier or a layer only)`,
+        `Hold-tap "${action.ref}": ${TARGET} can't hold "${def.bindings[0]}" — ` +
+            `only a modifier or a layer.`,
         path,
     )
     return rec({ type: BehaviorType.None })
@@ -613,8 +618,8 @@ function lowerAction(
                 // modifier field, so any mods on the binding are dropped.
                 if (action.mods?.length) {
                     diag.warn(
-                        `consumer key "${action.key}" carries modifiers — ` +
-                            `dropped (BH_CONSUMER emits a bare Consumer usage)`,
+                        `The modifiers on the media key "${action.key}" were ` +
+                            `dropped — ${TARGET} sends media keys on their own.`,
                         path,
                     )
                 }
@@ -627,8 +632,8 @@ function lowerAction(
                 // has no modifier field, so any mods on the binding are dropped.
                 if (action.mods?.length) {
                     diag.warn(
-                        `system-control key "${action.key}" carries modifiers — ` +
-                            `dropped (BH_SYS_CTRL emits a bare GD usage)`,
+                        `The modifiers on the system key "${action.key}" were ` +
+                            `dropped — ${TARGET} sends system keys on their own.`,
                         path,
                     )
                 }
@@ -636,8 +641,8 @@ function lowerAction(
             }
             if (u.page !== HID_PAGE_KEYBOARD) {
                 diag.error(
-                    `key "${action.key}" is on HID page ${u.page} (not yet on ` +
-                        `the wire — §44.4)`,
+                    `${TARGET} can't send the key "${action.key}" yet ` +
+                        `(it is on HID page ${u.page}).`,
                     path,
                 )
                 return rec({ type: BehaviorType.None })
@@ -662,8 +667,8 @@ function lowerAction(
             if (tapUsage === null) return rec({ type: BehaviorType.None })
             if (action.tap.mods?.length) {
                 diag.warn(
-                    `tap_hold tap "${action.tap.key}" carries modifiers — ` +
-                        `dropped (firmware MOD_TAP tap is a single usage)`,
+                    `The modifiers on the tap key "${action.tap.key}" were ` +
+                        `dropped — ${TARGET} taps a single key.`,
                     [...path, 'tap'],
                 )
             }
@@ -753,8 +758,8 @@ function lowerAction(
             }
             if (action.param !== undefined) {
                 diag.warn(
-                    `macro "${action.ref}" has no param step — ` +
-                        `binding argument ignored`,
+                    `Macro "${action.ref}" has no parameter step, so the ` +
+                        `binding's argument is ignored.`,
                     path,
                 )
             }
@@ -812,8 +817,8 @@ function lowerAction(
             // op (the app holds an authenticated session), not a key binding.
             // Reject cleanly instead of silently emitting NONE.
             diag.error(
-                'studio_unlock is not a remappr keymap action — device unlock ' +
-                    'is handled by the RUCP control channel, not a key binding',
+                `studio_unlock is not a key action on ${TARGET} — the app ` +
+                    `unlocks the device over its control connection, not a key.`,
                 path,
             )
             return rec({ type: BehaviorType.None })
@@ -975,8 +980,8 @@ function lowerAction(
                 }
                 if (def.hold)
                     diag.warn(
-                        `tap_dance "${action.ref}" hold target is not on the ` +
-                            `wire (firmware TAP_DANCE is tap-count only) — dropped`,
+                        `Tap dance "${action.ref}": ${TARGET} only counts taps, ` +
+                            `so the hold action was dropped.`,
                         path,
                     )
                 // sub[i] fires on (i+1) taps; counts past sub_count clamp to the
@@ -1001,8 +1006,8 @@ function lowerAction(
                 for (let i = 0; i < maxCount; i++)
                     if (!filled[i])
                         diag.warn(
-                            `tap_dance "${action.ref}" has no action for ` +
-                                `${i + 1} tap(s) — emits none`,
+                            `Tap dance "${action.ref}" has no action for ` +
+                                `${i + 1} tap(s), so that count does nothing.`,
                             path,
                         )
                 const subIndex = comp.subs.length
@@ -1090,8 +1095,8 @@ function lowerAction(
             // action type being added without a lowering arm.
             const unhandled = action as { type?: string }
             diag.error(
-                `action "${unhandled.type ?? 'unknown'}" not yet supported by ` +
-                    `the remappr target (§44.3 gap)`,
+                `${TARGET} doesn't support the action ` +
+                    `"${unhandled.type ?? 'unknown'}" yet.`,
                 path,
             )
             return rec({ type: BehaviorType.None })
@@ -1239,8 +1244,8 @@ function encodeBlob(
         })
         if (layer.encoderBindings) {
             diag.warn(
-                `keyed encoderBindings are not yet lowered to the wire — use ` +
-                    `the slot-array layer.encoders[] form`,
+                `${TARGET} can't use encoderBindings yet — set the knobs ` +
+                    `in the layer's encoders list instead.`,
                 ['layers', li, 'encoderBindings'],
             )
         }
@@ -1340,7 +1345,8 @@ function encodeBlob(
     subs.forEach((s, si) => {
         if (s.posHold) {
             diag.warn(
-                `positional hold inside a composite is not on the wire — dropped`,
+                `${TARGET} can't use hold-trigger key positions inside a ` +
+                    `combined behavior, so they were dropped.`,
                 ['subs', si],
             )
             delete s.posHold
@@ -1430,7 +1436,7 @@ function encodeBlob(
         : undefined
     if (personality && personalityCode === undefined) {
         diag.warn(
-            `node personality '${personality}' is configured by a device document, not a keymap — not emitted`,
+            `The device type '${personality}' is set in the device file, not the keymap, so it was left out.`,
             ['node', 'personality'],
         )
     }
@@ -1457,7 +1463,7 @@ function encodeBlob(
             const uid = hexToBytes(c.uid)
             if (uid.length > CLUSTER_UID_MAX)
                 diag.warn(
-                    `cluster node ${i} uid is ${uid.length} bytes — truncated to ${CLUSTER_UID_MAX}`,
+                    `Node ${i}: its UID is ${uid.length} bytes, cut to ${CLUSTER_UID_MAX}.`,
                     ['node', 'cluster', i],
                 )
             return {
@@ -1502,7 +1508,7 @@ function encodeBlob(
         .filter((b) => {
             if (b.position < numPositions) return true
             diag.warn(
-                `action binding position ${b.position} >= ${numPositions} positions — dropped`,
+                `Action binding at position ${b.position} is past the last key (${numPositions} keys), so it was dropped.`,
                 ['actionBindings'],
             )
             return false
@@ -1523,7 +1529,7 @@ function encodeBlob(
             )
         } catch (e) {
             diag.error(
-                `autocorrect dictionary not encodable: ${e instanceof Error ? e.message : String(e)}`,
+                `The autocorrect dictionary can't be saved: ${e instanceof Error ? e.message : String(e)}`,
                 ['autocorrect'],
             )
         }

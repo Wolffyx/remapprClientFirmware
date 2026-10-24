@@ -698,7 +698,7 @@ describe('remappr GD system-control keys', () => {
         )
         expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
         expect(
-            diagnostics.some((d) => /system-control key/.test(d.message)),
+            diagnostics.some((d) => /system key/.test(d.message)),
         ).toBe(true)
         const b = files[0].content as Uint8Array
         const beh = findTable(b, 4)!

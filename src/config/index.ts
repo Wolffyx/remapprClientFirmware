@@ -120,6 +120,7 @@ export {
     fieldSupported,
     groupedTimingFields,
     type Flavor,
+    FLAVOR_LABELS,
     FLAVOR_OPTIONS,
     type HoldTapNumField,
     HOLD_TAP_NUM_FIELDS,

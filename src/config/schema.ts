@@ -40,7 +40,7 @@ export const FlavorSchema = z
         'tap-preferred',
         'tap-unless-interrupted',
     ])
-    .describe('Hold-tap interrupt flavor (ZMK devicetree value).')
+    .describe('How a hold-tap decides between hold and tap when another key is pressed.')
 
 export const LightingTargetSchema = z
     .enum(['underglow', 'backlight', 'per_key'])
@@ -165,7 +165,7 @@ const tapHoldTimings = {
     holdTriggerKeyPositions: z
         .array(z.number().int().nonnegative())
         .optional()
-        .describe('Physical positions whose interruption can trigger the hold (§28).'),
+        .describe('Key positions that, when pressed, can trigger the hold.'),
     holdTriggerOnRelease: z
         .boolean()
         .optional()
@@ -614,8 +614,8 @@ export const ActionBindingSchema = z
         action: SemanticActionSchema,
     })
     .describe(
-        'Position -> semantic action (§F, TBL_ACTION_BINDING): the ' +
-            'personality-output layer, additive to the layer bindings.',
+        'What a key position does on its own, on top of the layer bindings ' +
+            '(for example a mouse button or a joystick button).',
     )
 
 /* ── autocorrect dictionary (§5.2-E, TBL_AUTOCORRECT) ──────────────────── */
@@ -651,9 +651,9 @@ export const AutocorrectSchema = z
         entries: z.array(AutocorrectEntrySchema),
     })
     .describe(
-        'On-device autocorrect dictionary (§5.2-E, TBL_AUTOCORRECT). An empty ' +
-            'entry list still emits the table — that is how a device is told to ' +
-            'drop a dictionary it already holds.',
+        'Autocorrect dictionary stored on the device. An empty list is still ' +
+            'sent — that is how a device is told to drop a dictionary it ' +
+            'already holds.',
     )
 
 /* ── board hardware (kscan wiring + electrical transform) ──────────────── */
@@ -842,8 +842,8 @@ export const LightingSchema = z
             )
             .optional()
             .describe(
-                'Static per-key RGB colors keyed by physical position → "#rrggbb"; ' +
-                    'compiled to TBL_RGB (§4c).',
+                'Fixed per-key RGB colors by key position, as "#rrggbb"; ' +
+                    'written into the device lighting settings.',
             ),
     })
     .describe(
@@ -899,7 +899,7 @@ export const BoardSchema = z
         sensor: z.lazy(() => BoardSensorSchema).optional(),
     })
     .describe(
-        'Build-time board definition for the DT/Kconfig generator (never in the blob).',
+        'Board definition used to generate the firmware build files (never sent to the device).',
     )
 
 // pattern-check: skip declarative zod schema for one mouse button action
@@ -953,7 +953,7 @@ export const MouseSchema = z
             .min(1)
             .max(5)
             .optional()
-            .describe('DPIs the DPI buttons step through (TBL_MOUSE v3).'),
+            .describe('DPI values the DPI buttons step through.'),
         dpiStage: z
             .number()
             .int()
@@ -967,7 +967,7 @@ export const MouseSchema = z
             .optional()
             .describe(
                 'Mouse image only: what physical button i does instead of what ' +
-                    'buttonMap says (TBL_ACTION_BINDING); null = the button map.',
+                    'buttonMap says; null = the button map.',
             ),
     })
     .superRefine((m, ctx) => {
@@ -980,10 +980,10 @@ export const MouseSchema = z
         }
     })
     .describe(
-        'Pointer/mouse-node settings (TBL_MOUSE, §4b): sensor cpi, auto-layer ' +
-            'timeout, an acceleration curve of [speedIn, multX100] points, ' +
-            '(TBL_MOUSE v2) axis inverts / swap, scroll divisor and button map, ' +
-            '(v3) DPI stages, and a mouse image\'s button actions.',
+        'Mouse settings: sensor CPI, auto mouse-layer timeout, an ' +
+            'acceleration curve of [speedIn, multX100] points, axis inverts / ' +
+            'swap, scroll divisor and button map, DPI stages, and a mouse ' +
+            'image\'s button actions.',
     )
 
 // pattern-check: skip declarative zod schemas for sensor settings (sensor-settings plan §4b)
@@ -1046,7 +1046,7 @@ export const DeviceSensorSchema = z
                     'name the device does not list is kept but not compiled.',
             ),
     })
-    .describe("A device's sensor settings (TBL_SENSOR, sensor-settings plan §4).")
+    .describe("A device's sensor settings.")
 
 export const NodeSensorSchema = z
     .looseObject({
@@ -1054,18 +1054,18 @@ export const NodeSensorSchema = z
             .optional()
             .describe(
                 "The product's defaults for the sensor, by registry name: built " +
-                    'into the board (remappr,setting-defaults) and written into ' +
-                    'TBL_SENSOR, under any value the user sets.',
+                    'into the board and written to the device, under any value ' +
+                    'the user sets.',
             ),
     })
-    .describe("The node's sensor (sensor-settings plan §4b).")
+    .describe("The node's sensor.")
 
 export const BoardSensorSchema = z
     .object({
         part: z
             .string()
             .min(1)
-            .describe('The sensor\'s devicetree compatible, e.g. "pixart,paw3395".'),
+            .describe('The sensor part id, e.g. "pixart,paw3395".'),
         bus: z
             .string()
             .min(1)
@@ -1148,7 +1148,7 @@ export const JoystickSchema = z
             .optional()
             .describe(
                 'By binding position: what the button does instead of its ' +
-                    'default (TBL_ACTION_BINDING); null = the default.',
+                    'default; null = the default.',
             ),
     })
     .superRefine((j, ctx) => {
@@ -1165,7 +1165,7 @@ export const JoystickSchema = z
         }
     })
     .describe(
-        'Joystick settings (TBL_JOYSTICK, input-layout plan §4): hat ways, ' +
+        'Joystick settings: hat ways, ' +
             'per-input axis mapping, curve and deadzones, and button actions. ' +
             'Calibration stays on the device.',
     )
@@ -1183,7 +1183,10 @@ export const ClusterNodeSchema = z
         encoderBase: z.number().int().nonnegative().optional(),
         pointerBase: z.number().int().nonnegative().optional(),
     })
-    .describe("One cluster node's UID→address-base assignment (§N4c mode-A).")
+    .describe(
+        "One node's hardware UID and where its keys, knobs and pointers start " +
+            'in the shared position list (used when followers send key positions).',
+    )
 
 // pattern-check: skip plain zod wire-DTO schema mirroring TBL_LINK_PROFILE
 export const LinkProfileSchema = z
@@ -1199,9 +1202,9 @@ export const LinkProfileSchema = z
             .optional(),
     })
     .describe(
-        'Node-bus link/latency profile (§8, N6, TBL_LINK_PROFILE): a base ' +
-            'profile plus per-knob overrides (USART baud, §6 election cadence, ' +
-            'power tier). Absent ⇒ the balanced default.',
+        'Link and latency profile between wired nodes: a base profile plus ' +
+            'per-setting overrides (wire speed, how fast a main node is chosen, ' +
+            'power tier). Left out = the balanced default.',
     )
 
 // pattern-check: skip plain zod wire-DTO schema mirroring TBL_RADIO
@@ -1249,7 +1252,7 @@ export const RadioSettingsSchema = z
             ),
     })
     .describe(
-        "The node's 2.4 GHz link settings (TBL_RADIO). A field left out keeps " +
+        "The node's 2.4 GHz link settings. A field left out keeps " +
             'the firmware default. On a split board the main MCU forwards them to ' +
             'the radio chip.',
     )
@@ -1284,7 +1287,7 @@ export const PowerSettingsSchema = z
         ),
     })
     .describe(
-        'When the device dims, sleeps and powers off on battery (TBL_POWER). ' +
+        'When the device dims, sleeps and powers off on battery. ' +
             'A field left out keeps the firmware default. On external power ' +
             'nothing sleeps.',
     )

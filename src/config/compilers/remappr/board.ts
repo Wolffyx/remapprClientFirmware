@@ -117,8 +117,8 @@ function actionToken(
         case 'key_press': {
             if (a.mods && a.mods.length > 0) {
                 diag.warn(
-                    `modified keypress not lowered to the default keymap ` +
-                        `(config blob carries it)`,
+                    `A key press with modifiers isn't put in the built-in ` +
+                        `keymap; the saved settings file carries it.`,
                     path,
                 )
                 return '&pass'
@@ -126,8 +126,8 @@ function actionToken(
             const u = HID_USAGE_BY_CANONICAL.get(a.key)
             if (!u || u.page !== HID_PAGE_KEYBOARD) {
                 diag.warn(
-                    `key "${a.key}" has no keyboard-page HID usage for the ` +
-                        `default keymap`,
+                    `The key "${a.key}" isn't a keyboard key, so it isn't put ` +
+                        `in the built-in keymap.`,
                     path,
                 )
                 return '&pass'
@@ -140,8 +140,8 @@ function actionToken(
             return '&block'
         default:
             diag.warn(
-                `binding "${a.type}" not lowered to the default keymap ` +
-                    `(config blob carries it)`,
+                `"${a.type}" isn't put in the built-in keymap; the saved ` +
+                    `settings file carries it.`,
                 path,
             )
             return '&pass'

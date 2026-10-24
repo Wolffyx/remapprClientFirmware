@@ -117,7 +117,7 @@ export const DongleSettingsSchema = z
             })
         }
     })
-    .describe('2.4 GHz dongle settings (TBL_DONGLE).')
+    .describe('2.4 GHz dongle settings.')
 
 export const DeviceConfigSchema = z
     .object({
