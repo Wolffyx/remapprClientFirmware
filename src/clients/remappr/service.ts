@@ -78,6 +78,7 @@ import {
     type LinkLimitKnob,
     Namespace,
     parseLinkLimits,
+    powerCapability,
     Status,
     statusName,
 } from './protocol'
@@ -127,6 +128,9 @@ export interface RemapprServiceDeps {
     /** §5.2-E unicode input-method facade — set on a directly-attached node
      *  advertising Cap.UNICODE; omitted otherwise. */
     unicode?: UnicodeApi
+    /** Hardware caps word (GET_PERSONALITY_MAP), for its power hardware
+     *  (battery, power off); omitted when the device reported none. */
+    hwCaps?: number
 }
 
 /** Round `b` up to a multiple of `align` with zero padding (flash alignment). */
@@ -254,6 +258,8 @@ export class RemapprKeyboardService
         // path's smaller max_sealed_chunk (16) does not apply to direct writes.
         this.sealedChunk = LEGACY_SEALED_CHUNK
 
+        // Battery / power off from the hw caps; its timeouts are node.power.
+        const power = powerCapability(deps.hwCaps)
         this.capabilities = {
             lock: 'none',
             rename: !this.readOnly,
@@ -270,6 +276,7 @@ export class RemapprKeyboardService
             persistence: true,
             maxLayers: this.maxLayers,
             readOnly: this.readOnly,
+            ...(power ? { power } : {}),
         }
 
         this.seedLayersFromConfig()

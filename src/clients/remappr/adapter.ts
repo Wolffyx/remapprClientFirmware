@@ -320,6 +320,7 @@ export const remapprAdapter: FirmwareAdapter = {
                 activeLayoutId: loaded.activeLayoutId,
                 maxLayers: loaded.maxLayers,
                 limits: discovery.limits,
+                hwCaps: discovery.personality?.hwCaps,
                 // A dongle relays to bonded nodes; a direct keyboard returns an
                 // empty roster. Read-only views today (relayed-write HW-pending).
                 nodes: buildNodesApi(rpc),
