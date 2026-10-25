@@ -53,12 +53,17 @@ const text = (filename: string, content: string): ExportedFile => ({
 
 /* ── ZMK ─────────────────────────────────────────────────────────────────── */
 
+// The ZMK release the exported config builds against. Boards differ between a
+// release and `main` (nice_nano_v2 is gone from main), so pin a release; bump
+// it here and the workflow, the west manifest and the README all follow.
+const ZMK_REVISION = 'v0.3'
+
 const ZMK_BUILD_WORKFLOW = [
     `name: Build ZMK firmware`,
     `on: [push, pull_request, workflow_dispatch]`,
     `jobs:`,
     `  build:`,
-    `    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@main`,
+    `    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@${ZMK_REVISION}`,
     ``,
 ].join('\n')
 
@@ -70,20 +75,43 @@ const ZMK_WEST_YML = [
     `  projects:`,
     `    - name: zmk`,
     `      remote: zmkfirmware`,
-    `      revision: main`,
+    `      revision: ${ZMK_REVISION}`,
     `      import: app/west.yml`,
     `  self:`,
     `    path: config`,
     ``,
 ].join('\n')
 
+// Makes the repo root a Zephyr module so the build finds the shield under the
+// top-level boards/ (the layout of zmkfirmware/unified-zmk-config-template).
+const ZMK_MODULE_YML = [
+    `build:`,
+    `  settings:`,
+    `    board_root: .`,
+    ``,
+].join('\n')
+
+const zmkLocalBuild = (board: string, shield: string): string =>
+    `west build -s zmk/app -b ${board} -- -DSHIELD=${shield} -DZMK_CONFIG="$(pwd)/config" -DZMK_EXTRA_MODULES="$(pwd)"`
+
+const zmkRepoFiles = (buildYaml: string, readme: string): ExportedFile[] => [
+    text(`config/west.yml`, ZMK_WEST_YML),
+    text(`zephyr/module.yml`, ZMK_MODULE_YML),
+    text(`build.yaml`, buildYaml),
+    text(`.github/workflows/build.yml`, ZMK_BUILD_WORKFLOW),
+    text(`README.md`, readme),
+]
+
 // pattern-check: skip pure string-template generators for a shield dir, no abstraction
 // ZMK shield-scaffold generators (Kconfig + metadata) mirroring a real shield dir.
 // `ZMK_KEYBOARD_NAME` is capped at 16 chars by ZMK; truncate the display name.
-const kconfigShield = (SHIELD: string): string =>
+// The symbol is upper-case; shields_list_contains matches the shield name as
+// build.yaml / -DSHIELD= spell it (lower-case), and Kconfig keeps whitespace in
+// function arguments, so there is no space after the comma.
+const kconfigShield = (shieldId: string): string =>
     [
-        `config SHIELD_${SHIELD}`,
-        `    def_bool $(shields_list_contains, ${SHIELD})`,
+        `config SHIELD_${shieldId.toUpperCase()}`,
+        `    def_bool $(shields_list_contains,${shieldId})`,
         ``,
     ].join('\n')
 
@@ -110,21 +138,22 @@ function zmkBundle(config: ConfigKeymap): ProjectBundle {
     const shieldId = sanitize(
         ctrl.shield || config.keyboard.id || config.meta.name,
     )
-    const SHIELD = shieldId.toUpperCase()
     const board = ctrl.board || 'YOUR_BOARD'
     const { files: compiled, diagnostics } = getCompiler('zmk').compile(config)
     const keymap = compiled.find((f) => f.filename.endsWith('.keymap'))
     const overlay = compiled.find((f) => f.filename.endsWith('.overlay'))
 
     // The custom shield lives in its own dir so the overlay/Kconfig describe a
-    // self-contained board ZMK can discover (config/boards/shields/<id>/), exactly
-    // like a hand-written zmk-config. The build matrix + manifest sit at the root.
-    const shieldDir = `config/boards/shields/${shieldId}`
+    // self-contained board ZMK can discover (boards/shields/<id>/), like the
+    // unified zmk-config template. The user's Kconfig flags go in config/,
+    // where the build reads them; a .conf in the shield dir is ignored.
+    const shieldDir = `boards/shields/${shieldId}`
+    const confPath = `config/${shieldId}.conf`
 
     const buildYaml = [
         `include:`,
         `  - board: ${board}`,
-        `    shield: ${SHIELD}`,
+        `    shield: ${shieldId}`,
         ``,
     ].join('\n')
 
@@ -142,14 +171,16 @@ function zmkBundle(config: ConfigKeymap): ProjectBundle {
         `## Build locally`,
         `\`\`\`sh`,
         `west init -l config && west update`,
-        `west build -s zmk/app -b ${board} -- -DSHIELD=${SHIELD} -DZMK_CONFIG="$(pwd)/config"`,
+        zmkLocalBuild(board, shieldId),
         `\`\`\``,
         ``,
         `## Notes`,
         `- Set \`board\` in \`build.yaml\` to your actual controller (currently \`${board}\`).`,
-        `- \`${shieldDir}/${SHIELD}.overlay\` holds the kscan + matrix-transform +`,
-        `  physical-layout; \`${SHIELD}.keymap\` the bindings; \`${SHIELD}.conf\` the`,
-        `  Kconfig flags. \`Kconfig.shield\` / \`Kconfig.defconfig\` register the shield.`,
+        `- \`${shieldDir}/${shieldId}.overlay\` holds the kscan + matrix-transform +`,
+        `  physical-layout; \`${shieldId}.keymap\` the bindings; \`Kconfig.shield\` /`,
+        `  \`Kconfig.defconfig\` register the shield. \`${confPath}\` holds the Kconfig flags.`,
+        `- Builds against ZMK \`${ZMK_REVISION}\` (\`config/west.yml\` and the workflow).`,
+        `  To move, change both refs; boards differ between releases and \`main\`.`,
         `- Re-check the matrix-transform \`RC()\` map against your real kscan wiring —`,
         `  remappr derives it from physical key position, not the electrical matrix.`,
         ``,
@@ -157,14 +188,14 @@ function zmkBundle(config: ConfigKeymap): ProjectBundle {
 
     const files: ExportedFile[] = [
         text(
-            `${shieldDir}/${SHIELD}.keymap`,
+            `${shieldDir}/${shieldId}.keymap`,
             keymap ? asText(keymap.content) : '',
         ),
-        text(`${shieldDir}/${SHIELD}.conf`, deriveZmkConf(config)),
-        text(`${shieldDir}/Kconfig.shield`, kconfigShield(SHIELD)),
+        text(confPath, deriveZmkConf(config)),
+        text(`${shieldDir}/Kconfig.shield`, kconfigShield(shieldId)),
         text(
             `${shieldDir}/Kconfig.defconfig`,
-            kconfigDefconfig(SHIELD, config.meta.name),
+            kconfigDefconfig(shieldId.toUpperCase(), config.meta.name),
         ),
         text(
             `${shieldDir}/${shieldId}.zmk.yml`,
@@ -173,14 +204,9 @@ function zmkBundle(config: ConfigKeymap): ProjectBundle {
     ]
     if (overlay)
         files.push(
-            text(`${shieldDir}/${SHIELD}.overlay`, asText(overlay.content)),
+            text(`${shieldDir}/${shieldId}.overlay`, asText(overlay.content)),
         )
-    files.push(
-        text(`config/west.yml`, ZMK_WEST_YML),
-        text(`build.yaml`, buildYaml),
-        text(`.github/workflows/build.yml`, ZMK_BUILD_WORKFLOW),
-        text(`README.md`, readme),
-    )
+    files.push(...zmkRepoFiles(buildYaml, readme))
 
     return { files, diagnostics, rootName: `${shieldId}-zmk-config` }
 }
@@ -190,10 +216,10 @@ function zmkBundle(config: ConfigKeymap): ProjectBundle {
 const kconfigShieldSplit = (s: ZmkSplitShields): string =>
     [
         `config SHIELD_${s.left.toUpperCase()}`,
-        `    def_bool $(shields_list_contains, ${s.left})`,
+        `    def_bool $(shields_list_contains,${s.left})`,
         ``,
         `config SHIELD_${s.right.toUpperCase()}`,
-        `    def_bool $(shields_list_contains, ${s.right})`,
+        `    def_bool $(shields_list_contains,${s.right})`,
         ``,
     ].join('\n')
 
@@ -233,7 +259,9 @@ function zmkSplitBundle(
     const leftOv = compiled.find((f) => f.filename.endsWith('_left.overlay'))
     const rightOv = compiled.find((f) => f.filename.endsWith('_right.overlay'))
 
-    const shieldDir = `config/boards/shields/${split.base}`
+    const shieldDir = `boards/shields/${split.base}`
+    // ZMK reads config/<base>.conf for both halves (it drops _left/_right).
+    const confPath = `config/${split.base}.conf`
     const buildYaml = [
         `include:`,
         `  - board: ${board}`,
@@ -257,15 +285,16 @@ function zmkSplitBundle(
         `## Build locally`,
         `\`\`\`sh`,
         `west init -l config && west update`,
-        `west build -s zmk/app -b ${board} -- -DSHIELD=${split.left} -DZMK_CONFIG="$(pwd)/config"`,
-        `west build -s zmk/app -b ${board} -- -DSHIELD=${split.right} -DZMK_CONFIG="$(pwd)/config"`,
+        zmkLocalBuild(board, split.left),
+        zmkLocalBuild(board, split.right),
         `\`\`\``,
         ``,
         `## Notes`,
         `- \`${split.base}.dtsi\` is the shared base (physical layout, matrix-transform,`,
         `  rows-only kscan, chosen). \`${split.left}.overlay\` / \`${split.right}.overlay\``,
         `  set each half's col-gpios; the right half offsets the transform.`,
-        `- Both halves share \`${split.base}.keymap\` and \`${split.base}.conf\`.`,
+        `- Both halves share \`${split.base}.keymap\` and \`${confPath}\`.`,
+        `- Builds against ZMK \`${ZMK_REVISION}\` (\`config/west.yml\` and the workflow).`,
         `- Re-check the per-half col-gpios + the matrix-transform \`RC()\` map against`,
         `  your real wiring — remappr derives them from physical key position.`,
         ``,
@@ -276,7 +305,7 @@ function zmkSplitBundle(
             `${shieldDir}/${split.base}.keymap`,
             keymap ? asText(keymap.content) : '',
         ),
-        text(`${shieldDir}/${split.base}.conf`, deriveZmkConf(config)),
+        text(confPath, deriveZmkConf(config)),
         text(`${shieldDir}/Kconfig.shield`, kconfigShieldSplit(split)),
         text(
             `${shieldDir}/Kconfig.defconfig`,
@@ -302,12 +331,7 @@ function zmkSplitBundle(
                 asText(rightOv.content),
             ),
         )
-    files.push(
-        text(`config/west.yml`, ZMK_WEST_YML),
-        text(`build.yaml`, buildYaml),
-        text(`.github/workflows/build.yml`, ZMK_BUILD_WORKFLOW),
-        text(`README.md`, readme),
-    )
+    files.push(...zmkRepoFiles(buildYaml, readme))
 
     return { files, diagnostics, rootName: `${split.base}-zmk-config` }
 }

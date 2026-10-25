@@ -105,12 +105,13 @@ describe('buildProjectBundle — ZMK', () => {
         const b = buildProjectBundle(seedConfig, 'zmk')
         const id = seedConfig.keyboard.id
         const SH = id.toUpperCase()
-        const dir = `config/boards/shields/${id}`
+        const dir = `boards/shields/${id}`
         expect(paths(b)).toEqual(
             expect.arrayContaining([
-                `${dir}/${SH}.keymap`,
-                `${dir}/${SH}.conf`,
-                `${dir}/${SH}.overlay`,
+                `${dir}/${id}.keymap`,
+                `config/${id}.conf`,
+                `${dir}/${id}.overlay`,
+                'zephyr/module.yml',
                 `${dir}/Kconfig.shield`,
                 `${dir}/Kconfig.defconfig`,
                 `${dir}/${id}.zmk.yml`,
@@ -122,7 +123,17 @@ describe('buildProjectBundle — ZMK', () => {
         )
         expect(b.rootName).toBe(`${id}-zmk-config`)
         // keymap content is the real compiled devicetree
-        expect(fileText(b, `${dir}/${SH}.keymap`)).toContain(
+        // nothing is left in the deprecated config/boards location, and no
+        // .conf sits in the shield dir, where the build ignores it
+        expect(paths(b).some((p) => p.startsWith('config/boards/'))).toBe(false)
+        expect(paths(b).some((p) => p.startsWith(dir) && p.endsWith('.conf'))).toBe(false)
+        expect(fileText(b, 'zephyr/module.yml')).toContain('board_root: .')
+        // the shield is named in lower case; only the Kconfig symbol is upper
+        expect(fileText(b, 'build.yaml')).toContain(`shield: ${id}\n`)
+        expect(fileText(b, `${dir}/Kconfig.shield`)).toContain(
+            `def_bool $(shields_list_contains,${id})`,
+        )
+        expect(fileText(b, `${dir}/${id}.keymap`)).toContain(
             'compatible = "zmk,keymap"',
         )
         // Kconfig registers the shield by its uppercase name
@@ -134,17 +145,19 @@ describe('buildProjectBundle — ZMK', () => {
         )
         // workflow uses the official reusable build
         expect(fileText(b, '.github/workflows/build.yml')).toContain(
-            'zmkfirmware/zmk/.github/workflows/build-user-config.yml',
+            'zmkfirmware/zmk/.github/workflows/build-user-config.yml@v0.3',
         )
+        // pinned to a ZMK release, not the moving main
+        expect(fileText(b, 'config/west.yml')).toContain('revision: v0.3')
     })
 
     it('uses board/shield from hardware and enables matching conf flags', () => {
         const b = buildProjectBundle(parseKeymap(HW), 'zmk')
-        const dir = 'config/boards/shields/boardx'
+        const dir = 'boards/shields/boardx'
         expect(b.rootName).toBe('boardx-zmk-config')
         expect(fileText(b, 'build.yaml')).toContain('board: nice_nano_v2')
-        expect(fileText(b, 'build.yaml')).toContain('shield: BOARDX')
-        const conf = fileText(b, `${dir}/BOARDX.conf`)
+        expect(fileText(b, 'build.yaml')).toContain('shield: boardx')
+        const conf = fileText(b, 'config/boardx.conf')
         expect(conf).toContain('CONFIG_ZMK_STUDIO=y')
         expect(conf).toContain('CONFIG_ZMK_USB=y') // USB on by default
         expect(conf).toContain('# CONFIG_ZMK_BLE=y') // BLE opt-in → commented
@@ -152,15 +165,15 @@ describe('buildProjectBundle — ZMK', () => {
         expect(conf).toContain('# CONFIG_ZMK_BACKLIGHT=y') // unused → commented
         expect(conf).toContain('# CONFIG_ZMK_USB_LOGGING=y') // off → commented hint
         // the generated overlay carries the real kscan
-        expect(fileText(b, `${dir}/BOARDX.overlay`)).toContain(
+        expect(fileText(b, `${dir}/boardx.overlay`)).toContain(
             'zmk,kscan-gpio-matrix',
         )
     })
 
     it('emits full-parity peripheral overlay nodes + chosen + conf flags', () => {
         const b = buildProjectBundle(parseKeymap(HW_FULL), 'zmk')
-        const dir = 'config/boards/shields/boardy'
-        const overlay = fileText(b, `${dir}/BOARDY.overlay`)
+        const dir = 'boards/shields/boardy'
+        const overlay = fileText(b, `${dir}/boardy.overlay`)
         // chosen wires every generated peripheral
         expect(overlay).toContain('zmk,backlight = <&backlight_pwm>')
         expect(overlay).toContain('zmk,underglow = <&led_strip>')
@@ -183,7 +196,7 @@ describe('buildProjectBundle — ZMK', () => {
         expect(overlay).toContain('&pinctrl {')
         expect(overlay).toContain('#include <zephyr/dt-bindings/led/led.h>')
         // conf flags follow the hardware + studio CDC
-        const conf = fileText(b, `${dir}/BOARDY.conf`)
+        const conf = fileText(b, 'config/boardy.conf')
         expect(conf).toContain('CONFIG_ZMK_BACKLIGHT=y')
         expect(conf).toContain('CONFIG_PWM=y')
         expect(conf).toContain('CONFIG_ZMK_RGB_UNDERGLOW=y')
@@ -196,7 +209,7 @@ describe('buildProjectBundle — ZMK', () => {
         const b = buildProjectBundle(parseKeymap(HW_RP2040), 'zmk')
         const overlay = fileText(
             b,
-            'config/boards/shields/boardz/BOARDZ.overlay',
+            'boards/shields/boardz/boardz.overlay',
         )
         // backlight &pwm block is still emitted (was previously dropped)
         expect(overlay).toContain('&pwm0 {')
@@ -214,13 +227,13 @@ describe('buildProjectBundle — ZMK', () => {
 
     it('emits a real split shield (shared dtsi + two half overlays)', () => {
         const b = buildProjectBundle(parseKeymap(SPLIT), 'zmk')
-        const dir = 'config/boards/shields/mysplit'
+        const dir = 'boards/shields/mysplit'
         expect(b.rootName).toBe('mysplit-zmk-config')
         // one shield dir, shared base files + both half overlays
         expect(paths(b)).toEqual(
             expect.arrayContaining([
                 `${dir}/mysplit.keymap`,
-                `${dir}/mysplit.conf`,
+                'config/mysplit.conf',
                 `${dir}/mysplit.dtsi`,
                 `${dir}/mysplit_left.overlay`,
                 `${dir}/mysplit_right.overlay`,
@@ -239,7 +252,8 @@ describe('buildProjectBundle — ZMK', () => {
         const kshield = fileText(b, `${dir}/Kconfig.shield`)
         expect(kshield).toContain('config SHIELD_MYSPLIT_LEFT')
         expect(kshield).toContain('config SHIELD_MYSPLIT_RIGHT')
-        expect(kshield).toContain('$(shields_list_contains, mysplit_left)')
+        expect(kshield).toContain('def_bool $(shields_list_contains,mysplit_left)')
+        expect(kshield).toContain('def_bool $(shields_list_contains,mysplit_right)')
         const kdef = fileText(b, `${dir}/Kconfig.defconfig`)
         expect(kdef).toContain('ZMK_SPLIT_ROLE_CENTRAL') // left = central
         expect(kdef).toContain('config ZMK_SPLIT')
