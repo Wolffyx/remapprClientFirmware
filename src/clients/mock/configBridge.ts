@@ -25,7 +25,7 @@ import type {
     LightingAction,
     Modifier,
 } from '@firmware/config'
-import { DiagnosticBag, type Diagnostic } from '@firmware/config'
+import { DiagnosticBag, partToLayout, type Diagnostic } from '@firmware/config'
 import type {
     EncoderAction,
     KeyAction,
@@ -398,7 +398,9 @@ export function configToPhysicalLayout(config: ConfigKeymap): PhysicalLayout {
         ...(k.r ? { r: Math.round(k.r * U) } : {}),
         ...(k.rx !== undefined ? { rx: Math.round(k.rx * U) } : {}),
         ...(k.ry !== undefined ? { ry: Math.round(k.ry * U) } : {}),
+        ...(k.element ? { element: k.element } : {}),
     }))
+    const parts = config.keyboard.parts?.map(partToLayout)
     const encoders = config.keyboard.encoders?.map((e) => ({
         x: Math.round(e.x * U),
         y: Math.round(e.y * U),
@@ -408,6 +410,7 @@ export function configToPhysicalLayout(config: ConfigKeymap): PhysicalLayout {
         name: config.meta.name || 'Custom',
         keys,
         ...(encoders?.length ? { encoders } : {}),
+        ...(parts?.length ? { parts } : {}),
     }
 }
 

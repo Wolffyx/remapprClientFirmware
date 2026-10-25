@@ -326,6 +326,7 @@ export {
     type SwitchTable,
 } from './firmwareSwitches'
 export { DESIGN_FEATURE_NAME } from './firmwareConf'
+export { ELEMENT_SHAPE, PART_SHAPE, partGlyph, partToLayout } from './parts'
 export {
     DISPLAY_MODULES,
     DISPLAY_PIN_NAMES,

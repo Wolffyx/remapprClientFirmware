@@ -1,4 +1,5 @@
 import type { LegendPart } from './paramLabel'
+import type { ControlShape } from './devices/types'
 
 export interface KeyAction {
     kind: string
@@ -69,6 +70,23 @@ export interface PhysicalLayoutKey {
     r?: number
     rx?: number
     ry?: number
+    /** Not a keycap: a knob, slider or round button at this position. */
+    element?: 'encoder' | 'slider' | 'button'
+}
+
+/** A part on the board that is not a keymap position (a screen, a stick…),
+ *  in centi-units / centi-degrees like the keys. Drawn only. */
+export interface PhysicalLayoutPart {
+    id: string
+    name: string
+    shape: ControlShape
+    x: number
+    y: number
+    w: number
+    h: number
+    r?: number
+    /** Short text on it (a screen's size). */
+    glyph?: string
 }
 
 /** A knob's position, in centi-units (1u = 100) like PhysicalLayoutKey. */
@@ -82,6 +100,7 @@ export interface PhysicalLayout {
     name: string
     keys: PhysicalLayoutKey[]
     encoders?: EncoderSlot[]
+    parts?: PhysicalLayoutPart[]
 }
 
 export interface Keymap {
