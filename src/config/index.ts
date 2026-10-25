@@ -185,6 +185,7 @@ export {
 export {
     type DerivedMatrix,
     deriveMatrix,
+    keyCentre,
     materializeMatrix,
     matrixDims,
     matrixSplit,
