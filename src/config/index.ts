@@ -94,6 +94,8 @@ export {
     DongleSettingsSchema,
     isDeviceConfig,
     parseDeviceConfig,
+    newDeviceConfig,
+    DEVICE_PERSONALITY,
 } from './device'
 export {
     type DeviceDecodeResult,
@@ -104,6 +106,7 @@ export {
     type BuilderFirmwareId,
     type BuilderFirmwareTarget,
     BUILDER_FIRMWARE_TARGETS,
+    targetBuildsForm,
 } from './firmwareTargets'
 export {
     uidToHex,

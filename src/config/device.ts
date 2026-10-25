@@ -41,6 +41,7 @@
 // ranges mirror the firmware decoders (config_blob.h, radio_settings.h), so a
 // config that passes here is never refused for a range. A mouse's DPI must also
 // sit inside its board's range, which only the device knows (GET_MOTION_CONFIG).
+import type { DeviceForm } from '../devices/types'
 import { z } from 'zod'
 import {
     DeviceSensorSchema,
@@ -179,4 +180,26 @@ export function isDeviceConfig(json: unknown): boolean {
         json !== null &&
         (json as { kind?: unknown }).kind === 'remappr.device'
     )
+}
+
+// pattern-check: skip — one data table + a constructor for a fresh document
+/** The Remappr personality a device form runs as (a gamepad and a flight stick
+ *  are both joysticks to the firmware). */
+export const DEVICE_PERSONALITY: Partial<
+    Record<DeviceForm, ConfigDevice['personality']>
+> = {
+    mouse: 'mouse',
+    gamepad: 'joystick',
+    flightstick: 'joystick',
+}
+
+/** A device config with every setting left at the firmware's default, or null
+ *  for a form Remappr has no personality for. */
+export function newDeviceConfig(
+    form: DeviceForm,
+    name: string,
+): ConfigDevice | null {
+    const personality = DEVICE_PERSONALITY[form]
+    if (!personality) return null
+    return { schemaVersion: 1, kind: 'remappr.device', meta: { name }, personality }
 }

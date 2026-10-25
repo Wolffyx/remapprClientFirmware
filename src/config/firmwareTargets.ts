@@ -6,6 +6,8 @@
 
 /** A firmware target the builder can emit for. via/vial compile via QMK;
  *  remappr emits a Zephyr shield via the `remappr-board` compiler. */
+import type { DeviceForm } from '../devices/types'
+
 export type BuilderFirmwareId = 'qmk' | 'via' | 'vial' | 'zmk' | 'remappr'
 
 export interface BuilderFirmwareTarget {
@@ -14,6 +16,9 @@ export interface BuilderFirmwareTarget {
     blurb: string
     /** True when the target is a wireless (BLE) firmware. */
     wireless: boolean
+    /** Device forms other than a keyboard this target builds (a mouse, a
+     *  gamepad, …); absent = keyboards only. Each target declares its own. */
+    deviceForms?: readonly DeviceForm[]
 }
 
 export const BUILDER_FIRMWARE_TARGETS: BuilderFirmwareTarget[] = [
@@ -46,5 +51,15 @@ export const BUILDER_FIRMWARE_TARGETS: BuilderFirmwareTarget[] = [
         name: 'Remappr',
         blurb: 'Wireless · board files and a settings file',
         wireless: true,
+        deviceForms: ['mouse', 'gamepad', 'flightstick'],
     },
 ]
+
+/** True when @p target builds a device of @p form (keyboards: every target). */
+export function targetBuildsForm(
+    target: BuilderFirmwareTarget,
+    form: DeviceForm,
+): boolean {
+    if (form === 'keyboard' || form === 'macropad') return true
+    return target.deviceForms?.includes(form) ?? false
+}
