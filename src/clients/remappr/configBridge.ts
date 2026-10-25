@@ -20,7 +20,7 @@ import type {
     Modifier,
 } from '../../config'
 import { DiagnosticBag, type Diagnostic } from '../../config'
-import type { KeyAction, Layer } from '../../types'
+import type { EncoderAction, EncoderSlot, KeyAction, Layer } from '../../types'
 import {
     buildRemapprKeyAction,
     HID_KP,
@@ -193,9 +193,11 @@ function composite(
 
 export interface LowerResult {
     /** Runtime layers (name + KeyActions), index-aligned with config.layers. */
-    layers: { name: string; keys: KeyAction[] }[]
+    layers: { name: string; keys: KeyAction[]; encoders?: EncoderAction[] }[]
     diagnostics: Diagnostic[]
 }
+
+const TRANSPARENT: CanonAction = { type: 'transparent' }
 
 /** Lower a decoded config into neutral runtime layers (the editing buffer). */
 export function lowerConfigToNeutral(config: ConfigKeymap): LowerResult {
@@ -207,6 +209,30 @@ export function lowerConfigToNeutral(config: ConfigKeymap): LowerResult {
         keys: layer.bindings.map((b, bi) =>
             lowerAction(b, names, pools, diag, ['layers', li, 'bindings', bi]),
         ),
+        ...(layer.encoders
+            ? {
+                  // A slot the blob leaves out is unbound both ways.
+                  encoders: Array.from(layer.encoders, (e, ei) => {
+                      const at = ['layers', li, 'encoders', ei]
+                      return {
+                          cw: lowerAction(
+                              e?.cw ?? TRANSPARENT,
+                              names,
+                              pools,
+                              diag,
+                              [...at, 'cw'],
+                          ),
+                          ccw: lowerAction(
+                              e?.ccw ?? TRANSPARENT,
+                              names,
+                              pools,
+                              diag,
+                              [...at, 'ccw'],
+                          ),
+                      }
+                  }),
+              }
+            : {}),
     }))
     return { layers, diagnostics: [...diag.all] }
 }
@@ -303,32 +329,47 @@ function sameRuntimeForm(a: KeyAction, b: KeyAction): boolean {
  * data (combos, macros, tap-dances, mod-morphs, conditional layers) is preserved.
  */
 export function raiseNeutralToConfig(
-    runtimeLayers: readonly Pick<Layer, 'name' | 'keys'>[],
+    runtimeLayers: readonly Pick<Layer, 'name' | 'keys' | 'encoders'>[],
     prevConfig: ConfigKeymap,
 ): ConfigKeymap {
     const layerNames = runtimeLayers.map((l) => l.name)
     const prevPools = poolsOf(prevConfig)
+    // Untouched (same runtime form as before) → the prior binding verbatim.
+    const keepOrRaise = (
+        ka: KeyAction,
+        prev: CanonAction | undefined,
+    ): CanonAction => {
+        if (
+            prev &&
+            sameRuntimeForm(ka, lowerAction(prev, layerNames, prevPools))
+        )
+            return prev
+        return raiseAction(ka, layerNames, prevPools) ?? prev ?? TRANSPARENT
+    }
 
     const layers = runtimeLayers.map((rl, li) => {
         const prevLayer = prevConfig.layers[li]
-        const bindings = rl.keys.map((ka, bi) => {
-            const prev = prevLayer?.bindings[bi]
-            if (
-                prev &&
-                sameRuntimeForm(ka, lowerAction(prev, layerNames, prevPools))
-            ) {
-                return prev
-            }
-            const raised = raiseAction(ka, layerNames, prevPools)
-            return raised ?? prev ?? { type: 'transparent' }
-        })
+        const bindings = rl.keys.map((ka, bi) =>
+            keepOrRaise(ka, prevLayer?.bindings[bi]),
+        )
+        // A knob's press is its key's binding; a blob-only press is kept.
+        const encoders = rl.encoders
+            ? rl.encoders.map((e, ei) => {
+                  const prev = prevLayer?.encoders?.[ei]
+                  return {
+                      cw: keepOrRaise(e.cw, prev?.cw),
+                      ccw: keepOrRaise(e.ccw, prev?.ccw),
+                      ...(prev?.press ? { press: prev.press } : {}),
+                  }
+              })
+            : prevLayer?.encoders
         return {
             name: rl.name,
             ...(prevLayer?.description
                 ? { description: prevLayer.description }
                 : {}),
             bindings,
-            ...(prevLayer?.encoders ? { encoders: prevLayer.encoders } : {}),
+            ...(encoders ? { encoders } : {}),
             ...(prevLayer?.sliderBindings
                 ? { sliderBindings: prevLayer.sliderBindings }
                 : {}),
@@ -336,4 +377,33 @@ export function raiseNeutralToConfig(
     })
 
     return { ...prevConfig, layers }
+}
+
+/** `config` with a `keyboard.encoders` slot for every knob: the device's own
+ *  (centi-units → key units, with its push key), else one per encoder binding
+ *  the blob carries. The blob stores turns but no slots, and a layer may not
+ *  bind more knobs than the board has. Unchanged when it already has them. */
+export function withKnobSlots(
+    config: ConfigKeymap,
+    deviceKnobs: readonly EncoderSlot[] = [],
+): ConfigKeymap {
+    const have = config.keyboard.encoders?.length ?? 0
+    const bound = Math.max(
+        0,
+        ...config.layers.map((l) => l.encoders?.length ?? 0),
+    )
+    const want = Math.max(deviceKnobs.length, bound)
+    if (have >= want) return config
+    const encoders = Array.from({ length: want }, (_, i) => {
+        const own = config.keyboard.encoders?.[i]
+        if (own) return own
+        const k = deviceKnobs[i]
+        if (!k) return { x: 0, y: 0 }
+        return {
+            x: k.x / 100,
+            y: k.y / 100,
+            ...(k.key !== undefined ? { key: k.key } : {}),
+        }
+    })
+    return { ...config, keyboard: { ...config.keyboard, encoders } }
 }
