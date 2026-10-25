@@ -512,18 +512,18 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     'media.alternate_audio_increment': [
         'C_ALTERNATE_AUDIO_INCREMENT', 'C_ALT_AUDIO_INC',
     ],
-    'consumer.brightness_increment': [
+    'consumer.display_brightness_increment': [
         'C_BRIGHTNESS_INC', 'C_BRI_INC', 'C_BRI_UP',
         'KC_BRIGHTNESS_UP', 'KC_BRIU',
     ],
-    'consumer.brightness_decrement': [
+    'consumer.display_brightness_decrement': [
         'C_BRIGHTNESS_DEC', 'C_BRI_DEC', 'C_BRI_DN',
         'KC_BRIGHTNESS_DOWN', 'KC_BRID',
     ],
-    'consumer.minimum_brightness': ['C_BRIGHTNESS_MINIMUM', 'C_BRI_MIN'],
-    'consumer.maximum_brightness': ['C_BRIGHTNESS_MAXIMUM', 'C_BRI_MAX'],
-    'consumer.auto_brightness': ['C_BRIGHTNESS_AUTO', 'C_BRI_AUTO'],
-    'consumer.backlight_toggle': ['C_BACKLIGHT_TOGGLE', 'C_BKLT_TOG'],
+    'consumer.display_set_brightness_to_minimum': ['C_BRIGHTNESS_MINIMUM', 'C_BRI_MIN'],
+    'consumer.display_set_brightness_to_maximum': ['C_BRIGHTNESS_MAXIMUM', 'C_BRI_MAX'],
+    'consumer.display_set_auto_brightness': ['C_BRIGHTNESS_AUTO', 'C_BRI_AUTO'],
+    'consumer.display_backlight_toggle': ['C_BACKLIGHT_TOGGLE', 'C_BKLT_TOG'],
     'consumer.aspect': ['C_ASPECT'],
     'consumer.picture_in_picture_toggle': ['C_PIP'],
     'consumer.menu': ['C_MENU'],
@@ -547,7 +547,7 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     'media.media_select_tv': ['C_MEDIA_TV'],
     'media.media_select_www': ['C_MEDIA_WWW'],
     'media.media_select_telephone': ['C_MEDIA_PHONE'],
-    'consumer.application_launch_button_configuration_tool': [
+    'al.al_consumer_control_configuration': [
         'C_AL_CCC',
     ],
     'consumer.power': [
@@ -567,7 +567,7 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     'media.slow': ['C_SLOW'],
     'media.repeat': ['C_REPEAT'],
     'media.random_play': ['C_RANDOM_PLAY', 'C_SHUFFLE'],
-    'consumer.closed_caption_toggle': [
+    'consumer.closed_caption': [
         'C_CAPTIONS', 'C_SUBTITLES',
     ],
     'consumer.data_on_screen': ['C_DATA_ON_SCREEN'],
@@ -618,28 +618,29 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
         'C_AC_DESKTOP_SHOW_ALL_APPLICATIONS',
         'KC_LAUNCHPAD', 'KC_LPAD',
     ],
-    'ac.ac_voice_command': [
-        'C_VOICE_COMMAND', 'KC_ASSISTANT', 'KC_ASST',
-    ],
+    // ZMK C_VOICE_COMMAND is Consumer 0xCF Voice Command; QMK KC_ASSISTANT
+    // sends 0x1CB AL Context-aware Desktop Assistant (tmk report.h).
+    'media.voice_command': ['C_VOICE_COMMAND'],
+    'al.al_context_aware_desktop_assistant': ['KC_ASSISTANT', 'KC_ASST'],
     'ac.ac_next_keyboard_layout_select': [
         'C_AC_NEXT_KEYBOARD_LAYOUT_SELECT', 'GLOBE',
     ],
-    'ac.ac_keyboard_input_assist_next': [
+    'consumer.keyboard_input_assist_next': [
         'C_KEYBOARD_INPUT_ASSIST_NEXT', 'C_KBIA_NEXT',
     ],
-    'ac.ac_keyboard_input_assist_previous': [
+    'consumer.keyboard_input_assist_previous': [
         'C_KEYBOARD_INPUT_ASSIST_PREVIOUS', 'C_KBIA_PREV',
     ],
-    'ac.ac_keyboard_input_assist_next_group': [
+    'consumer.keyboard_input_assist_next_group': [
         'C_KEYBOARD_INPUT_ASSIST_NEXT_GROUP', 'C_KBIA_NEXT_GRP',
     ],
-    'ac.ac_keyboard_input_assist_previous_group': [
+    'consumer.keyboard_input_assist_previous_group': [
         'C_KEYBOARD_INPUT_ASSIST_PREVIOUS_GROUP', 'C_KBIA_PREV_GRP',
     ],
-    'ac.ac_keyboard_input_assist_accept': [
+    'consumer.keyboard_input_assist_accept': [
         'C_KEYBOARD_INPUT_ASSIST_ACCEPT', 'C_KBIA_ACCEPT',
     ],
-    'ac.ac_keyboard_input_assist_cancel': [
+    'consumer.keyboard_input_assist_cancel': [
         'C_KEYBOARD_INPUT_ASSIST_CANCEL', 'C_KBIA_CANCEL',
     ],
 
@@ -684,13 +685,13 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
         'C_AL_CALCULATOR', 'C_AL_CALC',
         'KC_CALCULATOR', 'KC_CALC',
     ],
-    'al.al_news': ['C_AL_NEWS'],
+    'al.al_newsreader': ['C_AL_NEWS'],
     'al.al_database_app': ['C_AL_DATABASE', 'C_AL_DB'],
     'al.al_voicemail': ['C_AL_VOICEMAIL'],
-    'al.al_consumer_finance': ['C_AL_FINANCE'],
+    'al.al_checkbook_finance': ['C_AL_FINANCE'],
     'al.al_task_project_manager': ['C_AL_TASK_MANAGER'],
     'al.al_log_journal_timecard': ['C_AL_JOURNAL'],
-    'al.al_av_capture_playback': ['C_AL_AV_CAPTURE_PLAYBACK'],
+    'al.al_a_v_capture_playback': ['C_AL_AV_CAPTURE_PLAYBACK'],
     'al.al_spell_check': ['C_AL_SPELLCHECK', 'C_AL_SPELL'],
     'al.al_screen_saver': ['C_AL_SCREEN_SAVER'],
     'al.al_keyboard_layout': ['C_AL_KEYBOARD_LAYOUT'],

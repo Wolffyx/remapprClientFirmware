@@ -8,6 +8,7 @@ import { vialCodec } from '../clients/qmk-vial/codec'
 import { remapprCodec } from '../clients/remappr/codec'
 import { zmkCodec } from '../clients/zmk/codec'
 import type { KeycodeCodec } from '../codec'
+import { CANONICAL_ALIASES } from './aliases'
 import { CATALOG, HID_USAGE_BY_CANONICAL } from './entries'
 import { EXTERNAL_NAMES, EXTERNAL_NAMES_ALLOWLIST } from './external-names'
 import { CATALOG_PAGES, groupForId } from './pages'
@@ -165,6 +166,23 @@ describe('keyboard-page vs media volume keys', () => {
         expect(byId('media.volume_increment').aliases).toContain('C_VOL_UP')
         expect(byId('media.volume_decrement').aliases).toContain('C_VOL_DN')
         expect(byId('media.mute').aliases).toContain('C_MUTE')
+    })
+
+    it('every EXTERNAL_NAMES key is a catalog id (no name filed on a missing key)', () => {
+        const ids = new Set(CATALOG.map((e) => e.id))
+        const missing = Object.keys(EXTERNAL_NAMES).filter(
+            (k) => !ids.has(k) && !(k in CANONICAL_ALIASES),
+        )
+        expect(missing).toEqual([])
+    })
+
+    it('brightness, input-assist and voice names land on their HID keys', () => {
+        const id = (n: string) => CATALOG.find((e) => e.aliases?.includes(n))?.id
+        expect(id('C_BRI_UP')).toBe('consumer.display_brightness_increment')
+        expect(id('KC_BRIU')).toBe('consumer.display_brightness_increment')
+        expect(id('C_KBIA_NEXT')).toBe('consumer.keyboard_input_assist_next')
+        expect(id('C_VOICE_COMMAND')).toBe('media.voice_command')
+        expect(id('KC_ASSISTANT')).toBe('al.al_context_aware_desktop_assistant')
     })
 
     it('every EXTERNAL_NAMES key the media page defines uses its media id', () => {
