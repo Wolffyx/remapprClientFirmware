@@ -183,7 +183,7 @@ export function emitOverlay(
 
     // Full-parity peripheral nodes (gated on the builder's hardware fields).
     const extPowerNode = hw?.extPowerCtrl
-        ? emitExtPowerGeneric(hw.extPowerCtrl, diag)
+        ? emitExtPowerGeneric(hw.extPowerCtrl, diag, ctrl.board)
         : []
     const bl = hw?.backlightPwm
         ? emitBacklightPwm(hw.backlightPwm, diag, ctrl.board)
@@ -308,7 +308,7 @@ export function emitSplitOverlay(
     // Peripherals live in the shared dtsi → present on both halves (correct for
     // underglow/backlight/ext-power; the studio CDC is only used by the half on USB).
     const extPowerNode = hw?.extPowerCtrl
-        ? emitExtPowerGeneric(hw.extPowerCtrl, diag)
+        ? emitExtPowerGeneric(hw.extPowerCtrl, diag, board)
         : []
     const bl = hw?.backlightPwm
         ? emitBacklightPwm(hw.backlightPwm, diag, board)

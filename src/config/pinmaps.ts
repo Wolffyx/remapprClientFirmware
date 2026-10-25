@@ -169,6 +169,38 @@ export function resolveStPin(label: string): string | null {
     return `&gpio${m[1].toLowerCase()} ${pin}`
 }
 
+// pattern-check: skip — board-file pin facts as a table plus one pure lookup
+/** nRF controllers: header pin number → SoC [port, pin], from each board's
+ *  connector gpio-map (ZMK app/boards/arm/nice_nano/arduino_pro_micro_pins.dtsi;
+ *  Zephyr boards/seeed/xiao_ble/seeed_xiao_connector.dtsi). A GPIO property
+ *  can name the connector pin, but pin multiplexing (an SPI or PWM output)
+ *  needs the SoC pin. */
+const NRF_HEADER_PINS: Readonly<Record<string, Readonly<Record<number, [number, number]>>>> = {
+    nice_nano_v2: {
+        0: [0, 8], 1: [0, 6], 2: [0, 17], 3: [0, 20], 4: [0, 22], 5: [0, 24],
+        6: [1, 0], 7: [0, 11], 8: [1, 4], 9: [1, 6], 10: [0, 9], 14: [1, 11],
+        15: [1, 13], 16: [0, 10], 18: [1, 15], 19: [0, 2], 20: [0, 29], 21: [0, 31],
+    },
+    seeeduino_xiao_ble: {
+        0: [0, 2], 1: [0, 3], 2: [0, 28], 3: [0, 29], 4: [0, 4], 5: [0, 5],
+        6: [1, 11], 7: [1, 12], 8: [1, 13], 9: [1, 14], 10: [1, 15],
+    },
+}
+
+/** An nRF pin as port + pin: "P1.13" as written, or a header label on a board
+ *  above ("D15" on a nice!nano is P1.13); null otherwise. */
+export function nrfPinOf(
+    board: string | undefined,
+    label: string,
+): { port: number; pin: number } | null {
+    const m = /^P(\d)\.(\d{1,2})$/i.exec(label.trim())
+    if (m) return { port: Number(m[1]), pin: Number(m[2]) }
+    const ref = resolveZmkPin(board, label)
+    const header = board ? NRF_HEADER_PINS[board] : undefined
+    const at = ref && header ? header[Number(ref.split(' ')[1])] : undefined
+    return at ? { port: at[0], pin: at[1] } : null
+}
+
 // pattern-check: skip — two pure lookups over the existing pin tables
 /** The board's pins, one label each (its table's first spelling), or null
  *  when remappr has no pin table for it. */

@@ -745,6 +745,10 @@ export const ExtPowerCtrlSchema = z
     })
     .describe('zmk,ext-power-generic control GPIO (drives zmk,ext-power).')
 
+export const BatterySchema = z
+    .object({ pin: z.string() })
+    .describe('Battery sense pin (an analog pin behind a resistor divider).')
+
 export const HardwareSchema = z
     .object({
         board: z.string().optional(),
@@ -754,6 +758,7 @@ export const HardwareSchema = z
         backlightPwm: BacklightPwmSchema.optional(),
         ws2812: Ws2812Schema.optional(),
         extPowerCtrl: ExtPowerCtrlSchema.optional(),
+        battery: BatterySchema.optional(),
         studioAcm: z.boolean().optional(),
     })
     .describe(

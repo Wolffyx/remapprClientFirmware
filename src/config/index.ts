@@ -40,6 +40,7 @@ export type {
     CanonBacklightPwm,
     CanonWs2812,
     CanonExtPowerCtrl,
+    CanonBattery,
     CanonLayout,
     DesignFeature,
     CanonLayoutOption,

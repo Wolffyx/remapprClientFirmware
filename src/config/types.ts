@@ -432,6 +432,9 @@ export interface ConfigHardware {
     ws2812?: CanonWs2812
     /** External-power control GPIO — drives the `zmk,ext-power` node. */
     extPowerCtrl?: CanonExtPowerCtrl
+    /** Battery sense pin, for a controller that can't measure the battery
+     *  itself (builder; no compiler emits it yet). */
+    battery?: CanonBattery
     /** Emit the `&zephyr_udc0 studio_acm` CDC-ACM endpoint (Studio over USB). */
     studioAcm?: boolean
 }
@@ -493,6 +496,12 @@ export interface CanonExtPowerCtrl {
     activeLow?: boolean
     /** init-delay-ms (settle time after enable). Default 0. */
     initDelayMs?: number
+}
+
+/** Where the battery is measured: an analog pin behind a resistor divider. */
+export interface CanonBattery {
+    /** Sense pin: a friendly board label ("D21"), like the matrix pins. */
+    pin: string
 }
 
 /** Firmware-level feature config — the modeled toggles that derive `.conf` (ZMK

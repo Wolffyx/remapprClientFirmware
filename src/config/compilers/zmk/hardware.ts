@@ -6,7 +6,7 @@
 // CDC endpoint, plus the NOT-GENERATED checklist for what stays board-specific.
 
 import type { DiagnosticBag } from '../../diagnostics'
-import { gpioSpec, type PinRole, resolveZmkPin } from '../../pinmaps'
+import { gpioSpec, nrfPinOf, type PinRole, resolveZmkPin } from '../../pinmaps'
 import { resolveController } from '../../controller'
 import { matrixDiodeDirection } from '../../matrix'
 import type {
@@ -240,11 +240,6 @@ export function emitChosen(
 }
 
 // ── full-parity peripheral overlay nodes ────────────────────────────────────
-// Parse an nRF pin label "P0.13" → {port:0, pin:13}; null if not that form.
-function parseNrfPin(s: string): { port: number; pin: number } | null {
-    const m = /^P(\d+)\.(\d+)$/i.exec(s.trim())
-    return m ? { port: Number(m[1]), pin: Number(m[2]) } : null
-}
 
 // Which ZMK SoC family a controller board belongs to. Pin-mux (pinctrl) syntax is
 // SoC-specific — only nRF gets full NRF_PSEL generation; others get a labelled
@@ -308,13 +303,16 @@ function fixmePinctrlPair(
     ]
 }
 
-// Resolve a single control/data pin label → a devicetree GPIO core "&gpioN M".
-// Accepts "P0.13", a verbatim "&gpio0 13 ..." (passed through), else null.
-function gpioCoreFromPin(s: string): string | null {
+// Resolve a single control/data pin label → a devicetree GPIO core: a verbatim
+// "&gpio0 13 ..." (passed through), a header label on a known board ("D14" →
+// "&pro_micro 14"), an nRF "P0.13" → "&gpio0 13", else null.
+function gpioCoreFromPin(s: string, board: string | undefined): string | null {
     const t = s.trim()
     if (!t) return null
     if (t.startsWith('&')) return t
-    const p = parseNrfPin(t)
+    const header = resolveZmkPin(board, t)
+    if (header) return header
+    const p = nrfPinOf(board, t)
     return p ? `&gpio${p.port} ${p.pin}` : null
 }
 
@@ -336,9 +334,10 @@ function colorMapping(order: NonNullable<CanonWs2812['colorOrder']>): string {
 export function emitExtPowerGeneric(
     ep: CanonExtPowerCtrl,
     diag: DiagnosticBag,
+    board?: string,
 ): string[] {
     const flags = ep.activeLow ? 'GPIO_ACTIVE_LOW' : 'GPIO_ACTIVE_HIGH'
-    const core = gpioCoreFromPin(ep.controlGpio)
+    const core = gpioCoreFromPin(ep.controlGpio, board)
     if (!core)
         diag.warn(
             `ext-power control-gpios "${ep.controlGpio}" not parseable — set the GPIO manually`,
@@ -359,7 +358,8 @@ export function emitExtPowerGeneric(
 }
 
 // Backlight: the `pwm-leds` root node + the `&pwm<n>` override + a `&pinctrl`
-// group pair. nRF "P<port>.<pin>" pins get a real NRF_PSEL; other SoCs get a
+// group pair. nRF pins ("P<port>.<pin>", or a header label on a board whose
+// connector remappr knows) get a real NRF_PSEL; other SoCs get a
 // labelled FIXME pinctrl scaffold (the block is always emitted so the structure
 // is complete — the user fills the board-specific pin-mux).
 export function emitBacklightPwm(
@@ -388,7 +388,7 @@ export function emitBacklightPwm(
         `};`,
     ]
     const soc = boardSoc(board)
-    const p = parseNrfPin(bl.pin)
+    const p = nrfPinOf(board, bl.pin)
     if (soc === 'nrf' && p) {
         const psel = `NRF_PSEL(PWM_OUT${bl.channel}, ${p.port}, ${p.pin})`
         return { root, pinctrl: nrfPinctrlPair(bl.instance, psel), block }
@@ -443,7 +443,7 @@ export function emitWs2812(
         `    };`,
         `};`,
     ]
-    const p = parseNrfPin(ws.dataPin)
+    const p = nrfPinOf(board, ws.dataPin)
     if (soc === 'nrf' && p) {
         const psel = `NRF_PSEL(SPIM_MOSI, ${p.port}, ${p.pin})`
         return { pinctrl: nrfPinctrlPair(ws.spi, psel), block }

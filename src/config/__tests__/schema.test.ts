@@ -342,6 +342,7 @@ describe('builder metadata fields', () => {
                     colorOrder: 'GRB',
                 },
                 extPowerCtrl: { controlGpio: 'P0.14', activeLow: true },
+                battery: { pin: 'D21' },
                 studioAcm: true,
             },
             layouts: [{ id: 'left', name: 'Left' }],
@@ -381,6 +382,7 @@ describe('builder metadata fields', () => {
         })
         expect(km.keyboard.hardware?.ws2812?.chainLength).toBe(10)
         expect(km.keyboard.hardware?.extPowerCtrl?.controlGpio).toBe('P0.14')
+        expect(km.keyboard.hardware?.battery).toEqual({ pin: 'D21' })
         expect(km.keyboard.hardware?.studioAcm).toBe(true)
         const base = km.layers[0]
         expect(base.encoderBindings?.[0]).toMatchObject({

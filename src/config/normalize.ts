@@ -102,6 +102,7 @@ export function cloneHardware(hw: ConfigHardware): ConfigHardware {
         ...(hw.backlightPwm ? { backlightPwm: { ...hw.backlightPwm } } : {}),
         ...(hw.ws2812 ? { ws2812: { ...hw.ws2812 } } : {}),
         ...(hw.extPowerCtrl ? { extPowerCtrl: { ...hw.extPowerCtrl } } : {}),
+        ...(hw.battery ? { battery: { ...hw.battery } } : {}),
         ...(hw.studioAcm !== undefined ? { studioAcm: hw.studioAcm } : {}),
     }
 }

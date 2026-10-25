@@ -8,6 +8,7 @@ import {
     boardPinForms,
     samePin,
     boardFootprint,
+    nrfPinOf,
 } from '../pinmaps'
 import { getCompiler } from '../compiler'
 import { buildProjectBundle } from '../bundle'
@@ -33,6 +34,15 @@ describe('pin resolver', () => {
         expect(resolveZmkPin('mystery_board', 'GP1')).toBeNull()
         expect(resolveZmkPin('nice_nano_v2', 'GP99')).toBeNull()
         expect(resolveZmkPin(undefined, 'GP1')).toBeNull()
+    })
+
+    it('finds the nRF pin under a header label (board connector maps)', () => {
+        expect(nrfPinOf('nice_nano_v2', 'D15')).toEqual({ port: 1, pin: 13 })
+        expect(nrfPinOf('nice_nano_v2', 'P6')).toEqual({ port: 1, pin: 0 })
+        expect(nrfPinOf('seeeduino_xiao_ble', 'D2')).toEqual({ port: 0, pin: 28 })
+        expect(nrfPinOf('nrf52840dk_nrf52840', 'P0.13')).toEqual({ port: 0, pin: 13 })
+        expect(nrfPinOf('sparkfun_pro_micro_rp2040', 'D15')).toBeNull()
+        expect(nrfPinOf(undefined, 'D15')).toBeNull()
     })
 
     it('composes role-specific GPIO flags', () => {

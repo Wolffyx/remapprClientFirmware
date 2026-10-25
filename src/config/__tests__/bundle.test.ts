@@ -205,6 +205,23 @@ describe('buildProjectBundle — ZMK', () => {
         expect(conf).toContain('CONFIG_ZMK_STUDIO_TRANSPORT_UART=y')
     })
 
+    it('muxes header-labelled peripheral pins to their nRF pins', () => {
+        const doc = JSON.parse(HW_FULL)
+        doc.keyboard.controller.board = 'nice_nano_v2'
+        Object.assign(doc.keyboard.hardware, {
+            backlightPwm: { instance: 'pwm0', channel: 0, pin: 'D6' },
+            ws2812: { spi: 'spi3', dataPin: 'D15', chainLength: 10 },
+            extPowerCtrl: { controlGpio: 'D14' },
+        })
+        const b = buildProjectBundle(parseKeymap(JSON.stringify(doc)), 'zmk')
+        const overlay = fileText(b, 'boards/shields/boardy/boardy.overlay')
+        // nice!nano connector: D6 = P1.00, D15 = P1.13
+        expect(overlay).toContain('NRF_PSEL(PWM_OUT0, 1, 0)')
+        expect(overlay).toContain('NRF_PSEL(SPIM_MOSI, 1, 13)')
+        expect(overlay).toContain('control-gpios = <&pro_micro 14 GPIO_ACTIVE_HIGH>')
+        expect(overlay).not.toContain('FIXME')
+    })
+
     it('scaffolds peripheral pinctrl (not drops it) on a non-nRF board', () => {
         const b = buildProjectBundle(parseKeymap(HW_RP2040), 'zmk')
         const overlay = fileText(
