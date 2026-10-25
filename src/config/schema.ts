@@ -425,6 +425,21 @@ export const GeometrySchema = z.object({
         .enum(['encoder', 'slider', 'button'])
         .optional()
         .describe('Input element type (absent = key); builder metadata.'),
+    motor: z
+        .object({
+            follow: z.enum(['level', 'layer', 'app', 'off']).optional(),
+            feel: z.enum(['smooth', 'notches', 'spring']).optional(),
+            touchStops: z.boolean().optional(),
+            pins: z
+                .object({
+                    in1: z.string().optional(),
+                    in2: z.string().optional(),
+                    touch: z.string().optional(),
+                })
+                .optional(),
+        })
+        .optional()
+        .describe('A motorized slider: what moves it, its feel and its pins.'),
     option: z
         .tuple([z.number().int().nonnegative(), z.number().int().nonnegative()])
         .optional()
@@ -451,9 +466,21 @@ export const EncoderBindingSchema = z.object({
 })
 
 export const SliderBindingSchema = z.object({
-    map: z.enum(['volume', 'brightness', 'mouse_wheel', 'custom']),
+    map: z.enum([
+        'volume',
+        'brightness',
+        'backlight',
+        'rgb_brightness',
+        'rgb_hue',
+        'mouse_wheel',
+        'keys',
+        'custom',
+    ]),
     min: z.number().optional(),
     max: z.number().optional(),
+    steps: z.number().int().positive().optional(),
+    up: ActionSchema.optional(),
+    down: ActionSchema.optional(),
     action: ActionSchema.optional(),
 })
 
@@ -803,6 +830,10 @@ export const PartSchema = z
         variant: z.string().optional(),
         pins: z.record(z.string(), z.string()).optional(),
         display: DisplaySchema.optional(),
+        ownSize: z
+            .boolean()
+            .optional()
+            .describe('A screen sized by hand instead of by its module.'),
     })
     .describe(
         'A part on the board that is not a keymap position (screen, stick…).',
@@ -1748,14 +1779,10 @@ export const KeymapSchema = BaseKeymapSchema.superRefine((km, ctx) => {
                     path: ['layers', li, 'sliderBindings', k, 'min'],
                 })
             }
-            if (s.action)
-                checkAction(s.action, [
-                    'layers',
-                    li,
-                    'sliderBindings',
-                    k,
-                    'action',
-                ])
+            for (const slot of ['action', 'up', 'down'] as const) {
+                const a = s[slot]
+                if (a) checkAction(a, ['layers', li, 'sliderBindings', k, slot])
+            }
         })
     })
     ;(km.combos ?? []).forEach((combo, ci) => {

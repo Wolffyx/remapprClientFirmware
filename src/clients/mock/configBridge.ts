@@ -21,9 +21,11 @@ import type {
     CanonGeometry,
     CanonHoldTarget,
     CanonKeyPress,
+    CanonSliderBinding,
     ConfigKeymap,
     LightingAction,
     Modifier,
+    SliderMap,
 } from '@firmware/config'
 import { DiagnosticBag, partToLayout, type Diagnostic } from '@firmware/config'
 import type {
@@ -31,6 +33,7 @@ import type {
     KeyAction,
     Layer,
     PhysicalLayout,
+    SliderAction,
 } from '@firmware/types'
 import {
     buildMockKeyAction,
@@ -103,7 +106,12 @@ export interface LowerResult {
     /** Runtime layers (name + KeyActions), index-aligned with config.layers.
      *  `encoders` is index-aligned with `config.keyboard.encoders` (absent when
      *  the board declares none). */
-    layers: { name: string; keys: KeyAction[]; encoders?: EncoderAction[] }[]
+    layers: {
+        name: string
+        keys: KeyAction[]
+        encoders?: EncoderAction[]
+        sliders?: Record<number, SliderAction>
+    }[]
     diagnostics: Diagnostic[]
 }
 
@@ -232,14 +240,44 @@ export function lowerConfigToMock(config: ConfigKeymap): LowerResult {
         })
     }
 
+    // Sliders keep their key-index keys; up / down lower like any binding.
+    const lowerSliders = (
+        bound: Record<number, CanonSliderBinding> | undefined,
+        li: number,
+    ): Record<number, SliderAction> | undefined => {
+        if (!bound || !Object.keys(bound).length) return undefined
+        return Object.fromEntries(
+            Object.entries(bound).map(([k, s]) => {
+                const path = ['layers', li, 'sliderBindings', k]
+                return [
+                    Number(k),
+                    {
+                        map: s.map,
+                        ...(s.min !== undefined ? { min: s.min } : {}),
+                        ...(s.max !== undefined ? { max: s.max } : {}),
+                        ...(s.steps !== undefined ? { steps: s.steps } : {}),
+                        ...(s.up
+                            ? { up: lowerAction(s.up, [...path, 'up']) }
+                            : {}),
+                        ...(s.down
+                            ? { down: lowerAction(s.down, [...path, 'down']) }
+                            : {}),
+                    },
+                ]
+            }),
+        )
+    }
+
     const layers = config.layers.map((layer, li) => {
         const encoders = lowerEncoders(layer.encoders, li)
+        const sliders = lowerSliders(layer.sliderBindings, li)
         return {
             name: layer.name,
             keys: layer.bindings.map((b, bi) =>
                 lowerAction(b, ['layers', li, 'bindings', bi]),
             ),
             ...(encoders ? { encoders } : {}),
+            ...(sliders ? { sliders } : {}),
         }
     })
 
@@ -330,7 +368,10 @@ function sameAction(a: CanonAction, b: CanonAction): boolean {
  * data (combos, macros, tap-dances, geometry, per-layer encoders) is preserved.
  */
 export function raiseMockToConfig(
-    runtimeLayers: readonly Pick<Layer, 'name' | 'keys' | 'encoders'>[],
+    runtimeLayers: readonly Pick<
+        Layer,
+        'name' | 'keys' | 'encoders' | 'sliders'
+    >[],
     prevConfig: ConfigKeymap,
 ): ConfigKeymap {
     const layerNames = runtimeLayers.map((l) => l.name)
@@ -369,6 +410,10 @@ export function raiseMockToConfig(
                   }
               })
             : prevLayer?.encoders
+        // Sliders raise per key; with no runtime sliders, keep the config's.
+        const sliderBindings = rl.sliders
+            ? raiseSliders(rl.sliders, prevLayer?.sliderBindings, merge)
+            : prevLayer?.sliderBindings
         return {
             name: rl.name,
             ...(prevLayer?.description
@@ -376,10 +421,41 @@ export function raiseMockToConfig(
                 : {}),
             bindings,
             ...(encoders ? { encoders } : {}),
+            ...(sliderBindings && Object.keys(sliderBindings).length
+                ? { sliderBindings }
+                : {}),
         }
     })
 
     return { ...prevConfig, layers }
+}
+
+/** Runtime sliders → config slider bindings. A `custom` binding the runtime
+ *  can't show keeps its prior action. */
+function raiseSliders(
+    sliders: Record<number, SliderAction>,
+    prev: Record<number, CanonSliderBinding> | undefined,
+    merge: (ka: KeyAction, prev: CanonAction | undefined) => CanonAction,
+): Record<number, CanonSliderBinding> {
+    return Object.fromEntries(
+        Object.entries(sliders).map(([k, s]) => {
+            const before = prev?.[Number(k)]
+            return [
+                Number(k),
+                {
+                    map: s.map as SliderMap,
+                    ...(s.min !== undefined ? { min: s.min } : {}),
+                    ...(s.max !== undefined ? { max: s.max } : {}),
+                    ...(s.steps !== undefined ? { steps: s.steps } : {}),
+                    ...(s.up ? { up: merge(s.up, before?.up) } : {}),
+                    ...(s.down ? { down: merge(s.down, before?.down) } : {}),
+                    ...(s.map === 'custom' && before?.action
+                        ? { action: before.action }
+                        : {}),
+                },
+            ]
+        }),
+    )
 }
 
 /* ── geometry: config → runtime physical layout ────────────────────────── */
@@ -402,6 +478,9 @@ export function configToPhysicalLayout(config: ConfigKeymap): PhysicalLayout {
         ...(k.rx !== undefined ? { rx: Math.round(k.rx * U) } : {}),
         ...(k.ry !== undefined ? { ry: Math.round(k.ry * U) } : {}),
         ...(k.element ? { element: k.element } : {}),
+        ...(k.element === 'slider' && k.motor
+            ? { motor: { follow: k.motor.follow ?? 'level' } }
+            : {}),
     }))
     const parts = config.keyboard.parts?.map(partToLayout)
     const encoders = config.keyboard.encoders?.map((e) => ({

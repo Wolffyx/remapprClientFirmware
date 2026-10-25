@@ -24,10 +24,7 @@ export type Resolve = 'timeout' | 'prefer-hold' | 'prefer-tap'
 
 /** ZMK hold-tap `flavor` (the devicetree string values). */
 export type HoldTapFlavor =
-    | 'hold-preferred'
-    | 'balanced'
-    | 'tap-preferred'
-    | 'tap-unless-interrupted'
+    'hold-preferred' | 'balanced' | 'tap-preferred' | 'tap-unless-interrupted'
 
 export type LightingTarget = 'underglow' | 'backlight' | 'per_key'
 
@@ -94,8 +91,7 @@ export interface CanonKeyPress {
 }
 
 export type CanonHoldTarget =
-    | { type: 'modifier'; modifier: Modifier }
-    | { type: 'layer'; layer: string }
+    { type: 'modifier'; modifier: Modifier } | { type: 'layer'; layer: string }
 
 // pattern-check: skip — additive optional fields on an existing interface, no abstraction
 export interface CanonTapHold {
@@ -164,7 +160,12 @@ export type CanonAction =
     | { type: 'mod_morph'; ref: string }
     | { type: 'hold_tap'; ref: string; holdParam: string; tapParam: string }
     // §5.2 vocabulary (firmware behavior_type 20..36) — per-key actions.
-    | { type: 'auto_shift'; key: CanonicalKeyId; mods: Modifier[]; _keySrc?: string }
+    | {
+          type: 'auto_shift'
+          key: CanonicalKeyId
+          mods: Modifier[]
+          _keySrc?: string
+      }
     | { type: 'alt_repeat' }
     | { type: 'layer_lock' }
     | { type: 'layer_mod'; layer: string; mods: Modifier[] }
@@ -207,6 +208,8 @@ export interface CanonGeometry {
      *  round push button off the key grid. Builder metadata — compilers treat
      *  every entry as a key for now. */
     element?: 'encoder' | 'slider' | 'button'
+    /** A slider with a motor (`element: "slider"` only). */
+    motor?: CanonSliderMotor
     /** VIA/Vial layout-option tag `[group, choice]`: this key exists only when
      *  layout-option `group` is set to `choice`. Indexes into
      *  `keyboard.layoutOptions`; absent = present in every variant. Emitted as the
@@ -214,9 +217,13 @@ export interface CanonGeometry {
     option?: [number, number]
 }
 
+/** A knob's turn slot. `key` = the knob key (`element: "encoder"`) it belongs
+ *  to, whose binding is the press; absent = a knob with no keymap position. The
+ *  slot index is the encoder index every firmware uses (see knobs.ts). */
 export interface CanonEncoderSlot {
     x: number
     y: number
+    key?: number
 }
 
 export interface CanonEncoderBinding {
@@ -225,9 +232,19 @@ export interface CanonEncoderBinding {
     press?: CanonAction
 }
 
-/** What an analog slider's position controls. `volume`/`brightness`/`mouse_wheel`
- *  are well-known mapped outputs; `custom` defers to `action`. */
-export type SliderMap = 'volume' | 'brightness' | 'mouse_wheel' | 'custom'
+/** What an analog slider does. A level (`volume`, `brightness` = the computer's
+ *  screen, `backlight` / `rgb_brightness` / `rgb_hue` = the keyboard's own), the
+ *  mouse wheel, or `keys`: `up` / `down` sent once per step. `custom` is the
+ *  older single-`action` form, kept as written. See sliders.ts. */
+export type SliderMap =
+    | 'volume'
+    | 'brightness'
+    | 'backlight'
+    | 'rgb_brightness'
+    | 'rgb_hue'
+    | 'mouse_wheel'
+    | 'keys'
+    | 'custom'
 
 /** A slider's value-mapping: the ADC sweep mapped onto an output. `min`/`max`
  *  bound the output range (firmware defaults when absent); `action` is the
@@ -238,25 +255,37 @@ export interface CanonSliderBinding {
     map: SliderMap
     min?: number
     max?: number
+    /** Steps across the whole travel (a level's resolution, or how many
+     *  `up` / `down` presses a full slide sends). */
+    steps?: number
+    /** `keys`: sent once per step sliding up / down. */
+    up?: CanonAction
+    down?: CanonAction
     action?: CanonAction
+}
+
+/** A motorized slider's motor: where it moves the cap, how the travel feels,
+ *  and its pins (driver inputs + optional touch sense). */
+export interface CanonSliderMotor {
+    /** `level` = the level the slider sets (as it changes elsewhere), `layer` =
+     *  each layer's saved spot, `app` = a value the app sends, `off`. */
+    follow?: 'level' | 'layer' | 'app' | 'off'
+    feel?: 'smooth' | 'notches' | 'spring'
+    /** Touching the cap stops the motor. */
+    touchStops?: boolean
+    pins?: { in1?: string; in2?: string; touch?: string }
 }
 
 export interface CanonLayer {
     name: string
     description?: string
     bindings: CanonAction[]
-    /** Slot-indexed encoder bindings — index-aligned to `keyboard.encoders[]`.
-     *  The original ZMK-style parallel array, kept for boards that declare
-     *  encoder slots separately from keys. */
+    /** Turn bindings, index-aligned to `keyboard.encoders[]`. A slot linked to
+     *  a knob key carries no press (the key's binding is the press). */
     encoders?: CanonEncoderBinding[]
-    /** Per-key encoder bindings, keyed by the position's index in
-     *  `keyboard.keys` (the key must have `element: "encoder"`). The builder's
-     *  element model writes here; lets a single physical position carry both a
-     *  base binding and rotary cw/ccw/press without a parallel slot array. */
-    encoderBindings?: Record<number, CanonEncoderBinding>
     /** Per-key slider value-mappings, keyed by the position's index in
-     *  `keyboard.keys` (the key must have `element: "slider"`). Parallels
-     *  `encoderBindings` — one analog input element per physical position. */
+     *  `keyboard.keys` (the key must have `element: "slider"`) — one analog
+     *  input element per physical position. */
     sliderBindings?: Record<number, CanonSliderBinding>
 }
 
@@ -631,6 +660,9 @@ export interface CanonPart {
     /** Its pins by what they are for ("cs", "x"…), friendly labels. */
     pins?: Record<string, string>
     display?: CanonDisplay
+    /** A screen drawn at a size of the designer's choosing (bezel, custom
+     *  panel); otherwise its size follows the module and stays put. */
+    ownSize?: boolean
 }
 
 /** A named physical-layout variant (keys tag into it via `CanonGeometry.variant`). */
@@ -819,8 +851,7 @@ export interface CanonActionBinding {
 // pattern-check: skip — plain data interfaces for new open config sections, no abstraction
 /** A known Zephyr board id, or a custom board on any Zephyr-supported SoC. */
 export type ConfigBoardController =
-    | string
-    | { custom: true; soc: string; name: string; [k: string]: unknown }
+    string | { custom: true; soc: string; name: string; [k: string]: unknown }
 
 /** Build-time board definition (v2) — consumed by the DT/Kconfig generator, never
  *  in the blob. Open shape: extra builder fields are preserved verbatim. */

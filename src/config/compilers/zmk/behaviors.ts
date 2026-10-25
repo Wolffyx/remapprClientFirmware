@@ -6,6 +6,7 @@
 
 import type {
     CanonAction,
+    SliderMap,
     CanonHoldTapDef,
     CanonMacro,
     CanonModMorph,
@@ -151,10 +152,14 @@ export function emitSliderInputs(config: ConfigKeymap, ctx: Ctx): string[] {
         .filter((i) => i >= 0)
     if (!sliderKeys.length) return []
 
-    const mapNote: Record<string, string> = {
+    const mapNote: Record<SliderMap, string> = {
         volume: 'HID consumer volume (e.g. &kp C_VOL_UP/DOWN via a custom driver)',
-        brightness: 'display/backlight brightness',
+        brightness: 'the computer screen brightness (consumer BRI up/down)',
+        backlight: 'the keyboard backlight level',
+        rgb_brightness: 'the underglow brightness',
+        rgb_hue: 'the underglow colour',
         mouse_wheel: 'mouse wheel (MOVE_Y / scroll report)',
+        keys: 'the up / down bindings below, once per step',
         custom: 'custom behavior (see binding below)',
     }
     const out: string[] = [
@@ -179,10 +184,13 @@ export function emitSliderInputs(config: ConfigKeymap, ctx: Ctx): string[] {
                 s.min !== undefined || s.max !== undefined
                     ? ` [${s.min ?? '…'}..${s.max ?? '…'}]`
                     : ''
+            const path = ['layers', li, 'sliderBindings', ki]
             const custom =
                 s.map === 'custom' && s.action
-                    ? ` → ${emitBinding(s.action, ctx, ['layers', li, 'sliderBindings', ki, 'action'])}`
-                    : ''
+                    ? ` → ${emitBinding(s.action, ctx, [...path, 'action'])}`
+                    : s.map === 'keys'
+                      ? ` → up ${s.up ? emitBinding(s.up, ctx, [...path, 'up']) : '—'}, down ${s.down ? emitBinding(s.down, ctx, [...path, 'down']) : '—'}${s.steps ? `, ${s.steps} steps` : ''}`
+                      : ''
             out.push(
                 `     *     ${layer.name}: ${s.map}${range} — ${mapNote[s.map]}${custom}`,
             )

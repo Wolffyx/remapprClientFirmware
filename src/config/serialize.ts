@@ -230,6 +230,9 @@ const denormalizeSlider = (s: CanonSliderBinding): Record<string, unknown> => ({
     map: s.map,
     ...(s.min !== undefined ? { min: s.min } : {}),
     ...(s.max !== undefined ? { max: s.max } : {}),
+    ...(s.steps !== undefined ? { steps: s.steps } : {}),
+    ...(s.up ? { up: denormalizeAction(s.up) } : {}),
+    ...(s.down ? { down: denormalizeAction(s.down) } : {}),
     ...(s.action ? { action: denormalizeAction(s.action) } : {}),
 })
 
@@ -297,6 +300,7 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                 ...(k.variant ? { variant: k.variant } : {}),
                 ...(k.pin ? { pin: k.pin } : {}),
                 ...(k.element ? { element: k.element } : {}),
+                ...(k.motor ? { motor: structuredClone(k.motor) } : {}),
                 ...(k.option ? { option: [k.option[0], k.option[1]] } : {}),
             })),
             ...(km.keyboard.encoders

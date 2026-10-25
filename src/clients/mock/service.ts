@@ -9,6 +9,7 @@ import type {
     ClusterDiag,
     DynamicEntriesApi,
     EncoderApi,
+    SliderApi,
     HsvColor,
     IndicatorConfig,
     KeyboardService,
@@ -213,6 +214,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
     public readonly codec = mockCodec
     public readonly sideload: SideloadApi
     public readonly encoders: EncoderApi
+    public readonly sliders: SliderApi
     public readonly dynamic: DynamicEntriesApi
     public readonly macros: MacroApi
     public readonly rgb: RgbApi
@@ -391,6 +393,23 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                         ? { cw: action, ccw: cur.ccw }
                         : { cw: cur.cw, ccw: action }
                 this.layers[li] = { ...layer, encoders: encs }
+                this.markPending(true)
+            },
+        }
+        this.sliders = {
+            setSlider: async (layerId, keyIndex, slider) => {
+                this.requireUnlocked()
+                const li = this.layerIndexById(layerId)
+                if (li < 0)
+                    throw new ProtocolError(`Unknown layer id: ${layerId}`)
+                if (keyIndex < 0 || keyIndex >= this.keyCount)
+                    throw new ProtocolError(
+                        `Key index out of range: ${keyIndex}`,
+                    )
+                const layer = this.layers[li]
+                const { [keyIndex]: _old, ...rest } = layer.sliders ?? {}
+                const sliders = slider ? { ...rest, [keyIndex]: slider } : rest
+                this.layers[li] = { ...layer, sliders }
                 this.markPending(true)
             },
         }
@@ -636,6 +655,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                 name: l.name,
                 keys: l.keys,
                 ...(l.encoders ? { encoders: l.encoders } : {}),
+                ...(l.sliders ? { sliders: l.sliders } : {}),
             }
         })
     }
@@ -798,6 +818,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                     )
                     return { cw, ccw }
                 }),
+                ...(l.sliders ? { sliders: { ...l.sliders } } : {}),
             })),
             availableLayers:
                 (this.capabilities.maxLayers ?? 8) - this.layers.length,

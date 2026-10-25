@@ -25,6 +25,9 @@ export function someAction(
 ): boolean {
     for (const layer of config.layers) {
         if (layer.bindings.some(pred)) return true
+        for (const s of Object.values(layer.sliderBindings ?? {})) {
+            if ([s.up, s.down, s.action].some((a) => a && pred(a))) return true
+        }
         for (const e of layer.encoders ?? []) {
             if (pred(e.cw) || pred(e.ccw) || (e.press && pred(e.press)))
                 return true

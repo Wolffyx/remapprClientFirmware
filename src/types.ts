@@ -55,11 +55,25 @@ export interface EncoderAction {
     ccw: KeyAction
 }
 
+/** A slider's binding on one layer: a level (`map` volume / backlight / …,
+ *  between `min` and `max` in `steps`), or `keys` sent once per step. Map ids
+ *  are the config's SliderMap (see config/sliders.ts). */
+export interface SliderAction {
+    map: string
+    min?: number
+    max?: number
+    steps?: number
+    up?: KeyAction
+    down?: KeyAction
+}
+
 export interface Layer {
     id: number
     name: string
     keys: KeyAction[]
     encoders?: EncoderAction[]
+    /** Slider bindings, keyed by the slider's keymap position. */
+    sliders?: Record<number, SliderAction>
 }
 
 export interface PhysicalLayoutKey {
@@ -72,6 +86,8 @@ export interface PhysicalLayoutKey {
     ry?: number
     /** Not a keycap: a knob, slider or round button at this position. */
     element?: 'encoder' | 'slider' | 'button'
+    /** A slider with a motor: what moves it. */
+    motor?: { follow: 'level' | 'layer' | 'app' | 'off' }
 }
 
 /** A part on the board that is not a keymap position (a screen, a stick…),

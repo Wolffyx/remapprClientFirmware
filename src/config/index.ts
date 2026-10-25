@@ -9,6 +9,7 @@ export type {
     CanonEncoderBinding,
     CanonEncoderSlot,
     CanonSliderBinding,
+    CanonSliderMotor,
     SliderMap,
     CanonGeometry,
     CanonHoldTarget,
@@ -333,6 +334,7 @@ export {
 } from './firmwareSwitches'
 export { DESIGN_FEATURE_NAME } from './firmwareConf'
 export { ELEMENT_SHAPE, PART_SHAPE, partGlyph, partToLayout } from './parts'
+export { SLIDER_MAP_INFO, type SliderMapInfo, sliderMapInfo } from './sliders'
 export {
     DISPLAY_MODULES,
     DISPLAY_PIN_NAMES,

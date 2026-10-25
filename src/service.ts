@@ -36,6 +36,7 @@ import type {
     KeyOverrideEntry,
     KeyUpdate,
     Layer,
+    SliderAction,
     LockKind,
     LockState,
     UnlockOptions,
@@ -131,6 +132,16 @@ export interface ConnectNotice {
 }
 
 // Pattern check: Facade (Tier 1) — applied — group related optional methods into 3 cohesive feature facades for renderer single-guard reads
+/** Slider edits: one layer's binding for the slider at a keymap position
+ *  (`null` clears it). Only firmware that models sliders offers it. */
+export interface SliderApi {
+    setSlider(
+        layerId: number,
+        keyIndex: number,
+        slider: SliderAction | null,
+    ): Promise<void>
+}
+
 export interface EncoderApi {
     /** `direction`: 0 = clockwise, 1 = counter-clockwise (matches
      *  EncoderAction.cw / .ccw). Clients map this to their wire flag. */
@@ -214,7 +225,10 @@ export interface ConfigBridgeApi {
      *  Only a firmware whose runtime is a lossy projection of a config it also
      *  owns can do this. Adapters that edit the device directly omit it. */
     raiseKeymap(
-        layers: readonly Pick<Layer, 'name' | 'keys' | 'encoders'>[],
+        layers: readonly Pick<
+            Layer,
+            'name' | 'keys' | 'encoders' | 'sliders'
+        >[],
         prevConfig: ConfigKeymap,
     ): ConfigKeymap
 }
@@ -657,12 +671,7 @@ export type {
  *  board default), undo (back to the calibration the last finish, reset or
  *  undo replaced, until the joystick restarts). */
 export type JoystickCalStep =
-    | 'begin'
-    | 'centre'
-    | 'finish'
-    | 'cancel'
-    | 'reset'
-    | 'undo'
+    'begin' | 'centre' | 'finish' | 'cancel' | 'reset' | 'undo'
 
 /** A stick and the two analog inputs it reads (X, then Y). */
 export interface JoystickStick {
@@ -783,7 +792,10 @@ export interface SensorApi {
     ): Promise<SensorProcedureStatus>
     /** The live readings (of one channel). Rejects while a procedure holds
      *  the sensor. */
-    getMetrics(sensor: number, channel?: number): Promise<readonly SensorReading[]>
+    getMetrics(
+        sensor: number,
+        channel?: number,
+    ): Promise<readonly SensorReading[]>
     /** What a finished procedure suggests for the part's own settings, by
      *  setting name (an axis calibration's deadzones); empty when it measured
      *  none or the firmware cannot say. */
@@ -923,6 +935,7 @@ export interface KeyboardService {
     canSetAction?(action: KeyAction): boolean
 
     encoders?: EncoderApi
+    sliders?: SliderApi
     dynamic?: DynamicEntriesApi
     macros?: MacroApi
     /** Live switch-matrix readout for the Key Test view. Present only when the

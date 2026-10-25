@@ -392,6 +392,9 @@ function normalizeSlider(
         map: s.map,
         ...(s.min !== undefined ? { min: s.min } : {}),
         ...(s.max !== undefined ? { max: s.max } : {}),
+        ...(s.steps !== undefined ? { steps: s.steps } : {}),
+        ...(s.up ? { up: normalizeAction(s.up) } : {}),
+        ...(s.down ? { down: normalizeAction(s.down) } : {}),
         ...(s.action ? { action: normalizeAction(s.action) } : {}),
     }
 }
@@ -465,6 +468,7 @@ function canonKeymap(km: SurfaceKeymap): ConfigKeymap {
                 ...(k.option
                     ? { option: [k.option[0], k.option[1]] as [number, number] }
                     : {}),
+                ...(k.motor ? { motor: cloneJson(k.motor) } : {}),
             })),
             ...(km.keyboard.encoders
                 ? { encoders: km.keyboard.encoders.map((e) => ({ ...e })) }
