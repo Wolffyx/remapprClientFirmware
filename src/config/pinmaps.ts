@@ -15,13 +15,13 @@
 
 import type { GpioSpec } from './types'
 
-/** Build "P0".."Pn", "D0".."Dn" and bare "0".."n" aliases for a nexus phandle.
+/** Build "Pn", "Dn" and bare "n" aliases for each of a nexus phandle's pins.
  *  Pro-Micro-footprint and Xiao boards expose a GPIO nexus whose index IS the
  *  silkscreen pin number, so the mapping is an honest index passthrough — the
- *  value of the table is knowing the right phandle + validating the range. */
-function nexusTable(phandle: string, count: number): Record<string, string> {
+ *  value of the table is knowing the right phandle + validating the pins. */
+function nexusTable(phandle: string, pins: number[]): Record<string, string> {
     const out: Record<string, string> = {}
-    for (let i = 0; i < count; i++) {
+    for (const i of pins) {
         const ref = `${phandle} ${i}`
         out[`P${i}`] = ref
         out[`D${i}`] = ref
@@ -29,6 +29,12 @@ function nexusTable(phandle: string, count: number): Record<string, string> {
     }
     return out
 }
+
+const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i)
+
+/** The Pro Micro header's pin numbers: 0–21 without 11, 12, 13 and 17, which
+ *  the footprint does not break out (nor does the &pro_micro nexus map them). */
+const PRO_MICRO_PINS = [...range(11), 14, 15, 16, 18, 19, 20, 21]
 
 /** Build "GP0".."GPn" → "&gpio0 0".."&gpio0 n" for a direct-GPIO SoC (RP2040). */
 function rp2040Table(count: number): Record<string, string> {
@@ -47,12 +53,12 @@ function rp2040Table(count: number): Record<string, string> {
 export const ZMK_PIN_MAPS: Record<string, Record<string, string>> = {
     // Pro-Micro-footprint controllers expose the `&pro_micro` nexus; index = the
     // Pro Micro pin number (0–21).
-    nice_nano_v2: nexusTable('&pro_micro', 22),
-    pro_micro: nexusTable('&pro_micro', 22),
-    sparkfun_pro_micro_rp2040: nexusTable('&pro_micro', 22),
+    nice_nano_v2: nexusTable('&pro_micro', PRO_MICRO_PINS),
+    pro_micro: nexusTable('&pro_micro', PRO_MICRO_PINS),
+    sparkfun_pro_micro_rp2040: nexusTable('&pro_micro', PRO_MICRO_PINS),
     // Seeed Xiao footprint → `&xiao_d` nexus (D0–D10).
-    seeeduino_xiao_ble: nexusTable('&xiao_d', 11),
-    seeeduino_xiao_rp2040: nexusTable('&xiao_d', 11),
+    seeeduino_xiao_ble: nexusTable('&xiao_d', range(11)),
+    seeeduino_xiao_rp2040: nexusTable('&xiao_d', range(11)),
     // Generic RP2040 (Pico-class) — bare GPIO bank.
     rp2040: rp2040Table(30),
     rpi_pico: rp2040Table(30),
@@ -205,6 +211,51 @@ export function boardPinForms(board: string | undefined): string | null {
 export function samePin(board: string | undefined, a: string, b: string): boolean {
     const ra = resolveZmkPin(board, a)
     return ra !== null && ra === resolveZmkPin(board, b)
+}
+
+// pattern-check: skip — board footprint data beside the pin tables, one lookup
+/** A controller's header, top view with USB at the top: each side's pads from
+ *  top to bottom. A pad is a pin label from the board's table, or a power /
+ *  control pad's name (GND, RAW, RST, …). */
+export interface BoardFootprint {
+    name: string
+    left: string[]
+    right: string[]
+}
+
+const PRO_MICRO_FOOTPRINT = {
+    left: ['D1', 'D0', 'GND', 'GND', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9'],
+    right: ['RAW', 'GND', 'RST', 'VCC', 'D21', 'D20', 'D19', 'D18', 'D15', 'D14', 'D16', 'D10'],
+}
+
+const BOARD_FOOTPRINTS: Record<string, BoardFootprint> = {
+    nice_nano_v2: { name: 'nice!nano v2', ...PRO_MICRO_FOOTPRINT },
+    pro_micro: { name: 'Pro Micro', ...PRO_MICRO_FOOTPRINT },
+    sparkfun_pro_micro_rp2040: {
+        name: 'Pro Micro RP2040',
+        ...PRO_MICRO_FOOTPRINT,
+    },
+    seeeduino_xiao_ble: {
+        name: 'Xiao BLE',
+        left: ['D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6'],
+        right: ['5V', 'GND', '3V3', 'D10', 'D9', 'D8', 'D7'],
+    },
+    seeeduino_xiao_rp2040: {
+        name: 'Xiao RP2040',
+        left: ['D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6'],
+        right: ['5V', 'GND', '3V3', 'D10', 'D9', 'D8', 'D7'],
+    },
+    rpi_pico: {
+        name: 'Raspberry Pi Pico',
+        left: ['GP0', 'GP1', 'GND', 'GP2', 'GP3', 'GP4', 'GP5', 'GND', 'GP6', 'GP7', 'GP8', 'GP9', 'GND', 'GP10', 'GP11', 'GP12', 'GP13', 'GND', 'GP14', 'GP15'],
+        right: ['VBUS', 'VSYS', 'GND', '3V3_EN', '3V3', 'ADC_VREF', 'GP28', 'GND', 'GP27', 'GP26', 'RUN', 'GP22', 'GND', 'GP21', 'GP20', 'GP19', 'GP18', 'GND', 'GP17', 'GP16'],
+    },
+}
+
+/** The board's header as drawn on the board, or null when remappr has no
+ *  drawing of it (its pins can still be listed with boardPinLabels). */
+export function boardFootprint(board: string | undefined): BoardFootprint | null {
+    return (board && BOARD_FOOTPRINTS[board]) || null
 }
 
 /** True when remappr has a ZMK pin table for this board. */

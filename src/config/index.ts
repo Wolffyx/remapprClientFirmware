@@ -272,6 +272,8 @@ export {
     boardPinLabels,
     boardPinForms,
     samePin,
+    boardFootprint,
+    type BoardFootprint,
     KNOWN_ZMK_BOARDS,
 } from './pinmaps'
 

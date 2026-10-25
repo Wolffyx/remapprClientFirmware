@@ -7,6 +7,7 @@ import {
     boardPinLabels,
     boardPinForms,
     samePin,
+    boardFootprint,
 } from '../pinmaps'
 import { getCompiler } from '../compiler'
 import { buildProjectBundle } from '../bundle'
@@ -58,9 +59,26 @@ describe('pin resolver', () => {
 })
 
 describe('board pin lists', () => {
+    it('refuses Pro Micro pins the header does not break out', () => {
+        expect(resolveZmkPin('nice_nano_v2', 'D10')).toBe('&pro_micro 10')
+        expect(resolveZmkPin('nice_nano_v2', 'D11')).toBeNull()
+        expect(resolveZmkPin('nice_nano_v2', '17')).toBeNull()
+    })
+
+    it('draws known headers with real pins and named power pads', () => {
+        const fp = boardFootprint('nice_nano_v2')!
+        expect(fp.left).toHaveLength(12)
+        const pins = [...fp.left, ...fp.right].filter((p) =>
+            resolveZmkPin('nice_nano_v2', p),
+        )
+        expect(pins).toHaveLength(18) // every header pin, once
+        expect(boardFootprint('rpi_pico')!.left).toHaveLength(20)
+        expect(boardFootprint('rp2040')).toBeNull()
+    })
+
     it('lists each pin once, lettered spelling first', () => {
         const pins = boardPinLabels('nice_nano_v2')!
-        expect(pins).toHaveLength(22)
+        expect(pins).toHaveLength(18) // the header has no 11, 12, 13, 17
         expect(pins[0]).toBe('P0')
         expect(boardPinLabels('rp2040')![29]).toBe('GP29')
         expect(boardPinLabels('mystery')).toBeNull()
