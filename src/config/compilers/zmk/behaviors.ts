@@ -228,9 +228,23 @@ export function emitSliderInputs(config: ConfigKeymap, ctx: Ctx): string[] {
     return out
 }
 
-export function emitHoldTapDefs(defs: CanonHoldTapDef[]): string[] {
+/** Config key indices as `.keymap` positions; keys outside the default layout
+ *  are left out (the caller compares lengths to tell). */
+export function keymapPositionList(
+    keys: readonly number[],
+    ctx: Ctx,
+): number[] {
+    const positions = ctx.positions
+    if (!positions) return [...keys]
+    return keys.flatMap((k) => {
+        const p = positions.get(k)
+        return p === undefined ? [] : [p]
+    })
+}
+
+export function emitHoldTapDefs(defs: CanonHoldTapDef[], ctx: Ctx): string[] {
     const out: string[] = ['    behaviors {']
-    for (const h of defs) {
+    defs.forEach((h, hi) => {
         const id = sanitize(h.id)
         out.push(
             `        ${id}: ${id} {`,
@@ -247,15 +261,23 @@ export function emitHoldTapDefs(defs: CanonHoldTapDef[]): string[] {
             out.push(
                 `            require-prior-idle-ms = <${h.requirePriorIdleMs}>;`,
             )
-        if (h.holdTriggerKeyPositions?.length)
+        const wanted = h.holdTriggerKeyPositions ?? []
+        const trigger = keymapPositionList(wanted, ctx)
+        if (trigger.length < wanted.length) {
+            ctx.diag.warn(
+                `hold-tap "${h.id}": trigger keys outside the default layout were left out`,
+                ['holdTaps', hi, 'holdTriggerKeyPositions'],
+            )
+        }
+        if (trigger.length)
             out.push(
-                `            hold-trigger-key-positions = <${h.holdTriggerKeyPositions.join(' ')}>;`,
+                `            hold-trigger-key-positions = <${trigger.join(' ')}>;`,
             )
         if (h.holdTriggerOnRelease)
             out.push(`            hold-trigger-on-release;`)
         if (h.retroTap) out.push(`            retro-tap;`)
         out.push(`        };`)
-    }
+    })
     out.push('    };')
     return out
 }

@@ -218,11 +218,12 @@ export function emitSynthKscan(
 export function emitChosen(
     hasKscan: boolean,
     hw: ConfigHardware | undefined,
+    layoutLabel: string,
 ): string[] {
     const entries = [
         ...(hasKscan ? [`        zmk,kscan = <&kscan0>;`] : []),
         ...(hasKscan
-            ? [`        zmk,physical-layout = <&physical_layout_default>;`]
+            ? [`        zmk,physical-layout = <&${layoutLabel}>;`]
             : []),
         ...(hw?.backlightPwm
             ? [`        zmk,backlight = <&backlight_pwm>;`]
