@@ -341,6 +341,7 @@ export {
     displayFromModule,
     displayModule,
     displayPins,
+    displaySize,
     type DisplayModule,
     type DisplayPin,
 } from './displays'
