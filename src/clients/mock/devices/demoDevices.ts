@@ -20,6 +20,7 @@ import { configToPhysicalLayout } from '../configBridge'
 import seedSource from '../seed.keymap.json?raw'
 import { MockKeyboardService, type MockServiceOptions } from '../service'
 import { APEX_STICK } from './apexStick'
+import { deck9Layouts } from './deck9Layouts'
 import deck9Source from './deck9.keymap.json?raw'
 import { GENERIC_GAMEPAD } from './genericGamepad'
 import { HALO_M2 } from './haloM2'
@@ -108,7 +109,11 @@ const ENTRIES: readonly Entry[] = [
     ),
     keyboardEntry('deck9', 'Deck 9', 'macropad', deck9Config, (opts) =>
         Promise.resolve(
-            new MockKeyboardService({ ...opts, seedConfig: deck9Config() }),
+            new MockKeyboardService({
+                ...opts,
+                seedConfig: deck9Config(),
+                layouts: deck9Layouts(deck9Config()),
+            }),
         ),
     ),
     deviceEntry('halo-m2', HALO_M2),

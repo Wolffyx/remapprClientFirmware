@@ -189,6 +189,15 @@ export interface MockServiceOptions {
      *  handoff) instead of the static Corne demo. The physical layout, key
      *  count, and getConfigSource() all derive from this board. */
     seedConfig?: ConfigKeymap
+    /** The physical layouts to offer instead of the one derived from
+     *  `seedConfig`. Each must keep the config's keys in the same order. */
+    layouts?: PhysicalLayout[]
+}
+
+function initialLayouts(opts: MockServiceOptions): PhysicalLayout[] {
+    if (opts.layouts) return opts.layouts.map((l) => ({ ...l }))
+    if (opts.seedConfig) return [configToPhysicalLayout(opts.seedConfig)]
+    return MOCK_LAYOUTS.map((l) => ({ ...l }))
 }
 
 export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
@@ -310,9 +319,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
         this.cfg = this.seedCfg
         this.keyCount = this.seedCfg.keyboard.keys.length
         this.perKeyColors = this.rainbow()
-        this.layouts = opts.seedConfig
-            ? [configToPhysicalLayout(opts.seedConfig)]
-            : MOCK_LAYOUTS.map((l) => ({ ...l }))
+        this.layouts = initialLayouts(opts)
         this.deviceInfo = {
             name:
                 opts.deviceInfo?.name ??
