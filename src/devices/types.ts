@@ -85,6 +85,19 @@ export interface DeviceControl {
     /** On the underside (paddles): drawn dashed. */
     readonly back?: boolean
     readonly label?: CalloutSide
+    /** The layout variant this control belongs to (an id from
+     *  `DeviceModel.layouts`); absent = in every variant. */
+    readonly variant?: string
+}
+
+/** A named layout variant: one possible arrangement of the device, e.g. with
+ *  or without back paddles. A variant is the controls with no `variant` plus
+ *  the ones tagged into it — the same as one ZMK physical layout or one QMK
+ *  `LAYOUT_*`. Controls keep their id across variants, so a shared control
+ *  keeps its binding when the variant changes. */
+export interface DeviceVariant {
+    readonly id: string
+    readonly name: string
 }
 
 /** The body is not drawn by hand: it is fitted around the controls, so moving a
@@ -114,6 +127,10 @@ export interface DeviceModel {
     readonly name: string
     readonly shell: DeviceShell
     readonly controls: readonly DeviceControl[]
+    /** Layout variants; controls tag in with `variant`. The first one is the
+     *  default (ZMK's `chosen` physical layout, QMK's default `LAYOUT`).
+     *  Absent = one fixed layout. */
+    readonly layouts?: readonly DeviceVariant[]
     /** The device did not report a layout: positions are a generic arrangement
      *  built from what it did report (see defaultLayout). */
     readonly defaulted?: boolean

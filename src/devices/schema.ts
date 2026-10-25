@@ -72,7 +72,16 @@ const ControlSchema = z.object({
     edge: z.boolean().optional(),
     back: z.boolean().optional(),
     label: z.enum(['L', 'R']).optional(),
+    variant: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('Layout variant id this control belongs to (absent = all).'),
 })
+
+const VariantSchema = z
+    .object({ id: z.string().min(1), name: z.string().min(1) })
+    .describe('A layout variant; controls tag in via `variant`.')
 
 const ShellSchema = z.discriminatedUnion('type', [
     z.object({ type: z.literal('plate'), pad: z.number() }),
@@ -100,8 +109,31 @@ export const DeviceLayoutSchema = z
         form: z.enum(DEVICE_FORMS),
         shell: ShellSchema,
         controls: z.array(ControlSchema).min(1),
+        layouts: z
+            .array(VariantSchema)
+            .optional()
+            .describe('Layout variants; the first one is the default.'),
     })
     .superRefine((d, ctx) => {
+        const variants = new Set<string>()
+        d.layouts?.forEach((v, i) => {
+            if (variants.has(v.id)) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: ['layouts', i, 'id'],
+                    message: `duplicate variant id "${v.id}"`,
+                })
+            }
+            variants.add(v.id)
+        })
+        d.controls.forEach((c, i) => {
+            if (c.variant === undefined || variants.has(c.variant)) return
+            ctx.addIssue({
+                code: 'custom',
+                path: ['controls', i, 'variant'],
+                message: `unknown variant "${c.variant}"`,
+            })
+        })
         const seen = new Set<string>()
         d.controls.forEach((c, i) => {
             if (seen.has(c.id)) {
@@ -130,6 +162,9 @@ export function layoutFromModel(model: DeviceModel): DeviceLayoutDoc {
         form: model.form,
         shell: model.shell,
         controls: model.controls.map((c) => ({ ...c })),
+        ...(model.layouts?.length
+            ? { layouts: model.layouts.map((v) => ({ ...v })) }
+            : {}),
     }
 }
 
@@ -141,6 +176,7 @@ export function modelFromLayout(doc: DeviceLayoutDoc): DeviceModel {
         name: doc.name,
         shell: doc.shell,
         controls: doc.controls,
+        ...(doc.layouts?.length ? { layouts: doc.layouts } : {}),
     }
 }
 
