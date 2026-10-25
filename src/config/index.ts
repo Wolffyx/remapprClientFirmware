@@ -47,6 +47,8 @@ export type {
     ConfigKeymap,
     ConfigKeyboard,
     ConfigPins,
+    BoardEncoder,
+    BoardSensor,
     ConfigDefaults,
     ConfigMeta,
     ConfigNode,
@@ -281,6 +283,16 @@ export {
     type BoardFootprint,
     KNOWN_ZMK_BOARDS,
 } from './pinmaps'
+export {
+    BOARD_PIN_ABILITIES,
+    reservedPins,
+    suggestPinsByRole,
+    type BoardBus,
+    type BoardPin,
+    type BoardPinAbilities,
+    type PinNeed,
+    type PinUse,
+} from './pinAbilities'
 
 export {
     type ActionCategory,
@@ -299,6 +311,7 @@ import './compilers/qmk'
 import './compilers/remappr'
 export {
     DESIGN_FEATURES,
+    SUGGESTED_FEATURES,
     FIRMWARE_SWITCHES,
     setDesignFeature,
     supportsFeature,

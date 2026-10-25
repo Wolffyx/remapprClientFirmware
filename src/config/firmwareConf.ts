@@ -70,8 +70,9 @@ export const DESIGN_FEATURE_NAME: Record<DesignFeature, string> = {
     liveEdit: 'Edit live',
     battery: 'Battery & sleep',
     lighting: 'Lighting',
-    pointing: 'Pointing',
+    pointing: 'Motion sensor',
     encoders: 'Encoders',
+    analog: 'Analog inputs',
 }
 
 /** First reason that holds, else off. */

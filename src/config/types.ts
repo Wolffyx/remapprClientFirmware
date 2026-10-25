@@ -575,6 +575,7 @@ export type DesignFeature =
     | 'lighting'
     | 'pointing'
     | 'encoders'
+    | 'analog'
 
 /** A named physical-layout variant (keys tag into it via `CanonGeometry.variant`). */
 export interface CanonLayout {

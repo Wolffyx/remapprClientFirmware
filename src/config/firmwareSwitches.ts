@@ -20,6 +20,7 @@ import {
 } from './firmwareConf'
 import type { BuilderFirmwareId } from './firmwareTargets'
 import type { CanonFirmwareConfig, ConfigKeymap, DesignFeature } from './types'
+import type { DeviceForm } from '../devices/types'
 
 export interface FirmwareSwitch {
     /** Stable within its table. */
@@ -250,7 +251,15 @@ function liveEditTable(name: string, line: string): SwitchTable {
  *  board files turn on the rest from the pins the design sets. */
 const remapprTable: SwitchTable = {
     file: 'Kconfig.defconfig',
-    features: ['wireless', 'liveEdit', 'battery', 'lighting', 'pointing', 'encoders'],
+    features: [
+        'wireless',
+        'liveEdit',
+        'battery',
+        'lighting',
+        'pointing',
+        'encoders',
+        'analog',
+    ],
     switches(config) {
         const built = (id: string, name: string): FirmwareSwitch => ({
             id,
@@ -330,41 +339,73 @@ export interface DesignFeatureCard {
     readonly blurb: string
     /** What it needs wired, when anything. */
     readonly needs?: string
+    /** Connection and power, or a part on the design. */
+    readonly group: 'connection' | 'part'
 }
 
-/** The cards, in order. What each turns on is up to each firmware's table. */
+/** The cards, in order — the same for every design: any part can go on any
+ *  keyboard or device. What each turns on is up to each firmware's table. */
 export const DESIGN_FEATURES: readonly DesignFeatureCard[] = [
-    { id: 'wireless', name: 'Wireless', blurb: 'Bluetooth, up to 5 hosts.' },
+    {
+        id: 'wireless',
+        name: 'Wireless',
+        blurb: 'Bluetooth, or a 2.4 GHz dongle.',
+        group: 'connection',
+    },
     {
         id: 'liveEdit',
         name: 'Edit live from the app',
-        blurb: 'Change keys without reflashing.',
+        blurb: 'Change keys and buttons without reflashing.',
+        group: 'connection',
     },
     {
         id: 'battery',
         name: 'Battery & sleep',
-        blurb: 'Sleeps when idle; a key turns it off.',
+        blurb: 'Sleeps when idle; a key or move wakes it.',
         needs: 'battery sense pin',
+        group: 'connection',
     },
     {
         id: 'lighting',
         name: 'Lighting',
         blurb: 'Underglow or per-key LEDs.',
         needs: 'LED data pin',
+        group: 'connection',
     },
     {
         id: 'pointing',
-        name: 'Pointing',
-        blurb: 'Trackball or trackpad.',
-        needs: 'sensor pins',
+        name: 'Motion sensor',
+        blurb: 'Optical sensor or trackball, on SPI.',
+        needs: 'SPI bus, chip select, motion pin',
+        group: 'part',
     },
     {
         id: 'encoders',
         name: 'Encoders',
-        blurb: 'Knobs on the board.',
+        blurb: 'A scroll wheel or rotary knobs.',
         needs: '2 pins each',
+        group: 'part',
+    },
+    {
+        id: 'analog',
+        name: 'Analog inputs',
+        blurb: 'Sticks, triggers, sliders.',
+        needs: '1 analog pin per axis',
+        group: 'part',
     },
 ]
+
+/** The cards a new design starts with, by its kind. Only a suggestion:
+ *  every card stays there for every design. */
+export const SUGGESTED_FEATURES: Readonly<
+    Record<DeviceForm, readonly DesignFeature[]>
+> = {
+    keyboard: ['wireless', 'liveEdit', 'battery'],
+    macropad: ['liveEdit', 'encoders'],
+    mouse: ['wireless', 'liveEdit', 'battery', 'pointing', 'encoders'],
+    gamepad: ['wireless', 'liveEdit', 'battery', 'analog'],
+    flightstick: ['wireless', 'liveEdit', 'battery', 'analog'],
+}
 
 /** `config` with `feature` picked or not. */
 export function setDesignFeature(
