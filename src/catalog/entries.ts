@@ -9,6 +9,7 @@ import systemJson from './hid-pages/system.json'
 import overridesJson from './hid-pages/overrides.json'
 import { CANONICAL_ALIASES, resolveAlias } from './aliases'
 import { EXTERNAL_NAMES, EXTERNAL_NOTES } from './external-names'
+import { REMAPPR_NAMES } from './firmware-names'
 
 import type { CanonicalKeyId, CatalogEntry } from './types'
 
@@ -196,8 +197,8 @@ for (const [secId, primId] of Object.entries(CANONICAL_ALIASES)) {
 // pass so secondary entries are already collapsed onto their primary.
 for (const e of ENTRY_BY_ID.values()) {
     if (e.id in CANONICAL_ALIASES) continue
-    const ext = EXTERNAL_NAMES[e.id]
-    if (ext?.length) {
+    const ext = [...(EXTERNAL_NAMES[e.id] ?? []), ...(REMAPPR_NAMES[e.id] ?? [])]
+    if (ext.length) {
         const merged = e.aliases ? [...e.aliases] : []
         for (const a of ext) if (!merged.includes(a)) merged.push(a)
         e.aliases = merged
@@ -229,9 +230,10 @@ export const CATALOG: CatalogEntry[] = [
     ...dropAliased(STATIC_ENTRIES),
 ]
 
-// Encoder side: primary canonical id → HID usage. Walks aliases so an
-// aliased secondary's usage is promoted to its primary when the primary
-// has no native HID usage (e.g. mod.lctrl ← HID 7/224, media.transport.play_pause ← HID 12/205).
+// Encoder side: primary canonical id → HID usage. A primary with no native
+// HID usage takes the usage of its FIRST-listed secondary in
+// CANONICAL_ALIASES (e.g. mod.lctrl ← HID 7/224, media.transport.play_pause ←
+// HID 12/205 Play/Pause, not 12/176 Play which also folds onto it).
 export const HID_USAGE_BY_CANONICAL: Map<CanonicalKeyId, HidUsage> = new Map()
 const allUsageBuilds = [
     keyboardBuild,
@@ -242,13 +244,16 @@ const allUsageBuilds = [
     contactBuild,
     systemBuild,
 ]
-for (const b of allUsageBuilds) {
-    for (const [id, u] of b.usages) {
-        const primary = resolveAlias(id)
-        if (!HID_USAGE_BY_CANONICAL.has(primary)) {
-            HID_USAGE_BY_CANONICAL.set(primary, u)
-        }
+const USAGE_OF = new Map<CanonicalKeyId, HidUsage>()
+for (const b of allUsageBuilds) for (const [id, u] of b.usages) USAGE_OF.set(id, u)
+for (const [secondary, primary] of Object.entries(CANONICAL_ALIASES)) {
+    const u = USAGE_OF.get(secondary)
+    if (u && !USAGE_OF.has(primary) && !HID_USAGE_BY_CANONICAL.has(primary)) {
+        HID_USAGE_BY_CANONICAL.set(primary, u)
     }
+}
+for (const [id, u] of USAGE_OF) {
+    if (!(id in CANONICAL_ALIASES)) HID_USAGE_BY_CANONICAL.set(id, u)
 }
 
 // Decoder side: every original (page, usage) → primary canonical id.

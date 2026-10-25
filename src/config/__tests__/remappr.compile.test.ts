@@ -604,7 +604,7 @@ describe('remappr consumer-page (media) keys', () => {
         expect(tapOf(0)).toBe(0xe9) // Volume Increment
         expect(tapOf(1)).toBe(0xea) // Volume Decrement
         expect(tapOf(2)).toBe(0xe2) // Mute
-        expect(tapOf(3)).toBe(0xb0) // Play/Pause
+        expect(tapOf(3)).toBe(0xcd) // Play/Pause (HUT 1.7 15.7; 0xB0 is Play)
     })
 
     it('keeps a keyboard-page volume usage on BH_KEY (page 7)', () => {

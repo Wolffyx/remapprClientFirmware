@@ -5,7 +5,9 @@ import { keychronCodec } from '../clients/keychron/codec'
 import { mockCodec } from '../clients/mock/codec'
 import { qmkCodec } from '../clients/qmk/codec'
 import { vialCodec } from '../clients/qmk-vial/codec'
+import { remapprCodec } from '../clients/remappr/codec'
 import { zmkCodec } from '../clients/zmk/codec'
+import type { KeycodeCodec } from '../codec'
 import { CATALOG, HID_USAGE_BY_CANONICAL } from './entries'
 import { EXTERNAL_NAMES, EXTERNAL_NAMES_ALLOWLIST } from './external-names'
 import { CATALOG_PAGES, groupForId } from './pages'
@@ -171,5 +173,34 @@ describe('keyboard-page vs media volume keys', () => {
             (k) => k.startsWith('consumer.') && ids.has(k.replace(/^consumer\./, 'media.')),
         )
         expect(misfiled).toEqual([])
+    })
+})
+
+describe('each firmware shows its own key names', () => {
+    it('ZMK, QMK and Remappr name the same keys their own way', () => {
+        expect(zmkCodec.names('media.volume_increment')).toEqual(['C_VOLUME_UP', 'C_VOL_UP'])
+        expect(qmkCodec.names('media.volume_increment')).toEqual(['KC_AUDIO_VOL_UP', 'KC_VOLU'])
+        expect(remapprCodec.names('media.volume_increment')).toEqual(['RC_VOL_UP'])
+        expect(remapprCodec.names('key.keyboard_a')).toEqual(['RK_A'])
+        expect(vialCodec.names('key.keyboard_volume_up')).toEqual(['KC_KB_VOLUME_UP'])
+        expect((mockCodec as KeycodeCodec).names).toBeUndefined()
+    })
+
+    it('Android keyboard-page codes are no alias of the HID keys', () => {
+        const all = new Set(CATALOG.flatMap((e) => e.aliases ?? []))
+        for (const n of ['K_VOLUME_UP2', 'K_VOL_DN2', 'K_MUTE2', 'K_PLAY_PAUSE', 'K_PP', 'K_NEXT', 'K_PREV'])
+            expect(all.has(n), n).toBe(false)
+    })
+
+    it('Play, Pause and Play/Pause are three keys (HID 0xB0, 0xB1, 0xCD)', () => {
+        expect(HID_USAGE_BY_CANONICAL.get('media.play')).toEqual({ page: 12, usage: 0xb0 })
+        expect(HID_USAGE_BY_CANONICAL.get('media.pause')).toEqual({ page: 12, usage: 0xb1 })
+        expect(HID_USAGE_BY_CANONICAL.get('media.transport.play_pause')).toEqual({ page: 12, usage: 0xcd })
+        expect(remapprCodec.decode((12 << 16) | 0xcd)?.canonicalId).toBe('media.transport.play_pause')
+    })
+
+    it('the 4 HID Usage Tables 1.7 consumer usages are in the catalog', () => {
+        for (const u of [0x07, 0x515, 0x516, 0x517])
+            expect(zmkCodec.decode((12 << 16) | u), u.toString(16)).not.toBeNull()
     })
 })

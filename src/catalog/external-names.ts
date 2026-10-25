@@ -355,21 +355,24 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     'key.keyboard_copy': ['K_COPY', 'KC_COPY'],
     'key.keyboard_paste': ['K_PASTE', 'KC_PASTE', 'KC_PSTE'],
     'key.keyboard_find': ['K_FIND', 'K_FIND2', 'KC_FIND'],
+    // ZMK's K_MUTE2 / K_VOLUME_UP2 / K_VOLUME_DOWN2 are keyboard-page 0xEF /
+    // 0xED / 0xEE (zmk keys.h; codes Android defines, unassigned in HID Usage
+    // Tables 1.7), not these usages, so they are not aliases here.
     'key.keyboard_mute': [
-        'K_MUTE', 'K_MUTE2', 'KC_KB_MUTE',
+        'K_MUTE', 'KC_KB_MUTE',
         // Its label before it read as the keyboard-page variant: saved configs
         // that spell it this way keep sending the same key.
         'Mute',
     ],
     'key.keyboard_volume_up': [
-        'K_VOLUME_UP', 'K_VOL_UP', 'K_VOLUME_UP2', 'K_VOL_UP2',
+        'K_VOLUME_UP', 'K_VOL_UP',
         'KC_KB_VOLUME_UP',
         // Its label before it read as the keyboard-page variant: saved configs
         // that spell it this way keep sending the same key.
         'Volume Up',
     ],
     'key.keyboard_volume_down': [
-        'K_VOLUME_DOWN', 'K_VOL_DN', 'K_VOLUME_DOWN2', 'K_VOL_DN2',
+        'K_VOLUME_DOWN', 'K_VOL_DN',
         'KC_KB_VOLUME_DOWN',
         // Its label before it read as the keyboard-page variant: saved configs
         // that spell it this way keep sending the same key.
@@ -498,9 +501,13 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     // (hid-pages/media.json) defines carry its `media.` id.
     // ─────────────────────────────────────────────────────────────
     'consumer.consumer_control': ['Consumer Control'],
-    'media.volume_increment': ['C_VOLUME_UP', 'C_VOL_UP'],
-    'media.volume_decrement': ['C_VOLUME_DOWN', 'C_VOL_DN'],
-    'media.mute': ['C_MUTE'],
+    'media.volume_increment': [
+        'C_VOLUME_UP', 'C_VOL_UP', 'KC_AUDIO_VOL_UP', 'KC_VOLU',
+    ],
+    'media.volume_decrement': [
+        'C_VOLUME_DOWN', 'C_VOL_DN', 'KC_AUDIO_VOL_DOWN', 'KC_VOLD',
+    ],
+    'media.mute': ['C_MUTE', 'KC_AUDIO_MUTE', 'KC_MUTE'],
     'media.bass_boost': ['C_BASS_BOOST'],
     'media.alternate_audio_increment': [
         'C_ALTERNATE_AUDIO_INCREMENT', 'C_ALT_AUDIO_INC',
@@ -557,7 +564,6 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
         'C_EJECT',
         'KC_MEDIA_EJECT', 'KC_EJCT',
     ],
-    'consumer.stop_eject': ['C_STOP_EJECT'],
     'media.slow': ['C_SLOW'],
     'media.repeat': ['C_REPEAT'],
     'media.random_play': ['C_RANDOM_PLAY', 'C_SHUFFLE'],
@@ -700,20 +706,25 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     // ─────────────────────────────────────────────────────────────
     // Media transport (consolidates HID + ZMK static + QMK media keys)
     // ─────────────────────────────────────────────────────────────
+    // ZMK's K_PLAY_PAUSE / K_PREVIOUS / K_NEXT are keyboard-page 0xE8 / 0xEA /
+    // 0xEB (zmk keys.h; Android codes, unassigned in HID Usage Tables 1.7),
+    // so they are not names of these consumer keys.
     'media.transport.play_pause': [
-        'C_PLAY_PAUSE', 'C_PP', 'K_PLAY_PAUSE', 'K_PP',
-        'C_PLAY', 'C_PAUSE',
+        'C_PLAY_PAUSE', 'C_PP',
         'KC_MEDIA_PLAY_PAUSE', 'KC_MPLY',
     ],
+    'media.play': ['C_PLAY'],
+    'media.pause': ['C_PAUSE'],
+    'media.stop_eject': ['C_STOP_EJECT'],
     'media.transport.stop': [
         'C_STOP', 'KC_MEDIA_STOP', 'KC_MSTP',
     ],
     'media.transport.next': [
-        'C_NEXT', 'K_NEXT', 'C_SCAN_NEXT_TRACK',
+        'C_NEXT', 'C_SCAN_NEXT_TRACK',
         'KC_MEDIA_NEXT_TRACK', 'KC_MNXT',
     ],
     'media.transport.prev': [
-        'C_PREVIOUS', 'C_PREV', 'K_PREVIOUS', 'K_PREV',
+        'C_PREVIOUS', 'C_PREV',
         'C_SCAN_PREVIOUS_TRACK',
         'KC_MEDIA_PREV_TRACK', 'KC_MPRV',
     ],
