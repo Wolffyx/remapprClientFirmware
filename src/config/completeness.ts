@@ -53,57 +53,87 @@ function hasWiring(config: ConfigKeymap): boolean {
     )
 }
 
+type Report = (message: string) => void
+
+interface Checks {
+    config: ConfigKeymap
+    err: Report
+    warn: Report
+}
+
+const zephyrBoard = ({ config, err }: Checks): void => {
+    if (!resolveController(config).board)
+        err('Set a controller board (e.g. nice_nano_v2).')
+}
+
+function checkZmk(c: Checks): void {
+    zephyrBoard(c)
+    if (!hasWiring(c.config))
+        c.warn('No kscan / pin mapping — set row/col pins or board hardware.')
+    // Peripheral feature on, but its hardware pin is unset → can't emit a
+    // complete overlay node (only the chosen/conf flag).
+    const flags = resolveZmkConfFlags(c.config)
+    const hw = c.config.keyboard.hardware
+    if (flags.backlight && !hw?.backlightPwm)
+        c.warn('Backlight on but no PWM pin set (Hardware pins).')
+    if (flags.underglow && !hw?.ws2812)
+        c.warn('Underglow on but no WS2812 data pin set (Hardware pins).')
+    if (flags.extPower && !hw?.extPowerCtrl)
+        c.warn('Ext-power on but no control GPIO set (Hardware pins).')
+}
+
+/** Remappr builds a Zephyr shield: a board and the scan pins; its peripherals
+ *  come from their pins, so a picked feature without them is flagged. */
+function checkRemappr(c: Checks): void {
+    zephyrBoard(c)
+    if (!hasWiring(c.config))
+        c.warn('No matrix pins — set row/col (or per-key) pins.')
+    const picked = new Set(c.config.keyboard.features ?? [])
+    const board = c.config.board
+    if (picked.has('lighting') && !c.config.keyboard.hardware?.ws2812)
+        c.warn('Lighting picked but no LED data pin set.')
+    if (picked.has('encoders') && !board?.encoders?.length)
+        c.warn('Encoders picked but no encoder pins set.')
+    if (picked.has('pointing') && !board?.sensor)
+        c.warn('Pointing picked but no sensor pins set.')
+}
+
+/** qmk / via / vial / keychron all build through the QMK family. */
+function checkQmkFamily(c: Checks): void {
+    const ctrl = resolveController(c.config)
+    const meta = c.config.meta
+    if (!ctrl.developmentBoard && !(ctrl.processor && ctrl.bootloader))
+        c.err('Set a QMK processor + bootloader (or a development board).')
+    if (!meta.vendorId || !meta.productId)
+        c.err('Set a USB vendor + product id.')
+    if (!hasWiring(c.config))
+        c.warn('No matrix pins — set row/col (or per-key) pins.')
+}
+
+function checkVial(c: Checks): void {
+    checkQmkFamily(c)
+    const v = c.config.keyboard.vial
+    if (v?.uid?.length !== 8) c.warn('Generate an 8-byte Vial UID.')
+    if (!v?.insecure && !v?.unlockKeys?.length)
+        c.warn('Pick a Vial unlock combo (or mark it insecure).')
+}
+
+/** Each firmware's own checks; anything else builds through the QMK family. */
+const CHECKS: Record<string, (c: Checks) => void> = {
+    zmk: checkZmk,
+    remappr: checkRemappr,
+    vial: checkVial,
+}
+
 /** Per-firmware readiness verdicts for the config. */
 export function checkCompleteness(config: ConfigKeymap): FirmwareReadiness[] {
-    const ctrl = resolveController(config)
-    const meta = config.meta
-    const usbOk = !!meta.vendorId && !!meta.productId
-    const wired = hasWiring(config)
-    const qmkMcu =
-        !!ctrl.developmentBoard || (!!ctrl.processor && !!ctrl.bootloader)
-
     return effectiveFirmware(config).map((fw) => {
         const issues: ReadinessIssue[] = []
-        const err = (message: string): void => {
-            issues.push({ level: 'error', message })
-        }
-        const warn = (message: string): void => {
-            issues.push({ level: 'warn', message })
-        }
-
-        if (fw === 'zmk') {
-            if (!ctrl.board) err('Set a controller board (e.g. nice_nano_v2).')
-            if (!wired)
-                warn(
-                    'No kscan / pin mapping — set row/col pins or board hardware.',
-                )
-            // Peripheral feature on, but its hardware pin is unset → can't emit a
-            // complete overlay node (only the chosen/conf flag).
-            const flags = resolveZmkConfFlags(config)
-            const hw = config.keyboard.hardware
-            if (flags.backlight && !hw?.backlightPwm)
-                warn('Backlight on but no PWM pin set (Hardware pins).')
-            if (flags.underglow && !hw?.ws2812)
-                warn('Underglow on but no WS2812 data pin set (Hardware pins).')
-            if (flags.extPower && !hw?.extPowerCtrl)
-                warn('Ext-power on but no control GPIO set (Hardware pins).')
-        } else {
-            // qmk / via / vial / keychron all build through the QMK family.
-            if (!qmkMcu)
-                err(
-                    'Set a QMK processor + bootloader (or a development board).',
-                )
-            if (!usbOk) err('Set a USB vendor + product id.')
-            if (!wired) warn('No matrix pins — set row/col (or per-key) pins.')
-        }
-
-        if (fw === 'vial') {
-            const v = config.keyboard.vial
-            if (v?.uid?.length !== 8) warn('Generate an 8-byte Vial UID.')
-            if (!v?.insecure && !v?.unlockKeys?.length)
-                warn('Pick a Vial unlock combo (or mark it insecure).')
-        }
-
+        ;(CHECKS[fw] ?? checkQmkFamily)({
+            config,
+            err: (message) => issues.push({ level: 'error', message }),
+            warn: (message) => issues.push({ level: 'warn', message }),
+        })
         return {
             firmware: fw,
             label: LABELS[fw] ?? fw,
