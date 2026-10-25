@@ -163,6 +163,50 @@ export function resolveStPin(label: string): string | null {
     return `&gpio${m[1].toLowerCase()} ${pin}`
 }
 
+// pattern-check: skip — two pure lookups over the existing pin tables
+/** The board's pins, one label each (its table's first spelling), or null
+ *  when remappr has no pin table for it. */
+export function boardPinLabels(board: string | undefined): string[] | null {
+    const table = board ? ZMK_PIN_MAPS[board] : undefined
+    if (!table) return null
+    // A lettered spelling ("P4") reads better than the bare number; object
+    // order puts integer-like keys first, so pick per pin, not by order.
+    const byRef = new Map<string, string>()
+    for (const [label, ref] of Object.entries(table)) {
+        const had = byRef.get(ref)
+        if (!had || (/^\d/.test(had) && !/^\d/.test(label)))
+            byRef.set(ref, label)
+    }
+    return [...byRef.values()]
+}
+
+/** The spellings a board accepts, as ranges ("P0–P21, D0–D21 or 0–21"), or
+ *  null when remappr has no pin table for it. */
+export function boardPinForms(board: string | undefined): string | null {
+    const table = board ? ZMK_PIN_MAPS[board] : undefined
+    if (!table) return null
+    const ranges = new Map<string, [number, number]>()
+    for (const label of Object.keys(table)) {
+        const m = /^([A-Za-z]*)(\d+)$/.exec(label)
+        if (!m) continue
+        const n = Number(m[2])
+        const r = ranges.get(m[1])
+        ranges.set(m[1], r ? [Math.min(r[0], n), Math.max(r[1], n)] : [n, n])
+    }
+    // Bare numbers last (object order would put them first).
+    const parts = [...ranges]
+        .sort(([a], [b]) => Number(a === '') - Number(b === ''))
+        .map(([p, [lo, hi]]) => `${p}${lo}–${p}${hi}`)
+    if (parts.length < 2) return parts.join('')
+    return `${parts.slice(0, -1).join(', ')} or ${parts[parts.length - 1]}`
+}
+
+/** True when two labels name the same pin on @p board (D4 and P4 do). */
+export function samePin(board: string | undefined, a: string, b: string): boolean {
+    const ra = resolveZmkPin(board, a)
+    return ra !== null && ra === resolveZmkPin(board, b)
+}
+
 /** True when remappr has a ZMK pin table for this board. */
 export function hasZmkPinMap(board: string | undefined): boolean {
     return Boolean(board && ZMK_UP[board])

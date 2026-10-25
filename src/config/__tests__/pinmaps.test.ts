@@ -4,6 +4,9 @@ import {
     resolveQmkPin,
     gpioSpec,
     hasZmkPinMap,
+    boardPinLabels,
+    boardPinForms,
+    samePin,
 } from '../pinmaps'
 import { getCompiler } from '../compiler'
 import { buildProjectBundle } from '../bundle'
@@ -51,6 +54,28 @@ describe('pin resolver', () => {
         expect(hasZmkPinMap('nice_nano_v2')).toBe(true)
         expect(hasZmkPinMap('mystery_board')).toBe(false)
         expect(hasZmkPinMap(undefined)).toBe(false)
+    })
+})
+
+describe('board pin lists', () => {
+    it('lists each pin once, lettered spelling first', () => {
+        const pins = boardPinLabels('nice_nano_v2')!
+        expect(pins).toHaveLength(22)
+        expect(pins[0]).toBe('P0')
+        expect(boardPinLabels('rp2040')![29]).toBe('GP29')
+        expect(boardPinLabels('mystery')).toBeNull()
+    })
+
+    it('describes the accepted spellings as ranges', () => {
+        expect(boardPinForms('nice_nano_v2')).toBe('P0–P21, D0–D21 or 0–21')
+        expect(boardPinForms('rp2040')).toBe('GP0–GP29 or 0–29')
+        expect(boardPinForms(undefined)).toBeNull()
+    })
+
+    it('knows two spellings of one pin', () => {
+        expect(samePin('nice_nano_v2', 'D4', 'p4')).toBe(true)
+        expect(samePin('nice_nano_v2', 'D4', 'D5')).toBe(false)
+        expect(samePin('mystery', 'D4', 'D4')).toBe(false)
     })
 })
 

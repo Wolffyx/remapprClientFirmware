@@ -183,6 +183,7 @@ export {
     deriveMatrix,
     materializeMatrix,
     matrixDims,
+    matrixSplit,
     resolveKeyMatrix,
 } from './matrix'
 export { resolveController } from './controller'
@@ -268,6 +269,9 @@ export {
     resolveQmkPin,
     gpioSpec,
     hasZmkPinMap,
+    boardPinLabels,
+    boardPinForms,
+    samePin,
     KNOWN_ZMK_BOARDS,
 } from './pinmaps'
 
