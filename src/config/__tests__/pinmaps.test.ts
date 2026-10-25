@@ -96,6 +96,34 @@ describe('ZMK synth kscan from pins', () => {
         expect(out).toContain('diode-direction = "col2row"')
     })
 
+    // #198: the builder's Matrix section writes keyboard.matrix.
+    const withMatrix = (matrix: object, extraKeys = ''): string => {
+        const cfg = JSON.parse(matrixConfig('rp2040'))
+        cfg.keyboard.matrix = { rows: 1, cols: 2, ...matrix }
+        if (extraKeys) cfg.keyboard.keys = JSON.parse(extraKeys)
+        return JSON.stringify(cfg)
+    }
+
+    it('follows the diode direction picked in the builder', () => {
+        const out = overlayText(withMatrix({ diodeDirection: 'row2col' }))
+        expect(out).toContain('diode-direction = "row2col"')
+        // row2col flips the pin roles: rows drive, columns are read
+        expect(out).toContain('&gpio0 5 GPIO_ACTIVE_HIGH')
+        expect(out).toContain('&gpio0 6 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)')
+        expect(out).not.toContain('assumed')
+    })
+
+    it('emits a direct kscan when the builder picks direct scan mode', () => {
+        const out = overlayText(
+            withMatrix(
+                { mode: 'direct' },
+                '[{"x":0,"y":0,"pin":"GP2"},{"x":1,"y":0,"pin":"GP3"}]',
+            ),
+        )
+        expect(out).toContain('zmk,kscan-gpio-direct')
+        expect(out).not.toContain('zmk,kscan-gpio-matrix')
+    })
+
     it('comments unresolved labels and warns instead of breaking devicetree', () => {
         const { files, diagnostics } = getCompiler('zmk').compile(
             parseKeymap(matrixConfig('mystery_board')),

@@ -178,6 +178,18 @@ export function matrixDims(config: ConfigKeymap): {
  *  `keyboard.matrix` descriptor populated, so emitters always have authoritative
  *  wiring. Existing explicit values win; the rest are derived. Diode direction
  *  falls back to the kscan's, then `col2row`; mode defaults to `matrix`. */
+// pattern-check: skip — bug fix (#198): one precedence helper shared by the matrix + ZMK kscan paths
+/** The board's diode direction: the builder's matrix descriptor, then a legacy
+ *  matrix kscan, then `col2row`. */
+export function matrixDiodeDirection(config: ConfigKeymap): DiodeDirection {
+    const kscan = config.keyboard.hardware?.kscan
+    return (
+        config.keyboard.matrix?.diodeDirection ??
+        (kscan?.type === 'matrix' ? kscan.diodeDirection : undefined) ??
+        'col2row'
+    )
+}
+
 export function materializeMatrix(config: ConfigKeymap): ConfigKeymap {
     const resolved = resolveKeyMatrix(config)
     // Floor the stamped dimensions to the same sources matrixDims() uses — the
@@ -201,12 +213,7 @@ export function materializeMatrix(config: ConfigKeymap): ConfigKeymap {
         rows = Math.max(rows, r + 1)
         cols = Math.max(cols, c + 1)
     }
-    const diodeDirection: DiodeDirection =
-        config.keyboard.matrix?.diodeDirection ??
-        (config.keyboard.hardware?.kscan?.type === 'matrix'
-            ? config.keyboard.hardware.kscan.diodeDirection
-            : undefined) ??
-        'col2row'
+    const diodeDirection = matrixDiodeDirection(config)
     const mode = config.keyboard.matrix?.mode ?? 'matrix'
     return {
         ...config,

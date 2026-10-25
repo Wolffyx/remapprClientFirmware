@@ -9,7 +9,7 @@
 import type { ExportedFile } from '../../../types'
 import type { DiagnosticBag } from '../../diagnostics'
 import { resolveController, zmkSplitShields } from '../../controller'
-import { deriveMatrix, matrixSplit } from '../../matrix'
+import { deriveMatrix, matrixDiodeDirection, matrixSplit } from '../../matrix'
 import type { ConfigKeymap } from '../../types'
 import { dtsString, sanitize } from './maps'
 import {
@@ -256,8 +256,7 @@ export function emitSplitOverlay(
     // emitKscan already does). Forcing col2row on a row2col board emits a wrong
     // kscan that won't register keys. The pin roles flip with the direction:
     // col2row → rows are inputs / cols outputs; row2col → rows outputs / cols inputs.
-    const diodeDirection =
-        hw?.kscan?.type === 'matrix' ? hw.kscan.diodeDirection : 'col2row'
+    const diodeDirection = matrixDiodeDirection(config)
     const rowRole = diodeDirection === 'col2row' ? 'input' : 'output'
     const colRole = diodeDirection === 'col2row' ? 'output' : 'input'
 

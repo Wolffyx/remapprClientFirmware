@@ -8,6 +8,7 @@
 import type { DiagnosticBag } from '../../diagnostics'
 import { gpioSpec, type PinRole, resolveZmkPin } from '../../pinmaps'
 import { resolveController } from '../../controller'
+import { matrixDiodeDirection } from '../../matrix'
 import type {
     CanonBacklightPwm,
     CanonExtPowerCtrl,
@@ -15,7 +16,6 @@ import type {
     CanonWs2812,
     ConfigHardware,
     ConfigKeymap,
-    DiodeDirection,
 } from '../../types'
 
 // Board-hardware nodes remappr cannot derive — the ZMK connection never exposes
@@ -165,14 +165,16 @@ export function emitSynthKscan(
 ): string[] | null {
     const board = resolveController(config).board
     const pins = config.keyboard.pins
-    if (pins && pins.rows.length && pins.cols.length) {
-        const dir: DiodeDirection = 'col2row'
+    // Direct wiring (one GPIO per key) wins over any row/col labels left over
+    // from a matrix design.
+    const direct = config.keyboard.matrix?.mode === 'direct'
+    if (!direct && pins && pins.rows.length && pins.cols.length) {
+        const dir = matrixDiodeDirection(config)
         const rowRole: PinRole = dir === 'col2row' ? 'input' : 'output'
         const colRole: PinRole = dir === 'col2row' ? 'output' : 'input'
         return [
             `    kscan0: kscan {`,
             `        compatible = "zmk,kscan-gpio-matrix";`,
-            `        /* diode-direction assumed "${dir}" — remappr pin labels carry none; verify. */`,
             `        diode-direction = "${dir}";`,
             ...resolvedGpioListProp(
                 'row-gpios',
