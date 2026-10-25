@@ -244,8 +244,8 @@ export function emitChosen(
 // Which ZMK SoC family a controller board belongs to. Pin-mux (pinctrl) syntax is
 // SoC-specific — only nRF gets full NRF_PSEL generation; others get a labelled
 // FIXME scaffold the user completes with their board's pinctrl bindings.
-type ZmkSoc = 'nrf' | 'rp2040' | 'unknown'
-function boardSoc(board: string | undefined): ZmkSoc {
+export type ZmkSoc = 'nrf' | 'rp2040' | 'unknown'
+export function boardSoc(board: string | undefined): ZmkSoc {
     const b = (board ?? '').toLowerCase()
     if (!b) return 'unknown'
     if (b.includes('nrf') || b.includes('nice_nano') || b.includes('xiao_ble'))

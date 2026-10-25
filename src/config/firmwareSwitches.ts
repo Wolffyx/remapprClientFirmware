@@ -21,6 +21,7 @@ import {
 import type { BuilderFirmwareId } from './firmwareTargets'
 import type { CanonFirmwareConfig, ConfigKeymap, DesignFeature } from './types'
 import type { DeviceForm } from '../devices/types'
+import { screenFor } from './compilers/zephyrParts'
 
 export interface FirmwareSwitch {
     /** Stable within its table. */
@@ -107,6 +108,7 @@ const ZMK_ROWS: readonly ZmkRow[] = [
     { id: 'underglow', name: 'RGB underglow', symbol: 'CONFIG_ZMK_RGB_UNDERGLOW' },
     { id: 'backlight', name: 'Backlight', symbol: 'CONFIG_ZMK_BACKLIGHT' },
     { id: 'encoders', name: 'Encoders', symbol: 'CONFIG_EC11' },
+    { id: 'display', name: 'Screen', symbol: 'CONFIG_ZMK_DISPLAY' },
     { id: 'extPower', name: 'External power', symbol: 'CONFIG_ZMK_EXT_POWER' },
     { id: 'usbLogging', name: 'Debug log over USB', symbol: 'CONFIG_ZMK_USB_LOGGING' },
 ]
@@ -324,6 +326,20 @@ const remapprTable: SwitchTable = {
                 'sensor node in the overlay',
                 !!config.board?.sensor,
                 'the sensor pins',
+            ),
+            byPin(
+                'display',
+                'Screen',
+                'config REMAPPR_OLED',
+                screenFor(config, 'remappr'),
+                'a screen it has a driver for',
+            ),
+            byPin(
+                'battery',
+                'Battery',
+                'battery node in the overlay',
+                !!config.keyboard.hardware?.battery?.pin,
+                'the battery sense pin',
             ),
         ]
     },

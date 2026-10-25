@@ -746,7 +746,11 @@ export const ExtPowerCtrlSchema = z
     .describe('zmk,ext-power-generic control GPIO (drives zmk,ext-power).')
 
 export const BatterySchema = z
-    .object({ pin: z.string() })
+    .object({
+        pin: z.string(),
+        outputOhms: z.number().int().positive().optional(),
+        fullOhms: z.number().int().positive().optional(),
+    })
     .describe('Battery sense pin (an analog pin behind a resistor divider).')
 
 export const DisplaySchema = z
@@ -810,6 +814,7 @@ export const FirmwareConfigSchema = z
         usbLogging: z.boolean().optional(),
         sleep: z.boolean().optional(),
         encoders: z.boolean().optional(),
+        display: z.boolean().optional(),
         qmkFeatures: z
             .record(z.string(), z.boolean())
             .optional()

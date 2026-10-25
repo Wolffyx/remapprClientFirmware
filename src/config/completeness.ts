@@ -9,6 +9,7 @@
 import { resolveController } from './controller'
 import { resolveZmkConfFlags } from './firmwareConf'
 import type { ConfigKeymap } from './types'
+import { boardScreen, screenFor } from './compilers/zephyrParts'
 
 export interface ReadinessIssue {
     level: 'error' | 'warn'
@@ -80,6 +81,16 @@ function checkZmk(c: Checks): void {
         c.warn('Underglow on but no WS2812 data pin set (Hardware pins).')
     if (flags.extPower && !hw?.extPowerCtrl)
         c.warn('Ext-power on but no control GPIO set (Hardware pins).')
+    if (hw?.battery?.pin && !(hw.battery.outputOhms && hw.battery.fullOhms))
+        c.warn('Battery sense pin set but no divider resistor values (Pins).')
+    screenCheck(c, 'zmk')
+}
+
+/** A screen this firmware can't write. */
+function screenCheck(c: Checks, fw: 'zmk' | 'remappr'): void {
+    const s = boardScreen(c.config)
+    if (s && !screenFor(c.config, fw))
+        c.warn(`Screen ${s.display.chip} is not written (no driver or node for it).`)
 }
 
 /** Remappr builds a Zephyr shield: a board and the scan pins; its peripherals
@@ -96,6 +107,7 @@ function checkRemappr(c: Checks): void {
         c.warn('Encoders picked but no encoder pins set.')
     if (picked.has('pointing') && !board?.sensor)
         c.warn('Pointing picked but no sensor pins set.')
+    screenCheck(c, 'remappr')
 }
 
 /** qmk / via / vial / keychron all build through the QMK family. */

@@ -499,10 +499,15 @@ export interface CanonExtPowerCtrl {
     initDelayMs?: number
 }
 
-/** Where the battery is measured: an analog pin behind a resistor divider. */
+/** Where the battery is measured: an analog pin behind a resistor divider
+ *  (Vpin = Vcell × outputOhms / fullOhms). */
 export interface CanonBattery {
     /** Sense pin: a friendly board label ("D21"), like the matrix pins. */
     pin: string
+    /** The divider's lower leg (pin to ground), Ω. */
+    outputOhms?: number
+    /** The divider's whole path (cell to ground), Ω. */
+    fullOhms?: number
 }
 
 /** Firmware-level feature config — the modeled toggles that derive `.conf` (ZMK
@@ -538,6 +543,8 @@ export interface CanonFirmwareConfig {
     /** CONFIG_EC11 (+ global-thread trigger). Default = the `encoders` design
      *  feature or an encoder on the board. */
     encoders?: boolean
+    /** CONFIG_ZMK_DISPLAY. Default = a screen on the board ZMK drives. */
+    display?: boolean
     /** QMK `keyboard.json` `features` overrides, by feature key (`mousekey`,
      *  `rgblight`, …); absent keys are auto-derived. */
     qmkFeatures?: Record<string, boolean>

@@ -15,6 +15,8 @@ import type {
     ConfigKeymap,
     DesignFeature,
 } from './types'
+import { screenFor } from './compilers/zephyrParts'
+import { qmkScreenLines } from './compilers/qmkScreen'
 
 /** Walk every action in the config (layers, encoders, combos) for feature flags. */
 export function someAction(
@@ -55,6 +57,7 @@ export interface ZmkConfFlags {
     usbLogging: boolean
     sleep: boolean
     encoders: boolean
+    display: boolean
 }
 
 /** A derived default and what set it (a design feature's name, or what in the
@@ -142,6 +145,7 @@ export function zmkConfAuto(config: ConfigKeymap): Record<keyof ZmkConfFlags, Au
         usbLogging: { on: false },
         sleep: firstOf(u.feature('battery')),
         encoders: firstOf(u.feature('encoders'), [u.encoderKeys, 'encoder keys']),
+        display: firstOf([screenFor(config, 'zmk'), 'the screen']),
     }
 }
 
@@ -160,6 +164,7 @@ export const ZMK_FLAG_OVERRIDE: Record<keyof ZmkConfFlags, keyof CanonFirmwareCo
     usbLogging: 'usbLogging',
     sleep: 'sleep',
     encoders: 'encoders',
+    display: 'display',
 }
 
 /** Resolve every ZMK flag from `firmwareConfig` overrides + used behaviors/hardware. */
@@ -300,6 +305,8 @@ export function deriveZmkConf(config: ConfigKeymap): string {
             ``,
         )
 
+    if (on.display) lines.push(`# Screen (zephyr,display).`, `CONFIG_ZMK_DISPLAY=y`, ``)
+
     if (on.backlight)
         lines.push(
             `# Backlight (&bl) via PWM.`,
@@ -342,6 +349,8 @@ export function deriveQmkConfigH(config: ConfigKeymap): string {
         `// are data-driven in keyboard.json; add only extras config.h must`,
         `// carry (e.g. #define WS2812_SPI_DRIVER SPID2).`,
     ]
+    const screen = qmkScreenLines(config).configH
+    if (screen.length) lines.push(``, ...screen)
     if (fc.configH?.trim())
         lines.push(``, `// ── Extra (from builder) ──`, fc.configH.trim())
     return lines.join('\n') + '\n'
@@ -358,6 +367,8 @@ export function deriveQmkRulesMk(
         `# remappr keymap — feature toggles live in keyboard.json\n` +
         (wantsVia ? `VIA_ENABLE = yes\n` : ``) +
         (wantsVial ? `VIAL_ENABLE = yes\n` : ``)
+    const screen = qmkScreenLines(config).rules
+    if (screen.length) out += screen.join('\n') + '\n'
     if (fc.rulesMk?.trim())
         out += `# Extra (from builder)\n${fc.rulesMk.trim()}\n`
     return out

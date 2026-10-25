@@ -31,6 +31,7 @@ import type {
     DiodeDirection,
 } from '../../types'
 import { emitEncoders, emitRgb, emitSensor } from './boardHardware'
+import { emitBattery, emitScreen } from '../zephyrParts'
 
 /** HID Usage Page 0x07 (Keyboard/Keypad) — the only page a `&key` action emits. */
 const HID_PAGE_KEYBOARD = 7
@@ -262,6 +263,8 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
 
     // Optional peripheral overlay nodes (empty fragments when unconfigured).
     const rgb = emitRgb(config, ctrl.board, diag)
+    const screen = emitScreen(config, 'remappr', diag, '\t')
+    const battery = emitBattery(config, 'remappr', diag, '\t')
     const enc = emitEncoders(config, ctrl.board, diag)
     const sensor = emitSensor(config, ctrl.board, diag)
 
@@ -287,6 +290,7 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         ...rgb.includes,
         ...enc.includes,
         ...sensor.includes,
+        ...dedupe([...screen.includes, ...battery.includes]),
         ``,
         `/ {`,
         `\tkbd_matrix: kbd-matrix {`,
@@ -331,6 +335,8 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         ...(rgb.nodes.length ? ['', ...rgb.nodes] : []),
         ...(enc.nodes.length ? ['', ...enc.nodes] : []),
         ...(sensor.nodes.length ? ['', ...sensor.nodes] : []),
+        ...(screen.nodes.length ? ['', ...screen.nodes] : []),
+        ...(battery.nodes.length ? ['', ...battery.nodes] : []),
         ``,
     ]
 
@@ -349,6 +355,7 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         `\tdefault y`,
         ...rgb.kconfig,
         ...enc.kconfig,
+        ...screenKconfig(config, screen.nodes.length > 0),
         ...storageDefconfig(config),
         ``,
         `endif # SHIELD_${SHIELD}`,
@@ -360,6 +367,24 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         { filename: `${dir}/${slug}.overlay`, mime: 'text/plain', content: overlay.join('\n') },
         { filename: `${dir}/Kconfig.shield`, mime: 'text/plain', content: kconfigShield },
         { filename: `${dir}/Kconfig.defconfig`, mime: 'text/plain', content: kconfigDefconfig },
+    ]
+}
+
+const dedupe = (xs: string[]): string[] => [...new Set(xs)]
+
+/** The OLED service draws the chosen screen (rig oled_enc.conf); its bus
+ *  driver comes on with it. The service needs the node bus. */
+function screenKconfig(config: ConfigKeymap, written: boolean): string[] {
+    const bus = config.keyboard.parts?.find((p) => p.display)?.display?.bus
+    if (!written || !bus) return []
+    return [
+        ``,
+        `# The screen (zephyr,display) — drawn by the Remappr OLED service,`,
+        `# which needs the node bus (REMAPPR_NODE_BUS).`,
+        `config REMAPPR_OLED`,
+        `\tdefault y`,
+        `config ${bus === 'spi' ? 'SPI' : 'I2C'}`,
+        `\tdefault y`,
     ]
 }
 
