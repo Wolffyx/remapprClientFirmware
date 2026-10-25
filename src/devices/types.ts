@@ -59,6 +59,7 @@ export type ControlShape =
     | 'sensor'
     | 'mouseL'
     | 'mouseR'
+    | 'screen'
 
 /** Which side a control's callout label sits on (absent = nearest side). */
 export type CalloutSide = 'L' | 'R'

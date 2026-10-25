@@ -73,6 +73,7 @@ export const DESIGN_FEATURE_NAME: Record<DesignFeature, string> = {
     pointing: 'Motion sensor',
     encoders: 'Encoders',
     analog: 'Analog inputs',
+    display: 'Screen',
 }
 
 /** First reason that holds, else off. */

@@ -8,6 +8,7 @@
 
 import { friendlyName, resolveKeycode, type Modifier } from './keycodes'
 import {
+    cloneParts,
     cloneController,
     cloneFirmwareConfig,
     cloneHardware,
@@ -355,6 +356,9 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                 : {}),
             ...(km.keyboard.split !== undefined
                 ? { split: km.keyboard.split }
+                : {}),
+            ...(km.keyboard.parts
+                ? { parts: cloneParts(km.keyboard.parts) }
                 : {}),
         },
         layers: km.layers.map((l) => ({

@@ -184,15 +184,19 @@ function rank(
 
 /** Suggest a pin for every need without one, from `free` (the board's pins
  *  in header order, minus those already used). Analog needs go first so
- *  plain needs don't take the few analog pins; bus pins are left alone.
+ *  plain needs don't take the few analog pins; bus pins (of the needs and of
+ *  `buses`) are left alone.
  *  Returns need id → label for the needs it could fill. */
 export function suggestPinsByRole(
     board: string | undefined,
     needs: readonly PinNeed[],
     free: readonly string[],
+    /** Buses a part rides on without a pin of its own (an I²C screen). */
+    buses: readonly ('spi' | 'i2c')[] = [],
 ): Record<string, string> {
+    const onBus = buses.map((bus): PinNeed => ({ id: `bus-${bus}`, role: 'gpio', bus }))
     const reserved = new Set(
-        Object.keys(reservedPins(board, needs)).map((p) =>
+        Object.keys(reservedPins(board, [...needs, ...onBus])).map((p) =>
             board ? coreOf(board, p) : p,
         ),
     )

@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
     deriveZmkConf,
+    DISPLAY_MODULES,
     FIRMWARE_SWITCHES,
+    firmwareForDisplay,
     parseKeymap,
     serializeKeymap,
     setDesignFeature,
@@ -105,6 +107,19 @@ describe('feature cards', () => {
         expect(supportsFeature('qmk', 'wireless')).toBe(false)
         expect(supportsFeature('via', 'liveEdit')).toBe(true)
         expect(supportsFeature('qmk', 'liveEdit')).toBe(false)
+    })
+
+    it('a screen is supported where the firmware has a driver for one', () => {
+        expect(supportsFeature('zmk', 'display')).toBe(true)
+        expect(firmwareForDisplay('SH1106')).toEqual(['qmk', 'via', 'vial', 'remappr'])
+        expect(firmwareForDisplay('IL0323')).toEqual(['zmk'])
+        // Every module's chip is named the way at least one table names it.
+        for (const m of DISPLAY_MODULES) expect(firmwareForDisplay(m.chip).length).toBeGreaterThan(0)
+    })
+
+    it('the analog and screen cards survive a save and load', () => {
+        const c = setDesignFeature(setDesignFeature(seed, 'analog', true), 'display', true)
+        expect(parseKeymap(serializeKeymap(c)).keyboard.features).toEqual(['analog', 'display'])
     })
 
     it('picked features round-trip through the config document', () => {

@@ -10,6 +10,7 @@ import { parseSurface, type SurfaceAction, type SurfaceKeymap } from './schema'
 import type {
     CanonAction,
     CanonController,
+    CanonPart,
     CanonFirmwareConfig,
     CanonVial,
     CanonEncoderBinding,
@@ -105,6 +106,15 @@ export function cloneHardware(hw: ConfigHardware): ConfigHardware {
         ...(hw.battery ? { battery: { ...hw.battery } } : {}),
         ...(hw.studioAcm !== undefined ? { studioAcm: hw.studioAcm } : {}),
     }
+}
+
+/** Deep-clone the parts on the board (screens, sticks…). */
+export function cloneParts(parts: readonly CanonPart[]): CanonPart[] {
+    return parts.map((p) => ({
+        ...p,
+        ...(p.pins ? { pins: { ...p.pins } } : {}),
+        ...(p.display ? { display: { ...p.display } } : {}),
+    }))
 }
 
 // pattern-check: skip additive passthrough clone mirroring cloneController, no abstraction
@@ -490,6 +500,9 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
                 : {}),
             ...(km.keyboard.split !== undefined
                 ? { split: km.keyboard.split }
+                : {}),
+            ...(km.keyboard.parts
+                ? { parts: cloneParts(km.keyboard.parts) }
                 : {}),
         },
         layers: km.layers.map((l) => ({

@@ -203,9 +203,10 @@ export interface CanonGeometry {
      *  a label never corrupts the electrical transform. */
     pin?: string
     /** Input element this position represents: absent / "key" = a normal switch;
-     *  "encoder" = a rotary encoder; "slider" = an analog slider. Builder
-     *  metadata — compilers treat every entry as a key for now. */
-    element?: 'encoder' | 'slider'
+     *  "encoder" = a rotary encoder; "slider" = an analog slider; "button" = a
+     *  round push button off the key grid. Builder metadata — compilers treat
+     *  every entry as a key for now. */
+    element?: 'encoder' | 'slider' | 'button'
     /** VIA/Vial layout-option tag `[group, choice]`: this key exists only when
      *  layout-option `group` is set to `choice`. Indexes into
      *  `keyboard.layoutOptions`; absent = present in every variant. Emitted as the
@@ -585,6 +586,45 @@ export type DesignFeature =
     | 'pointing'
     | 'encoders'
     | 'analog'
+    | 'display'
+
+/** How a screen is connected. */
+export type DisplayBus = 'i2c' | 'spi' | 'uart'
+
+/** A screen: its controller chip, bus and size (see config/displays.ts). */
+export interface CanonDisplay {
+    /** The module tile it was set from; absent = set by hand. */
+    module?: string
+    chip: string
+    bus: DisplayBus
+    width: number
+    height: number
+    /** I²C address. */
+    address?: number
+    /** Clockwise turn of the picture, degrees. */
+    rotation?: 0 | 90 | 180 | 270
+}
+
+/** A part on the board that is not a keymap position. Keys, knobs, sliders
+ *  and buttons are positions (keys with an `element`); these are not. */
+export type PartKind = 'display' | 'stick' | 'hat' | 'trigger'
+
+/** A part placed on the board, in key units like the keys. */
+export interface CanonPart {
+    id: string
+    kind: PartKind
+    name: string
+    x: number
+    y: number
+    w: number
+    h: number
+    /** Clockwise turn about its own centre, degrees. */
+    r?: number
+    variant?: string
+    /** Its pins by what they are for ("cs", "x"…), friendly labels. */
+    pins?: Record<string, string>
+    display?: CanonDisplay
+}
 
 /** A named physical-layout variant (keys tag into it via `CanonGeometry.variant`). */
 export interface CanonLayout {
@@ -689,6 +729,8 @@ export interface ConfigKeyboard {
     layoutOptions?: CanonLayoutOption[]
     /** Two-piece / split keyboard (builder capability flag; export metadata). */
     split?: boolean
+    /** Parts on the board that are not keymap positions: screens, sticks… */
+    parts?: CanonPart[]
 }
 
 /** Auto-activate `thenLayer` while every layer in `ifLayers` is active. */

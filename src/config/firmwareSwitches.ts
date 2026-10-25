@@ -48,6 +48,9 @@ export interface SwitchTable {
     readonly file: string
     /** Design features this firmware has options for. */
     readonly features: readonly DesignFeature[]
+    /** Screen controller chips this firmware has a driver for (names as in
+     *  config/displays.ts). Its export does not write a screen yet. */
+    readonly displays: readonly string[]
     switches(config: ConfigKeymap): FirmwareSwitch[]
     set(config: ConfigKeymap, id: string, on: boolean): ConfigKeymap
     /** Drop every override this table owns. */
@@ -116,6 +119,9 @@ const zmkLine = (row: ZmkRow, on: boolean): string => {
 const zmkTable: SwitchTable = {
     file: '.conf',
     features: ['wireless', 'liveEdit', 'battery', 'lighting', 'pointing', 'encoders'],
+    // ZMK's in-tree shields on its Zephyr 3.5: solomon,ssd1306fb (corne),
+    // sharp,ls0xx (nice_view), gooddisplay,il0323 (corneish_zen).
+    displays: ['SSD1306', 'Sharp memory LCD', 'IL0323'],
     switches(config) {
         const auto = zmkConfAuto(config)
         const on = resolveZmkConfFlags(config)
@@ -214,9 +220,15 @@ function resetQmk(config: ConfigKeymap): ConfigKeymap {
 
 const QMK_FEATURE_CARDS: readonly DesignFeature[] = ['lighting', 'pointing', 'encoders']
 
+/** QMK's OLED driver (SSD1306 / SH1106 / SH1107 over I²C or SPI) and Quantum
+ *  Painter (ST7789 and other SPI LCDs, Arm only): docs.qmk.fm/features/
+ *  oled_driver and docs.qmk.fm/quantum_painter. */
+const QMK_DISPLAYS = ['SSD1306', 'SH1106', 'ST7789']
+
 const qmkTable: SwitchTable = {
     file: 'keyboard.json',
     features: QMK_FEATURE_CARDS,
+    displays: QMK_DISPLAYS,
     switches: qmkFeatureRows,
     set: setQmkFeature,
     reset: resetQmk,
@@ -228,6 +240,7 @@ function liveEditTable(name: string, line: string): SwitchTable {
     return {
         file: 'keyboard.json',
         features: ['liveEdit', ...QMK_FEATURE_CARDS],
+        displays: QMK_DISPLAYS,
         switches: (config) => [
             {
                 id: 'liveEdit',
@@ -260,6 +273,9 @@ const remapprTable: SwitchTable = {
         'encoders',
         'analog',
     ],
+    // Its Zephyr's display bindings: solomon,ssd1306fb, sinowealth,sh1106
+    // (on the rig), sitronix,st7789v, sharp,ls0xx.
+    displays: ['SSD1306', 'SH1106', 'ST7789', 'Sharp memory LCD'],
     switches(config) {
         const built = (id: string, name: string): FirmwareSwitch => ({
             id,
@@ -323,12 +339,14 @@ export const FIRMWARE_SWITCHES: Record<BuilderFirmwareId, SwitchTable> = {
     remappr: remapprTable,
 }
 
-/** The firmware has options for `feature`. */
+/** The firmware has options for `feature` (a screen: a driver for one). */
 export function supportsFeature(
     target: BuilderFirmwareId,
     feature: DesignFeature,
 ): boolean {
-    return FIRMWARE_SWITCHES[target].features.includes(feature)
+    const table = FIRMWARE_SWITCHES[target]
+    if (feature === 'display') return table.displays.length > 0
+    return table.features.includes(feature)
 }
 
 // ── Feature cards ───────────────────────────────────────────────────────────
@@ -393,7 +411,21 @@ export const DESIGN_FEATURES: readonly DesignFeatureCard[] = [
         needs: '1 analog pin per axis',
         group: 'part',
     },
+    {
+        id: 'display',
+        name: 'Screen',
+        blurb: 'An OLED, LCD or e-paper screen.',
+        needs: 'its bus’s pins',
+        group: 'part',
+    },
 ]
+
+/** Firmware ids that have a driver for screen chip `chip`. */
+export function firmwareForDisplay(chip: string): BuilderFirmwareId[] {
+    return (Object.keys(FIRMWARE_SWITCHES) as BuilderFirmwareId[]).filter(
+        (id) => FIRMWARE_SWITCHES[id].displays.includes(chip),
+    )
+}
 
 /** The cards a new design starts with, by its kind. Only a suggestion:
  *  every card stays there for every design. */

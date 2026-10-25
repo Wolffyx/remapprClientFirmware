@@ -41,6 +41,10 @@ export type {
     CanonWs2812,
     CanonExtPowerCtrl,
     CanonBattery,
+    CanonDisplay,
+    CanonPart,
+    DisplayBus,
+    PartKind,
     CanonLayout,
     DesignFeature,
     CanonLayoutOption,
@@ -314,6 +318,7 @@ export {
     DESIGN_FEATURES,
     SUGGESTED_FEATURES,
     FIRMWARE_SWITCHES,
+    firmwareForDisplay,
     setDesignFeature,
     supportsFeature,
     type DesignFeatureCard,
@@ -321,3 +326,12 @@ export {
     type SwitchTable,
 } from './firmwareSwitches'
 export { DESIGN_FEATURE_NAME } from './firmwareConf'
+export {
+    DISPLAY_MODULES,
+    DISPLAY_PIN_NAMES,
+    displayFromModule,
+    displayModule,
+    displayPins,
+    type DisplayModule,
+    type DisplayPin,
+} from './displays'

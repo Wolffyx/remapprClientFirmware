@@ -416,7 +416,7 @@ export const GeometrySchema = z.object({
         .optional()
         .describe('Optional per-key direct GPIO pin label (builder metadata).'),
     element: z
-        .enum(['encoder', 'slider'])
+        .enum(['encoder', 'slider', 'button'])
         .optional()
         .describe('Input element type (absent = key); builder metadata.'),
     option: z
@@ -748,6 +748,36 @@ export const ExtPowerCtrlSchema = z
 export const BatterySchema = z
     .object({ pin: z.string() })
     .describe('Battery sense pin (an analog pin behind a resistor divider).')
+
+export const DisplaySchema = z
+    .object({
+        module: z.string().optional(),
+        chip: z.string(),
+        bus: z.enum(['i2c', 'spi', 'uart']),
+        width: z.number().int().positive(),
+        height: z.number().int().positive(),
+        address: z.number().int().min(0).max(127).optional(),
+        rotation: z
+            .union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)])
+            .optional(),
+    })
+    .describe('A screen: controller chip, bus and size.')
+
+export const PartSchema = z
+    .object({
+        id: z.string().min(1),
+        kind: z.enum(['display', 'stick', 'hat', 'trigger']),
+        name: z.string(),
+        x: z.number(),
+        y: z.number(),
+        w: z.number().positive(),
+        h: z.number().positive(),
+        r: z.number().optional(),
+        variant: z.string().optional(),
+        pins: z.record(z.string(), z.string()).optional(),
+        display: DisplaySchema.optional(),
+    })
+    .describe('A part on the board that is not a keymap position (screen, stick…).')
 
 export const HardwareSchema = z
     .object({
@@ -1412,6 +1442,8 @@ const BaseKeymapSchema = z.object({
                     'lighting',
                     'pointing',
                     'encoders',
+                    'analog',
+                    'display',
                 ]),
             )
             .optional()
@@ -1424,6 +1456,7 @@ const BaseKeymapSchema = z.object({
             .boolean()
             .optional()
             .describe('Two-piece / split keyboard (builder capability flag).'),
+        parts: z.array(PartSchema).optional(),
     }),
     layers: z.array(LayerSchema).min(1),
     combos: z.array(ComboSchema).optional(),
