@@ -41,6 +41,7 @@ export type {
     CanonWs2812,
     CanonExtPowerCtrl,
     CanonLayout,
+    DesignFeature,
     CanonLayoutOption,
     ConfigHardware,
     ConfigKeymap,
@@ -295,3 +296,13 @@ export {
 import './compilers/zmk'
 import './compilers/qmk'
 import './compilers/remappr'
+export {
+    DESIGN_FEATURES,
+    FIRMWARE_SWITCHES,
+    setDesignFeature,
+    supportsFeature,
+    type DesignFeatureCard,
+    type FirmwareSwitch,
+    type SwitchTable,
+} from './firmwareSwitches'
+export { DESIGN_FEATURE_NAME } from './firmwareConf'

@@ -339,6 +339,9 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                       ),
                   }
                 : {}),
+            ...(km.keyboard.features
+                ? { features: [...km.keyboard.features] }
+                : {}),
             ...(km.keyboard.layouts
                 ? { layouts: km.keyboard.layouts.map((l) => ({ ...l })) }
                 : {}),

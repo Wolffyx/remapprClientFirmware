@@ -9,7 +9,12 @@
 // behaviors + declared hardware; explicit true/false ⇒ user override. `someAction`
 // (the behavior walker) lives here so bundle.ts can import it back without a cycle.
 
-import type { CanonAction, ConfigKeymap } from './types'
+import type {
+    CanonAction,
+    CanonFirmwareConfig,
+    ConfigKeymap,
+    DesignFeature,
+} from './types'
 
 /** Walk every action in the config (layers, encoders, combos) for feature flags. */
 export function someAction(
@@ -48,41 +53,192 @@ export interface ZmkConfFlags {
     backlight: boolean
     underglow: boolean
     usbLogging: boolean
+    sleep: boolean
+    encoders: boolean
+}
+
+/** A derived default and what set it (a design feature's name, or what in the
+ *  design asks for it); no `from` = a plain default. */
+export interface AutoValue {
+    on: boolean
+    from?: string
+}
+
+/** Display names of the design features, for "from <feature>" hints. */
+export const DESIGN_FEATURE_NAME: Record<DesignFeature, string> = {
+    wireless: 'Wireless',
+    liveEdit: 'Edit live',
+    battery: 'Battery & sleep',
+    lighting: 'Lighting',
+    pointing: 'Pointing',
+    encoders: 'Encoders',
+}
+
+/** First reason that holds, else off. */
+function firstOf(...rules: [boolean, string][]): AutoValue {
+    const hit = rules.find(([on]) => on)
+    return hit ? { on: true, from: hit[1] } : { on: false }
+}
+
+/** What the design asks for, before any override. */
+function designUses(config: ConfigKeymap) {
+    const uses = (p: (a: CanonAction) => boolean): boolean =>
+        someAction(config, p)
+    const features = new Set(config.keyboard.features ?? [])
+    const lighting = config.keyboard.lighting
+    const feature = (f: DesignFeature): [boolean, string] => [
+        features.has(f),
+        DESIGN_FEATURE_NAME[f],
+    ]
+    return {
+        picked: config.keyboard.features !== undefined,
+        feature,
+        mouse: uses(isMouse),
+        softOff: uses((a) => a.type === 'soft_off'),
+        extPower: uses((a) => a.type === 'ext_power'),
+        // Underglow/backlight are owned by the builder's Lighting section
+        // (keyboard.lighting), on top of any lighting behavior in the keymap.
+        underglow:
+            !!lighting?.underglow ||
+            uses((a) => a.type === 'lighting' && a.target === 'underglow'),
+        backlight:
+            !!lighting?.backlight ||
+            uses((a) => a.type === 'lighting' && a.target === 'backlight'),
+        encoderKeys: config.keyboard.keys.some((k) => k.element === 'encoder'),
+    }
+}
+
+/** Every ZMK flag's auto value (no overrides) and what turned it on. */
+export function zmkConfAuto(config: ConfigKeymap): Record<keyof ZmkConfFlags, AutoValue> {
+    const hw = config.keyboard.hardware
+    const u = designUses(config)
+    // Without picked features, Studio stays on by default (as before cards).
+    const studio = u.picked
+        ? firstOf(u.feature('liveEdit'))
+        : { on: true }
+    return {
+        usb: { on: true },
+        ble: firstOf(u.feature('wireless')),
+        studio,
+        studioLocking: { on: true },
+        studioCdc: { on: studio.on, from: studio.from },
+        softOff: firstOf([u.softOff, 'a soft-off key']),
+        extPower: firstOf(
+            [u.extPower, 'an external-power key'],
+            [!!hw?.extPowerCtrl, 'the external-power pin'],
+        ),
+        pointing: firstOf(u.feature('pointing'), [u.mouse, 'mouse keys']),
+        backlight: firstOf(
+            [u.backlight, 'Lighting'],
+            [!!hw?.backlightPwm, 'the backlight pin'],
+        ),
+        underglow: firstOf(
+            u.feature('lighting'),
+            [u.underglow, 'Lighting'],
+            [!!hw?.ws2812, 'the LED data pin'],
+        ),
+        usbLogging: { on: false },
+        sleep: firstOf(u.feature('battery')),
+        encoders: firstOf(u.feature('encoders'), [u.encoderKeys, 'encoder keys']),
+    }
+}
+
+/** The `firmwareConfig` override key behind each ZMK flag. */
+export const ZMK_FLAG_OVERRIDE: Record<keyof ZmkConfFlags, keyof CanonFirmwareConfig> = {
+    usb: 'usb',
+    ble: 'ble',
+    studio: 'studio',
+    studioLocking: 'studioLocking',
+    studioCdc: 'studioUsbCdc',
+    softOff: 'softOff',
+    extPower: 'extPower',
+    pointing: 'pointing',
+    backlight: 'backlight',
+    underglow: 'underglow',
+    usbLogging: 'usbLogging',
+    sleep: 'sleep',
+    encoders: 'encoders',
 }
 
 /** Resolve every ZMK flag from `firmwareConfig` overrides + used behaviors/hardware. */
 export function resolveZmkConfFlags(config: ConfigKeymap): ZmkConfFlags {
     const fc = config.keyboard.firmwareConfig ?? {}
-    const hw = config.keyboard.hardware
-    const uses = (p: (a: CanonAction) => boolean): boolean =>
-        someAction(config, p)
-
-    // Underglow/backlight are owned by the builder's Lighting section
-    // (keyboard.lighting); enabling lighting there drives the .conf flag, on top
-    // of any lighting *behavior* in the keymap or declared peripheral hardware.
-    const lighting = config.keyboard.lighting
-    const usesUnderglow =
-        !!lighting?.underglow ||
-        uses((a) => a.type === 'lighting' && a.target === 'underglow')
-    const usesBacklight =
-        !!lighting?.backlight ||
-        uses((a) => a.type === 'lighting' && a.target === 'backlight')
-    const studio = fc.studio ?? true
-    return {
-        usb: fc.usb ?? true,
-        ble: fc.ble ?? false,
-        studio,
-        studioLocking: fc.studioLocking ?? true,
-        studioCdc: fc.studioUsbCdc ?? studio,
-        softOff: fc.softOff ?? uses((a) => a.type === 'soft_off'),
-        extPower:
-            fc.extPower ??
-            (uses((a) => a.type === 'ext_power') || !!hw?.extPowerCtrl),
-        pointing: fc.pointing ?? uses(isMouse),
-        backlight: fc.backlight ?? (usesBacklight || !!hw?.backlightPwm),
-        underglow: fc.underglow ?? (usesUnderglow || !!hw?.ws2812),
-        usbLogging: fc.usbLogging ?? false,
+    const auto = zmkConfAuto(config)
+    const out = {} as ZmkConfFlags
+    for (const k of Object.keys(auto) as (keyof ZmkConfFlags)[]) {
+        const o = fc[ZMK_FLAG_OVERRIDE[k]]
+        out[k] = typeof o === 'boolean' ? o : auto[k].on
     }
+    // Studio over USB follows the resolved Studio switch unless overridden.
+    if (fc.studioUsbCdc === undefined) out.studioCdc = out.studio
+    return out
+}
+
+/** QMK `keyboard.json` features the builder manages, in emit order. The first
+ *  four are always written; the rest only when on. */
+export const QMK_FEATURES = [
+    'bootmagic',
+    'extrakey',
+    'mousekey',
+    'nkro',
+    'rgblight',
+    'backlight',
+    'encoder',
+    'pointing_device',
+] as const
+
+export type QmkFeature = (typeof QMK_FEATURES)[number]
+
+const QMK_ALWAYS_WRITTEN = new Set<QmkFeature>([
+    'bootmagic',
+    'extrakey',
+    'mousekey',
+    'nkro',
+])
+
+/** Every managed QMK feature's auto value (no overrides) and what set it. */
+export function qmkFeaturesAuto(
+    config: ConfigKeymap,
+): Record<QmkFeature, AutoValue> {
+    const u = designUses(config)
+    const lightingKeys = someAction(
+        config,
+        (a) => a.type === 'lighting' && a.target !== 'backlight',
+    )
+    return {
+        bootmagic: { on: false },
+        extrakey: { on: true },
+        mousekey: firstOf([u.mouse, 'mouse keys']),
+        nkro: { on: true },
+        rgblight: firstOf(
+            u.feature('lighting'),
+            [!!config.keyboard.lighting?.underglow || lightingKeys, 'Lighting'],
+        ),
+        backlight: firstOf([u.backlight, 'Lighting']),
+        encoder: firstOf(
+            u.feature('encoders'),
+            [
+                u.encoderKeys ||
+                    config.layers.some((l) => l.encoders?.length),
+                'encoder keys',
+            ],
+        ),
+        pointing_device: firstOf(u.feature('pointing')),
+    }
+}
+
+/** The `keyboard.json` `features` object: overrides over the auto values. */
+export function resolveQmkFeatures(
+    config: ConfigKeymap,
+): Record<string, boolean> {
+    const auto = qmkFeaturesAuto(config)
+    const over = config.keyboard.firmwareConfig?.qmkFeatures ?? {}
+    const out: Record<string, boolean> = {}
+    for (const f of QMK_FEATURES) {
+        const on = over[f] ?? auto[f].on
+        if (on || QMK_ALWAYS_WRITTEN.has(f)) out[f] = on
+    }
+    return out
 }
 
 /** Comment a flag line out when its feature is off (Kconfig hint convention). */
@@ -131,6 +287,16 @@ export function deriveZmkConf(config: ConfigKeymap): string {
 
     if (on.softOff)
         lines.push(`# Soft-off (&soft_off).`, `CONFIG_ZMK_PM_SOFT_OFF=y`, ``)
+
+    if (on.sleep) lines.push(`# Sleep when idle.`, `CONFIG_ZMK_SLEEP=y`, ``)
+
+    if (on.encoders)
+        lines.push(
+            `# Rotary encoders (EC11).`,
+            `CONFIG_EC11=y`,
+            `CONFIG_EC11_TRIGGER_GLOBAL_THREAD=y`,
+            ``,
+        )
 
     if (on.backlight)
         lines.push(

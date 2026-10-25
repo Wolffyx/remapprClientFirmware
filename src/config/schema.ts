@@ -773,6 +773,12 @@ export const FirmwareConfigSchema = z
         backlight: z.boolean().optional(),
         underglow: z.boolean().optional(),
         usbLogging: z.boolean().optional(),
+        sleep: z.boolean().optional(),
+        encoders: z.boolean().optional(),
+        qmkFeatures: z
+            .record(z.string(), z.boolean())
+            .optional()
+            .describe('QMK keyboard.json `features` overrides by key.'),
         kconfig: z.string().optional(),
         configH: z.string().optional(),
         rulesMk: z.string().optional(),
@@ -1392,6 +1398,21 @@ const BaseKeymapSchema = z.object({
             ),
         lighting: LightingSchema.optional(),
         firmwareConfig: FirmwareConfigSchema.optional(),
+        features: z
+            .array(
+                z.enum([
+                    'wireless',
+                    'liveEdit',
+                    'battery',
+                    'lighting',
+                    'pointing',
+                    'encoders',
+                ]),
+            )
+            .optional()
+            .describe(
+                'What the board does (feature cards); each firmware turns its own options on from these.',
+            ),
         layouts: z.array(LayoutSchema).optional(),
         layoutOptions: z.array(LayoutOptionSchema).optional(),
         split: z

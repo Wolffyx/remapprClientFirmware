@@ -114,7 +114,9 @@ export function cloneFirmwareConfig(
     const out: CanonFirmwareConfig = {}
     for (const k of Object.keys(fc) as (keyof CanonFirmwareConfig)[]) {
         const v = fc[k]
-        if (v !== undefined) (out as Record<string, unknown>)[k] = v
+        if (v === undefined) continue
+        ;(out as Record<string, unknown>)[k] =
+            typeof v === 'object' ? { ...v } : v
     }
     return out
 }
@@ -470,6 +472,9 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
                           km.keyboard.firmwareConfig,
                       ),
                   }
+                : {}),
+            ...(km.keyboard.features
+                ? { features: [...km.keyboard.features] }
                 : {}),
             ...(km.keyboard.layouts
                 ? { layouts: km.keyboard.layouts.map((l) => ({ ...l })) }

@@ -523,6 +523,14 @@ export interface CanonFirmwareConfig {
     underglow?: boolean
     /** CONFIG_ZMK_USB_LOGGING. Default off (commented hint). */
     usbLogging?: boolean
+    /** CONFIG_ZMK_SLEEP. Default = the `battery` design feature. */
+    sleep?: boolean
+    /** CONFIG_EC11 (+ global-thread trigger). Default = the `encoders` design
+     *  feature or an encoder on the board. */
+    encoders?: boolean
+    /** QMK `keyboard.json` `features` overrides, by feature key (`mousekey`,
+     *  `rgblight`, …); absent keys are auto-derived. */
+    qmkFeatures?: Record<string, boolean>
     /** Extra Kconfig lines appended verbatim after the derived ZMK `.conf` block. */
     kconfig?: string
     /** Extra `#define` lines appended to the QMK keymap `config.h`. */
@@ -558,6 +566,15 @@ export interface CanonLighting {
      *  path; a per-layer table collapses to layer 0 with a diagnostic. */
     perKey?: Record<number, string>
 }
+
+/** A design feature: what the board does, independent of any firmware. */
+export type DesignFeature =
+    | 'wireless'
+    | 'liveEdit'
+    | 'battery'
+    | 'lighting'
+    | 'pointing'
+    | 'encoders'
 
 /** A named physical-layout variant (keys tag into it via `CanonGeometry.variant`). */
 export interface CanonLayout {
@@ -651,6 +668,10 @@ export interface ConfigKeyboard {
     lighting?: CanonLighting
     /** Firmware-level feature config — modeled .conf/config.h toggles + overrides. */
     firmwareConfig?: CanonFirmwareConfig
+    /** What the board does, picked as feature cards (new-design step 3).
+     *  Each firmware's switch table turns its own options on from these;
+     *  absent = not picked (switches derive from the keymap only). */
+    features?: DesignFeature[]
     /** Physical-layout variants (builder); keys tag in via `variant`. */
     layouts?: CanonLayout[]
     /** VIA/Vial layout options; keys tag in via `option [group, choice]`. The

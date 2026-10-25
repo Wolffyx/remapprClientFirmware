@@ -14,8 +14,9 @@
 import type { Diagnostic } from '../diagnostics'
 import { materializeMatrix } from '../matrix'
 import { resolveController } from '../controller'
+import { resolveQmkFeatures } from '../firmwareConf'
 import { resolveQmkPin } from '../pinmaps'
-import type { CanonAction, CanonController, ConfigKeymap } from '../types'
+import type { CanonController, ConfigKeymap } from '../types'
 
 /** One key in a QMK `LAYOUT`: electrical position + physical placement. */
 interface QmkLayoutKey {
@@ -31,23 +32,6 @@ export interface QmkKeyboardJsonResult {
     diagnostics: Diagnostic[]
 }
 
-/** True when any action across layers/encoders/combos matches `pred`. */
-function usesAction(
-    config: ConfigKeymap,
-    pred: (a: CanonAction) => boolean,
-): boolean {
-    for (const layer of config.layers) {
-        if (layer.bindings.some(pred)) return true
-        for (const e of layer.encoders ?? [])
-            if (pred(e.cw) || pred(e.ccw) || (e.press && pred(e.press)))
-                return true
-        for (const e of Object.values(layer.encoderBindings ?? {}))
-            if (pred(e.cw) || pred(e.ccw) || (e.press && pred(e.press)))
-                return true
-    }
-    return (config.combos ?? []).some((c) => pred(c.action))
-}
-
 /** MCU identity: the `development_board` shortcut wins (it sets the other three),
  *  else the explicit processor/bootloader/board trio. */
 function identity(ctrl: CanonController): Record<string, string> {
@@ -57,41 +41,6 @@ function identity(ctrl: CanonController): Record<string, string> {
         ...(ctrl.processor ? { processor: ctrl.processor } : {}),
         ...(ctrl.bootloader ? { bootloader: ctrl.bootloader } : {}),
         ...(ctrl.board ? { board: ctrl.board } : {}),
-    }
-}
-
-/** Feature toggles inferred from the keymap (extrakey/nkro are safe defaults). */
-function features(config: ConfigKeymap): Record<string, boolean> {
-    const mousekey = usesAction(
-        config,
-        (a) =>
-            a.type === 'mouse_key' ||
-            a.type === 'mouse_move' ||
-            a.type === 'mouse_scroll',
-    )
-    const rgb =
-        !!config.keyboard.lighting?.underglow ||
-        usesAction(
-            config,
-            (a) => a.type === 'lighting' && a.target !== 'backlight',
-        )
-    const backlight =
-        !!config.keyboard.lighting?.backlight ||
-        usesAction(
-            config,
-            (a) => a.type === 'lighting' && a.target === 'backlight',
-        )
-    const encoder =
-        config.layers.some((l) => l.encoders?.length) ||
-        config.keyboard.keys.some((k) => k.element === 'encoder')
-    return {
-        bootmagic: false,
-        extrakey: true,
-        mousekey,
-        nkro: true,
-        ...(rgb ? { rgblight: true } : {}),
-        ...(backlight ? { backlight: true } : {}),
-        ...(encoder ? { encoder: true } : {}),
     }
 }
 
@@ -173,7 +122,7 @@ export function buildQmkKeyboardJson(
         ...identity(ctrl),
         ...(matrixPins ? { matrix_pins: matrixPins } : {}),
         ...(diode ? { diode_direction: diode } : {}),
-        features: features(config),
+        features: resolveQmkFeatures(config),
         layouts: { LAYOUT: { layout } },
     }
 
