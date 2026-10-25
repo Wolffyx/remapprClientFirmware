@@ -357,14 +357,23 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     'key.keyboard_find': ['K_FIND', 'K_FIND2', 'KC_FIND'],
     'key.keyboard_mute': [
         'K_MUTE', 'K_MUTE2', 'KC_KB_MUTE',
+        // Its label before it read as the keyboard-page variant: saved configs
+        // that spell it this way keep sending the same key.
+        'Mute',
     ],
     'key.keyboard_volume_up': [
         'K_VOLUME_UP', 'K_VOL_UP', 'K_VOLUME_UP2', 'K_VOL_UP2',
         'KC_KB_VOLUME_UP',
+        // Its label before it read as the keyboard-page variant: saved configs
+        // that spell it this way keep sending the same key.
+        'Volume Up',
     ],
     'key.keyboard_volume_down': [
         'K_VOLUME_DOWN', 'K_VOL_DN', 'K_VOLUME_DOWN2', 'K_VOL_DN2',
         'KC_KB_VOLUME_DOWN',
+        // Its label before it read as the keyboard-page variant: saved configs
+        // that spell it this way keep sending the same key.
+        'Volume Down',
     ],
     'key.keyboard_alternate_erase': [
         'ALT_ERASE', 'KC_ALTERNATE_ERASE', 'KC_ERAS',
@@ -485,14 +494,15 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     ],
 
     // ─────────────────────────────────────────────────────────────
-    // Consumer keys (HID 12) — selected coverage
+    // Consumer keys (HID 12) — selected coverage. Usages the media page
+    // (hid-pages/media.json) defines carry its `media.` id.
     // ─────────────────────────────────────────────────────────────
     'consumer.consumer_control': ['Consumer Control'],
-    'consumer.volume_increment': ['C_VOLUME_UP', 'C_VOL_UP'],
-    'consumer.volume_decrement': ['C_VOLUME_DOWN', 'C_VOL_DN'],
-    'consumer.mute': ['C_MUTE'],
-    'consumer.bass_boost': ['C_BASS_BOOST'],
-    'consumer.alternate_audio_increment': [
+    'media.volume_increment': ['C_VOLUME_UP', 'C_VOL_UP'],
+    'media.volume_decrement': ['C_VOLUME_DOWN', 'C_VOL_DN'],
+    'media.mute': ['C_MUTE'],
+    'media.bass_boost': ['C_BASS_BOOST'],
+    'media.alternate_audio_increment': [
         'C_ALTERNATE_AUDIO_INCREMENT', 'C_ALT_AUDIO_INC',
     ],
     'consumer.brightness_increment': [
@@ -525,11 +535,11 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     'consumer.channel_increment': ['C_CHANNEL_INC', 'C_CHAN_INC'],
     'consumer.channel_decrement': ['C_CHANNEL_DEC', 'C_CHAN_DEC'],
     'consumer.recall_last': ['C_RECALL_LAST', 'C_CHAN_LAST'],
-    'consumer.media_select_program_guide': ['C_MEDIA_GUIDE'],
-    'consumer.media_select_home': ['C_MEDIA_HOME'],
-    'consumer.media_select_tv': ['C_MEDIA_TV'],
-    'consumer.media_select_www': ['C_MEDIA_WWW'],
-    'consumer.media_select_telephone': ['C_MEDIA_PHONE'],
+    'media.media_select_program_guide': ['C_MEDIA_GUIDE'],
+    'media.media_select_home': ['C_MEDIA_HOME'],
+    'media.media_select_tv': ['C_MEDIA_TV'],
+    'media.media_select_www': ['C_MEDIA_WWW'],
+    'media.media_select_telephone': ['C_MEDIA_PHONE'],
     'consumer.application_launch_button_configuration_tool': [
         'C_AL_CCC',
     ],
@@ -542,15 +552,15 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
         'C_SLEEP', 'KC_SYSTEM_SLEEP', 'KC_SLEP',
     ],
     'consumer.sleep_mode': ['C_SLEEP_MODE'],
-    'consumer.record': ['C_RECORD', 'C_REC'],
-    'consumer.eject': [
+    'media.record': ['C_RECORD', 'C_REC'],
+    'media.eject': [
         'C_EJECT',
         'KC_MEDIA_EJECT', 'KC_EJCT',
     ],
     'consumer.stop_eject': ['C_STOP_EJECT'],
-    'consumer.slow': ['C_SLOW'],
-    'consumer.repeat': ['C_REPEAT'],
-    'consumer.random_play': ['C_RANDOM_PLAY', 'C_SHUFFLE'],
+    'media.slow': ['C_SLOW'],
+    'media.repeat': ['C_REPEAT'],
+    'media.random_play': ['C_RANDOM_PLAY', 'C_SHUFFLE'],
     'consumer.closed_caption_toggle': [
         'C_CAPTIONS', 'C_SUBTITLES',
     ],
@@ -1067,6 +1077,13 @@ export const EXTERNAL_NOTES: Partial<Record<CanonicalKeyId, string>> = {
         'macOS / iOS: ignores quick presses; long-press shows prompt',
     'consumer.power':
         'Linux / macOS / iOS supported; Windows ignored',
+    // HID Keyboard-page 0x7F-0x81, not the Consumer-page keys most keyboards send.
+    'key.keyboard_mute':
+        'Keyboard-page Mute (0x7F). For the usual mute key use Media → Mute.',
+    'key.keyboard_volume_up':
+        'Keyboard-page Volume Up (0x80). For the usual volume key use Media → Volume Increment.',
+    'key.keyboard_volume_down':
+        'Keyboard-page Volume Down (0x81). For the usual volume key use Media → Volume Decrement.',
 }
 
 // Canonical ids that intentionally have no spec-name mapping. Coverage

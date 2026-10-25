@@ -203,6 +203,10 @@
             "med": ". Del",
             "long": "Keypad . / Delete"
         },
+        "100": {
+            "short": "NUBS",
+            "long": "Non-US \\ and | key"
+        },
         "101": {
             "short": "Appl",
             "med": "Appl",
@@ -212,14 +216,22 @@
             "short": "Power",
             "med": "Power"
         },
-        "100": {
-            "short": "NUBS",
-            "long": "Non-US \\ and | key"
-        },
         "103": {
             "short": "KP=",
             "med": "KP Eq",
             "long": "KP Equals"
+        },
+        "127": {
+            "short": "Kb Mute",
+            "long": "Mute (keyboard page)"
+        },
+        "128": {
+            "short": "Kb Vol+",
+            "long": "Volume Up (keyboard page)"
+        },
+        "129": {
+            "short": "Kb Vol−",
+            "long": "Volume Down (keyboard page)"
         },
         "130": {
             "short": "LCap",

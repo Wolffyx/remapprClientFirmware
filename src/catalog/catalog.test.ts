@@ -145,3 +145,31 @@ describe('canonical catalog', () => {
         ).toEqual([])
     })
 })
+
+describe('keyboard-page vs media volume keys', () => {
+    const byId = (id: string) => CATALOG.find((e) => e.id === id)!
+
+    it('names the keyboard-page keys as such and points to Media', () => {
+        expect(byId('key.keyboard_volume_up')).toMatchObject({
+            label: 'Kb Vol+',
+            name: 'Volume Up (keyboard page)',
+        })
+        expect(byId('key.keyboard_volume_down').label).toBe('Kb Vol−')
+        expect(byId('key.keyboard_mute').label).toBe('Kb Mute')
+        expect(byId('key.keyboard_volume_up').notes).toMatch(/Media → Volume Increment/)
+    })
+
+    it('gives the media keys their spec names (ZMK C_VOL_UP lands on Media)', () => {
+        expect(byId('media.volume_increment').aliases).toContain('C_VOL_UP')
+        expect(byId('media.volume_decrement').aliases).toContain('C_VOL_DN')
+        expect(byId('media.mute').aliases).toContain('C_MUTE')
+    })
+
+    it('every EXTERNAL_NAMES key the media page defines uses its media id', () => {
+        const ids = new Set(CATALOG.map((e) => e.id))
+        const misfiled = Object.keys(EXTERNAL_NAMES).filter(
+            (k) => k.startsWith('consumer.') && ids.has(k.replace(/^consumer\./, 'media.')),
+        )
+        expect(misfiled).toEqual([])
+    })
+})
