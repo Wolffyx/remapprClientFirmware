@@ -307,15 +307,34 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
     let reqId = 0
     const nextReqId = (): number => (reqId = (reqId + 1) % UCH_REQ_FIRE_AND_FORGET)
 
+    /** The reply to legacy request (`cmd`, `seq`) within `timeoutMs`. A legacy
+     *  reply echoes both; any other frame — a late reply to a request that
+     *  timed out, a universal fragment left from an aborted chain — belongs to
+     *  someone else and is skipped, so it can never pass for this reply.
+     *  `sealed` also takes a 0xE1 reply (its counter is checked on open). */
+    async function replyFor(
+        cmd: number,
+        seq: number,
+        timeoutMs: number,
+        sealed = false,
+    ): Promise<Uint8Array> {
+        const deadline = Date.now() + timeoutMs
+        for (;;) {
+            const frame = await nextFrame(Math.max(1, deadline - Date.now()))
+            if (sealed && frame[0] === SEALED_TAG) return frame
+            if (frame[0] === cmd && frame[1] === seq) return frame
+        }
+    }
+
     async function callPlain(
         cmd: number,
         arg: Uint8Array = new Uint8Array(),
         timeoutMs = DEFAULT_TIMEOUT_MS,
     ): Promise<ControlResponse> {
         return exchange(async () => {
-            await writeFrame(buildRequest(cmd, nextSeq(), arg))
-            const frame = await nextFrame(timeoutMs)
-            return parseResponse(frame)
+            const seq = nextSeq()
+            await writeFrame(buildRequest(cmd, seq, arg))
+            return parseResponse(await replyFor(cmd, seq, timeoutMs))
         })
     }
 
@@ -327,8 +346,9 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
     ): Promise<ControlResponse> {
         const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
         return exchange(async () => {
-            await writeFrame(session.seal(cmd, nextSeq(), arg))
-            const frame = await nextFrame(timeoutMs)
+            const seq = nextSeq()
+            await writeFrame(session.seal(cmd, seq, arg))
+            const frame = await replyFor(cmd, seq, timeoutMs, true)
             if (frame[0] !== SEALED_TAG) {
                 // Plaintext reply — a gated verb the device refused (ERR_AUTH).
                 return parseResponse(frame)

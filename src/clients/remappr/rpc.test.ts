@@ -142,6 +142,34 @@ describe('createRemapprRpc — legacy plaintext', () => {
         expect(got).toEqual({ inputId: 42, pressed: true })
         await rpc.close({ abortTransport: true })
     })
+
+    it('skips a late reply and a stray universal fragment', async () => {
+        const rpc = createRemapprRpc(
+            makeTransport((frame, enqueue) => {
+                // A late COMMIT reply (ERR_ACTIVATE) and a leftover universal
+                // fragment arrive first; neither is this request's reply.
+                enqueue(respFrame(Cmd.COMMIT_CONFIG, 0x99, 7, new Uint8Array()))
+                enqueue(uniFrame(Namespace.INPUT, 3, UchFlag.FRAG_MORE, new Uint8Array(8)))
+                enqueue(respFrame(frame[0], frame[1], 0, new Uint8Array()))
+            }),
+        )
+        const r = await rpc.callPlain(Cmd.WRITE_CONFIG_BEGIN)
+        expect(r.cmd).toBe(Cmd.WRITE_CONFIG_BEGIN)
+        expect(r.status).toBe(0)
+        await rpc.close({ abortTransport: true })
+    })
+
+    it('still times out when only stray frames arrive', async () => {
+        const rpc = createRemapprRpc(
+            makeTransport((_frame, enqueue) => {
+                enqueue(respFrame(Cmd.COMMIT_CONFIG, 0x99, 7, new Uint8Array()))
+            }),
+        )
+        await expect(rpc.callPlain(Cmd.WRITE_CONFIG_BEGIN, undefined, 50)).rejects.toThrow(
+            /timeout/,
+        )
+        await rpc.close({ abortTransport: true })
+    })
 })
 
 describe('createRemapprRpc — universal (0xE2)', () => {
