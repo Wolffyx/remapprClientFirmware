@@ -331,6 +331,8 @@ export const InputClass = {
     HAT: 7,
     AXIS: 8,
     SLIDER: 9,
+    /** A screen: drawn where it sits, never bound. */
+    DISPLAY: 10,
 } as const
 
 /** Draw hint (enum remappr_input_shape); 0 = the class default. Append-only.
@@ -351,6 +353,7 @@ export const InputShape = {
     SENSOR: 12,
     MOUSE_LEFT: 13,
     MOUSE_RIGHT: 14,
+    SCREEN: 15,
 } as const
 
 /** Device form (enum remappr_input_form); 0 = derive it from the personality. */
@@ -521,7 +524,11 @@ export interface ControlResponse {
 }
 
 /** Build a legacy request frame `[cmd][seq][arg_len u16][arg]` (no padding). */
-export function buildRequest(cmd: number, seq: number, arg: Uint8Array): Uint8Array {
+export function buildRequest(
+    cmd: number,
+    seq: number,
+    arg: Uint8Array,
+): Uint8Array {
     const out = new Uint8Array(4 + arg.length)
     const dv = new DataView(out.buffer)
     out[0] = cmd
@@ -783,7 +790,9 @@ export function parseLinkLimits(d: Uint8Array): LinkLimitKnob[] {
     const count = d[0]
     const need = 1 + count * 8
     if (d.byteLength < need)
-        throw new Error(`link-limits reply too short (${d.byteLength} B, need ${need})`)
+        throw new Error(
+            `link-limits reply too short (${d.byteLength} B, need ${need})`,
+        )
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
     const out: LinkLimitKnob[] = []
     for (let i = 0; i < count; i++) {
@@ -1397,7 +1406,8 @@ export function parseCalSuggestion(d: Uint8Array): CalSuggestion[] {
     if (d[0] !== 1) throw new Error(`unknown calibrate reply version ${d[0]}`)
     const n = d[1]
     if (d.length < 2 + 2 * n) throw new Error('calibrate reply too short')
-    const pct = (v: number): number | null => (v === CAL_SUGGEST_NONE ? null : v)
+    const pct = (v: number): number | null =>
+        v === CAL_SUGGEST_NONE ? null : v
     return Array.from({ length: n }, (_, i) => ({
         inner: pct(d[2 + 2 * i]),
         outer: pct(d[3 + 2 * i]),
@@ -1532,7 +1542,8 @@ function sensorReplyVersion(
     known: readonly number[] = [1],
 ): number {
     if (d.length < min) throw new Error(`${what} reply too short`)
-    if (!known.includes(d[0])) throw new Error(`unknown ${what} version ${d[0]}`)
+    if (!known.includes(d[0]))
+        throw new Error(`unknown ${what} version ${d[0]}`)
     return d[0]
 }
 
@@ -1622,7 +1633,8 @@ export function parseSensorSetting(d: Uint8Array): SensorSettingRecord {
         o += SETTING_INT_LEN
     } else if (rec.type === SensorTypeCode.ENUM) {
         const n = d[o] ?? 0
-        if (d.length < o + 3 + n) throw new Error('sensor setting reply too short')
+        if (d.length < o + 3 + n)
+            throw new Error('sensor setting reply too short')
         rec.options = Array.from(d.subarray(o + 1, o + 1 + n))
         rec.gatedMask = d[o + 1 + n]
         rec.procedure = d[o + 2 + n]
@@ -1731,7 +1743,8 @@ const IO_REC_LEN = 8
 export function parseSensorIoPage(d: Uint8Array): SensorIoPage {
     sensorReplyVersion(d, 3, 'sensor io')
     const n = d[2]
-    if (d.length < 3 + n * IO_REC_LEN) throw new Error('sensor io reply too short')
+    if (d.length < 3 + n * IO_REC_LEN)
+        throw new Error('sensor io reply too short')
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
     const io = Array.from({ length: n }, (_, i) => {
         const o = 3 + i * IO_REC_LEN
@@ -1756,7 +1769,9 @@ export interface SensorSuggestionRecord {
 const SUGGEST_REC_LEN = 5
 
 /** GET_PROCEDURE_RESULT reply: u8 ver | u8 n | n × {u8 setting_id | i32 value}. */
-export function parseSensorSuggestions(d: Uint8Array): SensorSuggestionRecord[] {
+export function parseSensorSuggestions(
+    d: Uint8Array,
+): SensorSuggestionRecord[] {
     sensorReplyVersion(d, 2, 'sensor result')
     const n = d[1]
     if (d.length < 2 + n * SUGGEST_REC_LEN)

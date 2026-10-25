@@ -18,8 +18,14 @@ import type {
     DeviceModel,
     DeviceShell,
 } from '../../devices/types'
+import type {
+    EncoderSlot,
+    PhysicalLayout,
+    PhysicalLayoutPart,
+} from '../../types'
 import {
     INPUT_NONE,
+    InputClass,
     InputVerb,
     Namespace,
     parseInputLayoutPage,
@@ -149,6 +155,7 @@ const SHAPES: readonly (ControlShape | null)[] = [
     'sensor',
     'mouseL',
     'mouseR',
+    'screen',
 ]
 
 /** enum remappr_input_form by value; 0 = from the personality. */
@@ -255,5 +262,78 @@ export function inputLayoutModel(
         name: opts.name,
         shell: SHELLS[form],
         controls,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Layout → a keyboard's knobs and parts
+// ---------------------------------------------------------------------------
+
+/** How a keyboard draws an input that is not one of its keys, by class: the
+ *  device classes' shape and name, plus a screen (drawn, never bound). */
+const PART_LOOKS: readonly (
+    { shape: ControlShape; name: string } | undefined
+)[] = [
+    ...CLASSES.map(({ shape, name }) => ({ shape, name })),
+    { shape: 'screen', name: 'Screen' },
+]
+
+/** A keyboard's knobs and parts from its input layout. Its keys (class KEY,
+ *  or any input with a binding position) come from the key layout and are left
+ *  out; an encoder keeps its position as `key`, the key that is its push. */
+export function keyboardInputs(
+    layout: InputLayout,
+): Required<Pick<PhysicalLayout, 'encoders' | 'parts'>> {
+    const encoders: EncoderSlot[] = layout.entries
+        .filter((e) => e.cls === InputClass.ENCODER)
+        .map((e) => ({
+            x: e.x,
+            y: e.y,
+            ...(e.position !== INPUT_NONE ? { key: e.position } : {}),
+        }))
+    const drawn = layout.entries.filter(
+        (e) =>
+            e.cls !== InputClass.KEY &&
+            e.cls !== InputClass.ENCODER &&
+            e.position === INPUT_NONE &&
+            PART_LOOKS[e.cls] !== undefined,
+    )
+    const perClass = new Map<number, number>()
+    for (const e of drawn) perClass.set(e.cls, (perClass.get(e.cls) ?? 0) + 1)
+    const seen = new Map<number, number>()
+    const parts = drawn.map((e, i): PhysicalLayoutPart => {
+        const look = PART_LOOKS[e.cls]!
+        const ordinal = seen.get(e.cls) ?? 0
+        seen.set(e.cls, ordinal + 1)
+        const at = placement(e)
+        return {
+            id: genericId(e, i),
+            name:
+                (perClass.get(e.cls) ?? 0) === 1
+                    ? look.name
+                    : `${look.name} ${ordinal + 1}`,
+            shape: SHAPES[e.shape] ?? look.shape,
+            x: Math.round(at.x * U),
+            y: Math.round(at.y * U),
+            w: Math.round(at.w * U),
+            h: Math.round(at.h * U),
+            ...(at.r ? { r: Math.round(at.r * U) } : {}),
+        }
+    })
+    return { encoders, parts }
+}
+
+/** `layout` with the knobs and parts its device declares; unchanged without
+ *  an input layout, or when the device declares none. */
+export function withInputLayout(
+    layout: PhysicalLayout,
+    input: InputLayout | undefined,
+): PhysicalLayout {
+    if (!input) return layout
+    const { encoders, parts } = keyboardInputs(input)
+    return {
+        ...layout,
+        ...(encoders.length ? { encoders } : {}),
+        ...(parts.length ? { parts } : {}),
     }
 }

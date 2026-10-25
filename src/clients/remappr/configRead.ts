@@ -3,17 +3,16 @@
 // it's the same linear protocol read, parameterized by `targetNode` (0 = the
 // unchanged direct probe; ≠0 rides the §6.2 COMMON relay to a behind-dongle node).
 import type { ConfigKeymap } from '../../config'
-import { decodeRemapprBlob, DecodeCode } from '../../config/compilers/remappr/decode'
+import {
+    decodeRemapprBlob,
+    DecodeCode,
+} from '../../config/compilers/remappr/decode'
 import type { PhysicalLayout } from '../../types'
 
 import type { DiscoveryResult } from './discovery'
 import { fetchPhysicalLayouts } from './geometry'
-import {
-    buildReadChunkArg,
-    Cmd,
-    Namespace,
-    Status,
-} from './protocol'
+import { readInputLayout, withInputLayout } from './inputLayout'
+import { buildReadChunkArg, Cmd, Namespace, Status } from './protocol'
 import { type RemapprRpc, RELAY_READ_RETRIES } from './rpc'
 
 // Direct legacy frame: 64 − 6-byte response header = 58 blob bytes per reply.
@@ -137,7 +136,11 @@ export async function loadDeviceConfig(
 
     let config: ConfigKeymap | null = null
     let configVersion = discovery.deviceInfo.configVersion
-    if (decoded.code === DecodeCode.OK && 'config' in decoded && decoded.config) {
+    if (
+        decoded.code === DecodeCode.OK &&
+        'config' in decoded &&
+        decoded.config
+    ) {
         config = decoded.config
         configVersion = decoded.configVersion ?? configVersion
     }
@@ -149,6 +152,14 @@ export async function loadDeviceConfig(
         targetNode: target,
     })
 
+    // Knobs and parts (a screen, a fader) the device declares beside its keys.
+    const inputs = await readInputLayout(
+        rpc,
+        discovery.personality?.namespaces,
+        target,
+    )
+    const layouts = geometry.layouts.map((l) => withInputLayout(l, inputs))
+
     if (!config) config = defaultConfig(geometry.layouts[0]?.keys.length ?? 0)
 
     const maxLayers = discovery.personality
@@ -158,7 +169,7 @@ export async function loadDeviceConfig(
     return {
         config,
         configVersion,
-        layouts: geometry.layouts,
+        layouts,
         activeLayoutId: geometry.activeLayoutId,
         maxLayers,
     }
