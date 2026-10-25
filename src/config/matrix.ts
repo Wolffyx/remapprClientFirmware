@@ -69,17 +69,31 @@ function columnGroups(keys: CanonGeometry[], gapU = 0.6): number[][] {
     return groups
 }
 
-/** Group values into lines: sorted, a new line wherever the gap to the previous
- *  value exceeds `tol`. Returns each value's line index. */
-function lines(values: number[], tol = 0.5): number[] {
+/** Group values into lines: sorted, a value joins the latest line it is
+ *  within `tol` of — unless that line already has a key at the same spot
+ *  across it (within `tol`), as when a tilted row reaches down into the next
+ *  one. Otherwise it starts a new line. Returns each value's line index. */
+function lines(values: number[], across: number[], tol = 0.5): number[] {
     const order = values.map((_v, i) => i).sort((a, b) => values[a] - values[b])
     const out = new Array<number>(values.length)
-    let line = -1
-    let prev = -Infinity
+    const open: { last: number; across: number[] }[] = []
     for (const i of order) {
-        if (values[i] - prev > tol) line++
+        let line = -1
+        for (let l = open.length - 1; l >= 0; l--) {
+            const o = open[l]
+            if (values[i] - o.last > tol) continue
+            if (o.across.every((a) => Math.abs(a - across[i]) >= tol)) {
+                line = l
+                break
+            }
+        }
+        if (line < 0) {
+            open.push({ last: values[i], across: [] })
+            line = open.length - 1
+        }
+        open[line].last = values[i]
+        open[line].across.push(across[i])
         out[i] = line
-        prev = values[i]
     }
     return out
 }
@@ -132,7 +146,7 @@ function localMatrix(keys: CanonGeometry[]): DerivedMatrix {
     const c = keys.map(keyCentre)
     const along = (p: Point): number => (colMajor ? p.x : p.y)
     const across = (p: Point): number => (colMajor ? p.y : p.x)
-    const lineOf = lines(c.map(along))
+    const lineOf = lines(c.map(along), c.map(across))
     const members = new Map<number, number[]>()
     lineOf.forEach((l, i) => members.set(l, [...(members.get(l) ?? []), i]))
     for (const idxs of members.values())

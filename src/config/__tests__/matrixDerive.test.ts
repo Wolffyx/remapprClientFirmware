@@ -63,6 +63,24 @@ describe('deriveMatrix', () => {
     })
 })
 
+describe('deriveMatrix on a tilted row', () => {
+    // A 4×6 grid whose top row is turned 30° about its centre (3, 0.5): the
+    // row's ends reach down past the next row's line but stay one row.
+    const tilted = (deg: number): CanonGeometry[] =>
+        Array.from({ length: 24 }, (_, i) =>
+            i < 6
+                ? key(i % 6, 0, { r: deg, rx: 3, ry: 0.5 })
+                : key(i % 6, Math.floor(i / 6)),
+        )
+
+    it.each([15, 30])('keeps a %i° row as one row of six', (deg) => {
+        const m = deriveMatrix(tilted(deg))
+        expect(m).toMatchObject({ rows: 4, columns: 6 })
+        expect(m.map.slice(0, 6).map(([r]) => r)).toEqual([0, 0, 0, 0, 0, 0])
+        expect(unique(m.map)).toBe(true)
+    })
+})
+
 describe('resolveKeyMatrix with kept keys', () => {
     it('moves a derived key off a slot a kept key holds', () => {
         const base: ConfigKeymap = {
