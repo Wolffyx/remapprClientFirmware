@@ -6,6 +6,7 @@
 // stashed on `_keySrc`/`_preset` so serialize can round-trip the user's style.
 
 import { parseKeyToken, resolveKeycode } from './keycodes'
+import { syncKnobs, type LegacyKnobBindings } from './knobs'
 import { parseSurface, type SurfaceAction, type SurfaceKeymap } from './schema'
 import type {
     CanonAction,
@@ -431,6 +432,21 @@ const padBindings = (
           ]
 
 export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
+    // Older designs kept knob turns per key; syncKnobs moves them into slots.
+    const legacy: LegacyKnobBindings = km.layers.map((l) =>
+        l.encoderBindings
+            ? Object.fromEntries(
+                  Object.entries(l.encoderBindings).map(([k, e]) => [
+                      Number(k),
+                      normalizeEncoder(e),
+                  ]),
+              )
+            : undefined,
+    )
+    return syncKnobs(canonKeymap(km), legacy)
+}
+
+function canonKeymap(km: SurfaceKeymap): ConfigKeymap {
     const keyCount = km.keyboard.keys.length
     return {
         schemaVersion: 1,
@@ -511,16 +527,6 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
             bindings: padBindings(l.bindings.map(normalizeAction), keyCount),
             ...(l.encoders
                 ? { encoders: l.encoders.map(normalizeEncoder) }
-                : {}),
-            ...(l.encoderBindings
-                ? {
-                      encoderBindings: Object.fromEntries(
-                          Object.entries(l.encoderBindings).map(([k, e]) => [
-                              k,
-                              normalizeEncoder(e),
-                          ]),
-                      ),
-                  }
                 : {}),
             ...(l.sliderBindings
                 ? {

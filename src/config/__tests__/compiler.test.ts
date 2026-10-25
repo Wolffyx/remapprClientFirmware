@@ -9,7 +9,9 @@ import {
 } from '../index'
 
 const seed = readFileSync(
-    fileURLToPath(new URL('../../clients/mock/seed.keymap.json', import.meta.url)),
+    fileURLToPath(
+        new URL('../../clients/mock/seed.keymap.json', import.meta.url),
+    ),
     'utf8',
 )
 const config = parseKeymap(seed)
@@ -148,7 +150,8 @@ describe('keymap compilers', () => {
                 zmk.diagnostics.some(
                     (d) =>
                         d.level === 'warn' &&
-                        d.message === `"${t}" has no ZMK binding; emitted &none`,
+                        d.message ===
+                            `"${t}" has no ZMK binding; emitted &none`,
                 ),
             ).toBe(true)
         }
@@ -160,7 +163,8 @@ describe('keymap compilers', () => {
                 qmk.diagnostics.some(
                     (d) =>
                         d.level === 'warn' &&
-                        d.message === `"${t}" has no QMK keycode; emitted KC_NO`,
+                        d.message ===
+                            `"${t}" has no QMK keycode; emitted KC_NO`,
                 ),
             ).toBe(true)
         }
@@ -336,7 +340,7 @@ describe('encoders / sensor-rotate', () => {
         expect(diagnostics.some((d) => /encoder/.test(d.message))).toBe(true)
     })
 
-    it('QMK encoder_map sources per-key encoderBindings too', () => {
+    it('QMK encoder_map covers knob keys (older per-key turns moved to slots)', () => {
         const c = String(
             getCompiler('qmk')
                 .compile(parseKeymap(ENC_PERKEY))
@@ -347,7 +351,7 @@ describe('encoders / sensor-rotate', () => {
         expect(c).toMatch(/\[0\] = \{ ENCODER_CCW_CW\(.*ENCODER_CCW_CW\(.*\},/)
     })
 
-    it('emits sensor-bindings from per-key encoderBindings (element model)', () => {
+    it('emits sensor-bindings for knob keys in slot order', () => {
         const dts = String(
             getCompiler('zmk')
                 .compile(parseKeymap(ENC_PERKEY))
@@ -355,10 +359,17 @@ describe('encoders / sensor-rotate', () => {
         )
         // key 0 (keypress pair) → inc_dec_kp; key 1 (lighting) → sensor-rotate
         expect(dts).toContain('&inc_dec_kp')
-        expect(dts).toContain('sr_0_k1: sr_0_k1 {')
+        expect(dts).toContain('sr_0_1: sr_0_1 {')
         expect(dts).toContain('&rgb_ug RGB_BRI')
-        // both encoders appear in the layer's sensor-bindings, key-index ordered
-        expect(dts).toMatch(/sensor-bindings = <&inc_dec_kp[^;]*&sr_0_k1>;/)
+        // both encoders appear in the layer's sensor-bindings, slot ordered
+        expect(dts).toMatch(/sensor-bindings = <&inc_dec_kp[^;]*&sr_0_1>;/)
+    })
+
+    it('Remappr encodes knob keys into its encoder table without a warning', () => {
+        const { diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(ENC_PERKEY),
+        )
+        expect(diagnostics.some((d) => /encoder/i.test(d.message))).toBe(false)
     })
 })
 

@@ -40,7 +40,9 @@ export const FlavorSchema = z
         'tap-preferred',
         'tap-unless-interrupted',
     ])
-    .describe('How a hold-tap decides between hold and tap when another key is pressed.')
+    .describe(
+        'How a hold-tap decides between hold and tap when another key is pressed.',
+    )
 
 export const LightingTargetSchema = z
     .enum(['underglow', 'backlight', 'per_key'])
@@ -169,7 +171,9 @@ const tapHoldTimings = {
     holdTriggerOnRelease: z
         .boolean()
         .optional()
-        .describe('Trigger the hold on the interrupting key release (firmware ≥ Phase 2).'),
+        .describe(
+            'Trigger the hold on the interrupting key release (firmware ≥ Phase 2).',
+        ),
     resolve: ResolveSchema.optional(),
     flavor: FlavorSchema.optional(),
 }
@@ -282,7 +286,9 @@ export const ActionObjectSchema = z.discriminatedUnion('type', [
         .describe('Power off until a hardware reset / dedicated on key.'),
     z
         .object({ type: z.literal('battery_show') })
-        .describe("Show the battery's charge on the device's own lights or display."),
+        .describe(
+            "Show the battery's charge on the device's own lights or display.",
+        ),
     z
         .object({ type: z.literal('studio_unlock') })
         .describe('Unlock the keyboard for ZMK Studio live editing.'),
@@ -427,7 +433,16 @@ export const GeometrySchema = z.object({
         ),
 })
 
-export const EncoderSchema = z.object({ x: z.number(), y: z.number() })
+export const EncoderSchema = z.object({
+    x: z.number(),
+    y: z.number(),
+    key: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('The knob key this slot turns (its binding is the press).'),
+})
 
 export const EncoderBindingSchema = z.object({
     cw: ActionSchema,
@@ -447,6 +462,7 @@ export const LayerSchema = z.object({
     description: z.string().optional(),
     bindings: z.array(ActionSchema),
     encoders: z.array(EncoderBindingSchema).optional(),
+    /** Older per-key turn bindings; moved into `encoders` on load. */
     encoderBindings: z.record(z.string(), EncoderBindingSchema).optional(),
     sliderBindings: z.record(z.string(), SliderBindingSchema).optional(),
 })
@@ -635,7 +651,9 @@ export const AutocorrectEntrySchema = z
             .refine((s) => TYPO_ALPHABET.test(s.toLowerCase()), {
                 message: "typo may only contain a-z 0-9 ' -",
             })
-            .describe('The misspelling, as typed (matched case-insensitively).'),
+            .describe(
+                'The misspelling, as typed (matched case-insensitively).',
+            ),
         correction: z
             .string()
             .max(255)
@@ -762,7 +780,12 @@ export const DisplaySchema = z
         height: z.number().int().positive(),
         address: z.number().int().min(0).max(127).optional(),
         rotation: z
-            .union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)])
+            .union([
+                z.literal(0),
+                z.literal(90),
+                z.literal(180),
+                z.literal(270),
+            ])
             .optional(),
     })
     .describe('A screen: controller chip, bus and size.')
@@ -781,7 +804,9 @@ export const PartSchema = z
         pins: z.record(z.string(), z.string()).optional(),
         display: DisplaySchema.optional(),
     })
-    .describe('A part on the board that is not a keymap position (screen, stick…).')
+    .describe(
+        'A part on the board that is not a keymap position (screen, stick…).',
+    )
 
 export const HardwareSchema = z
     .object({
@@ -884,7 +909,10 @@ export const LightingSchema = z
                 z.string(),
                 z
                     .string()
-                    .regex(/^#[0-9a-fA-F]{6}$/, 'per-key color must be #rrggbb'),
+                    .regex(
+                        /^#[0-9a-fA-F]{6}$/,
+                        'per-key color must be #rrggbb',
+                    ),
             )
             .optional()
             .describe(
@@ -955,10 +983,13 @@ export const MouseButtonActionSchema = z
         action: z.enum(['dpiCycle', 'dpiUp', 'dpiDown', 'dpiSet', 'sniper']),
         dpi: DPI.optional(),
     })
-    .refine((a) => a.dpi !== undefined || !['dpiSet', 'sniper'].includes(a.action), {
-        message: 'dpiSet and sniper need a dpi',
-        path: ['dpi'],
-    })
+    .refine(
+        (a) => a.dpi !== undefined || !['dpiSet', 'sniper'].includes(a.action),
+        {
+            message: 'dpiSet and sniper need a dpi',
+            path: ['dpi'],
+        },
+    )
     .describe('A DEVICE action on a mouse button (DPI stages, sniper).')
 
 export const MouseSchema = z
@@ -978,7 +1009,10 @@ export const MouseSchema = z
         invertY: z.boolean().optional(),
         invertWheel: z.boolean().optional(),
         invertHwheel: z.boolean().optional(),
-        swapXY: z.boolean().optional().describe('Swap X and Y (before the inverts).'),
+        swapXY: z
+            .boolean()
+            .optional()
+            .describe('Swap X and Y (before the inverts).'),
         scrollDivisor: z
             .number()
             .int()
@@ -1017,7 +1051,10 @@ export const MouseSchema = z
             ),
     })
     .superRefine((m, ctx) => {
-        if (m.dpiStage !== undefined && m.dpiStage >= (m.dpiStages?.length ?? 1)) {
+        if (
+            m.dpiStage !== undefined &&
+            m.dpiStage >= (m.dpiStages?.length ?? 1)
+        ) {
             ctx.addIssue({
                 code: 'custom',
                 path: ['dpiStage'],
@@ -1029,7 +1066,7 @@ export const MouseSchema = z
         'Mouse settings: sensor CPI, auto mouse-layer timeout, an ' +
             'acceleration curve of [speedIn, multX100] points, axis inverts / ' +
             'swap, scroll divisor and button map, DPI stages, and a mouse ' +
-            'image\'s button actions.',
+            "image's button actions.",
     )
 
 // pattern-check: skip declarative zod schemas for sensor settings (sensor-settings plan §4b)
@@ -1069,7 +1106,12 @@ function sensorValuesSchema(strict: boolean) {
                     continue
                 }
                 const issue = sensorValueIssue(key, value)
-                if (issue) ctx.addIssue({ code: 'custom', path: [key], message: issue })
+                if (issue)
+                    ctx.addIssue({
+                        code: 'custom',
+                        path: [key],
+                        message: issue,
+                    })
             }
         })
 }
@@ -1115,7 +1157,9 @@ export const BoardSensorSchema = z
         bus: z
             .string()
             .min(1)
-            .describe('Node label of the SPI bus it sits on, e.g. "arduino_spi".'),
+            .describe(
+                'Node label of the SPI bus it sits on, e.g. "arduino_spi".',
+            ),
         cs: z
             .string()
             .optional()
@@ -1149,9 +1193,11 @@ export const JoystickAxisSchema = z
             .optional()
             .describe(
                 'With its partner input (input ^ 1, the other axis of the stick): ' +
-                    'deadzones and curve on the stick\'s distance from centre.',
+                    "deadzones and curve on the stick's distance from centre.",
             ),
-        curve: z.enum(['linear', 'aggressive', 'relaxed', 'precise']).optional(),
+        curve: z
+            .enum(['linear', 'aggressive', 'relaxed', 'precise'])
+            .optional(),
         inner: z.number().int().min(0).max(99).optional(),
         outer: z.number().int().min(0).max(99).optional(),
     })
@@ -1168,7 +1214,10 @@ export const JoystickButtonActionSchema = z
             action: z.literal('button'),
             button: z.number().int().min(1).max(32),
         }),
-        z.object({ action: z.literal('hat'), dir: z.number().int().min(0).max(7) }),
+        z.object({
+            action: z.literal('hat'),
+            dir: z.number().int().min(0).max(7),
+        }),
         z.object({
             action: z.literal('axis'),
             axis: z.enum(JOYSTICK_AXES),
@@ -1182,12 +1231,16 @@ export const JoystickSchema = z
         hatWays: z
             .union([z.literal(4), z.literal(8)])
             .optional()
-            .describe('4 or 8 (default 8); a 4-way hat reports a diagonal as its vertical.'),
+            .describe(
+                '4 or 8 (default 8); a 4-way hat reports a diagonal as its vertical.',
+            ),
         axes: z
             .array(JoystickAxisSchema)
             .max(6)
             .optional()
-            .describe('One entry per analog input that differs from its default.'),
+            .describe(
+                'One entry per analog input that differs from its default.',
+            ),
         buttonActions: z
             .array(JoystickButtonActionSchema.nullable())
             .max(JOYSTICK_POSITIONS)
@@ -1283,7 +1336,7 @@ export const RadioSettingsSchema = z
             .optional()
             .describe(
                 'Idle re-send period, ms (default 40). Keep it below the dongle ' +
-                    "failsafe with room for one lost frame, or the dongle releases " +
+                    'failsafe with room for one lost frame, or the dongle releases ' +
                     'a key held without change.',
             ),
         beaconLossMs: z

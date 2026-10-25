@@ -218,6 +218,12 @@ export {
 } from './autocorrectDictionary'
 export { normalizeAction, normalizeKeymap, parseKeymap } from './normalize'
 export {
+    type LegacyKnobBindings,
+    knobSlotOf,
+    remapKnobKeys,
+    syncKnobs,
+} from './knobs'
+export {
     denormalizeAction,
     preferredSourceJson,
     serializeKeymap,

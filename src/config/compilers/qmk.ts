@@ -212,24 +212,16 @@ const fallback = (a: CanonAction, ctx: Ctx, path: Path): string => {
 // on QMK's own partial handler table, no new abstraction introduced.
 function emitKeycode(a: CanonAction, ctx: Ctx, path: Path): string {
     const handler = HANDLERS[a.type] as
-        | ((a: CanonAction, ctx: Ctx, path: Path) => string)
-        | undefined
+        ((a: CanonAction, ctx: Ctx, path: Path) => string) | undefined
     return handler ? handler(a, ctx, path) : fallback(a, ctx, path)
 }
 
 // pattern-check: skip additive pure QMK encoder_map C-block emitter, no abstraction
 // QMK encoder_map[][NUM_ENCODERS][2]: one ENCODER_CCW_CW(ccw, cw) per encoder per
-// layer. Sources the per-key element model (encoderBindings, keyed by element:
-// 'encoder' key index) first, else the slot array (encoders[]). Press is a matrix
-// key in QMK, so it is not part of the map. Returns [] when there are no encoders.
+// layer, in slot order (keyboard.encoders[]). Press is a matrix key in QMK, so it
+// is not part of the map. Returns [] when there are no encoders.
 function emitEncoderMap(config: ConfigKeymap, ctx: Ctx): string[] {
-    const encoderKeys = config.keyboard.keys
-        .map((k, i) => (k.element === 'encoder' ? i : -1))
-        .filter((i) => i >= 0)
-    const usePerKey = encoderKeys.length > 0
-    const count = usePerKey
-        ? encoderKeys.length
-        : (config.keyboard.encoders?.length ?? 0)
+    const count = config.keyboard.encoders?.length ?? 0
     if (!count) return []
 
     const trans = 'KC_TRNS'
@@ -240,12 +232,8 @@ function emitEncoderMap(config: ConfigKeymap, ctx: Ctx): string[] {
     config.layers.forEach((layer, li) => {
         const cells: string[] = []
         for (let e = 0; e < count; e++) {
-            const binding = usePerKey
-                ? layer.encoderBindings?.[encoderKeys[e]]
-                : layer.encoders?.[e]
-            const path = usePerKey
-                ? ['layers', li, 'encoderBindings', encoderKeys[e]]
-                : ['layers', li, 'encoders', e]
+            const binding = layer.encoders?.[e]
+            const path = ['layers', li, 'encoders', e]
             const cw = binding
                 ? emitKeycode(binding.cw, ctx, [...path, 'cw'])
                 : trans

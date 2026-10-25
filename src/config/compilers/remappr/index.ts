@@ -116,7 +116,9 @@ const NONE_REC: BehaviorRecord = {
     subIndex: 0,
 }
 
-const rec = (p: Partial<BehaviorRecord> & { type: number }): BehaviorRecord => ({
+const rec = (
+    p: Partial<BehaviorRecord> & { type: number },
+): BehaviorRecord => ({
     ...NONE_REC,
     ...p,
 })
@@ -154,21 +156,41 @@ const HID_LSHIFT = 0xe1
 // ASCII char → [keyboard usage, needs-shift]. Letters/digits are computed; this
 // covers the punctuation + whitespace a `text` macro typically contains.
 const ASCII_PUNCT: Record<string, [number, boolean]> = {
-    ' ': [0x2c, false], '\n': [0x28, false], '\t': [0x2b, false],
-    '-': [0x2d, false], _: [0x2d, true],
-    '=': [0x2e, false], '+': [0x2e, true],
-    '[': [0x2f, false], '{': [0x2f, true],
-    ']': [0x30, false], '}': [0x30, true],
-    '\\': [0x31, false], '|': [0x31, true],
-    ';': [0x33, false], ':': [0x33, true],
-    "'": [0x34, false], '"': [0x34, true],
-    '`': [0x35, false], '~': [0x35, true],
-    ',': [0x36, false], '<': [0x36, true],
-    '.': [0x37, false], '>': [0x37, true],
-    '/': [0x38, false], '?': [0x38, true],
-    '!': [0x1e, true], '@': [0x1f, true], '#': [0x20, true], $: [0x21, true],
-    '%': [0x22, true], '^': [0x23, true], '&': [0x24, true], '*': [0x25, true],
-    '(': [0x26, true], ')': [0x27, true],
+    ' ': [0x2c, false],
+    '\n': [0x28, false],
+    '\t': [0x2b, false],
+    '-': [0x2d, false],
+    _: [0x2d, true],
+    '=': [0x2e, false],
+    '+': [0x2e, true],
+    '[': [0x2f, false],
+    '{': [0x2f, true],
+    ']': [0x30, false],
+    '}': [0x30, true],
+    '\\': [0x31, false],
+    '|': [0x31, true],
+    ';': [0x33, false],
+    ':': [0x33, true],
+    "'": [0x34, false],
+    '"': [0x34, true],
+    '`': [0x35, false],
+    '~': [0x35, true],
+    ',': [0x36, false],
+    '<': [0x36, true],
+    '.': [0x37, false],
+    '>': [0x37, true],
+    '/': [0x38, false],
+    '?': [0x38, true],
+    '!': [0x1e, true],
+    '@': [0x1f, true],
+    '#': [0x20, true],
+    $: [0x21, true],
+    '%': [0x22, true],
+    '^': [0x23, true],
+    '&': [0x24, true],
+    '*': [0x25, true],
+    '(': [0x26, true],
+    ')': [0x27, true],
 }
 
 // Resolve a single character to [usage, shift], or null if unprintable here.
@@ -969,7 +991,14 @@ function lowerAction(
                 diag.error(`unknown hold_tap "${action.ref}"`, path)
                 return rec({ type: BehaviorType.None })
             }
-            return lowerHoldTap(action, def, diag, path, layerIndex, comp.quickTapDefault)
+            return lowerHoldTap(
+                action,
+                def,
+                diag,
+                path,
+                layerIndex,
+                comp.quickTapDefault,
+            )
         }
         case 'tap_dance':
             return withComposite(`td:${action.ref}`, comp, diag, path, () => {
@@ -1125,13 +1154,11 @@ function encodeBlob(
         config.keyboard.keys.length || config.layers[0]?.bindings.length || 0
 
     if (numLayers === 0) diag.error('keymap has no layers', ['layers'])
-    if (numPositions === 0) diag.error('keyboard has no keys', ['keyboard', 'keys'])
+    if (numPositions === 0)
+        diag.error('keyboard has no keys', ['keyboard', 'keys'])
 
     // Macros first: BH_MACRO cells reference them by index.
-    const macroCtx = buildMacros(
-        config.macros,
-        diag,
-    )
+    const macroCtx = buildMacros(config.macros, diag)
     const layerIndex = new Map(config.layers.map((l, i) => [l.name, i]))
 
     // Composite (mod-morph / tap-dance) lowering context: definition lookups +
@@ -1212,8 +1239,8 @@ function encodeBlob(
     // Encoders (optional, §4a). Slot-array form: layer.encoders[slot] is
     // index-aligned to keyboard.encoders[], so the slot ordinal is the firmware
     // encoder_index. cw/ccw/press each lower to a behavior index (cw/ccw are
-    // required; an absent press is ENCODER_BH_NONE). The keyed encoderBindings
-    // builder form is not yet on the wire — warn rather than silently drop.
+    // required; an absent press is ENCODER_BH_NONE — a knob key's press is its
+    // own key binding).
     const encoders: EncoderRecord[] = []
     config.layers.forEach((layer, li) => {
         layer.encoders?.forEach((binding, slot) => {
@@ -1242,13 +1269,6 @@ function encodeBlob(
                 pressIndex: lower(binding.press, 'press'),
             })
         })
-        if (layer.encoderBindings) {
-            diag.warn(
-                `${TARGET} can't use encoderBindings yet — set the knobs ` +
-                    `in the layer's encoders list instead.`,
-                ['layers', li, 'encoderBindings'],
-            )
-        }
     })
 
     // Conditional (tri-)layers (optional). Layer names resolve to indices.
@@ -1286,7 +1306,8 @@ function encodeBlob(
                 negativeMods: modsToMask(ko.negativeMods ?? []),
                 suppressedMods: modsToMask(ko.suppressedMods ?? []),
                 replacement: ko.replacement
-                    ? (keyUsage(ko.replacement, diag, [...p, 'replacement']) ?? 0)
+                    ? (keyUsage(ko.replacement, diag, [...p, 'replacement']) ??
+                      0)
                     : 0,
                 replacementMods: modsToMask(ko.replacementMods ?? []),
                 layers: layersMask,
@@ -1367,7 +1388,9 @@ function encodeBlob(
     // when the node declares any pointer intent; version 2 only when it uses an
     // inverts / swap / scroll divisor / button-map field (compilers/remappr/
     // mouse.ts). Old firmware skips the unknown table.
-    const mouseRec = config.node?.mouse ? mouseRecord(config.node.mouse) : undefined
+    const mouseRec = config.node?.mouse
+        ? mouseRecord(config.node.mouse)
+        : undefined
     if (mouseRec) builder.mouseTable(mouseRec)
     // TBL_SENSOR (sensor-settings plan §4b): the product's sensor defaults from
     // node.sensor.defaults, for the first sensor, so firmware not built from
@@ -1445,7 +1468,9 @@ function encodeBlob(
         ? CFG_ROLE_VALID | (role === 'coordinator' ? CFG_ROLE_COORD : 0)
         : 0
     const fwdMode =
-        nodeCfg?.forwardMode === 'physical' ? FWD_MODE_PHYSICAL : FWD_MODE_RESOLVED
+        nodeCfg?.forwardMode === 'physical'
+            ? FWD_MODE_PHYSICAL
+            : FWD_MODE_RESOLVED
     // Skip the table when nothing but defaults would ride it, so a plain config
     // (no personality/role, resolved forwarding) stays byte-stable.
     if (
@@ -1513,7 +1538,10 @@ function encodeBlob(
             )
             return false
         })
-        .map((b) => ({ position: b.position, ...lowerSemanticAction(b.action) }))
+        .map((b) => ({
+            position: b.position,
+            ...lowerSemanticAction(b.action),
+        }))
     if (actionBindings.length > 0)
         builder.actionBindingTable(numPositions, actionBindings)
     // AUTOCORRECT (§5.2-E, TBL_AUTOCORRECT): the serialized dictionary trie. The
@@ -1539,9 +1567,11 @@ function encodeBlob(
     // Macros are keyed by their table index; composites by sub_index (collected in
     // comp.names as each was lowered). Emitted last; absent when there are none.
     const names: NameRecord[] = [
-        ...[...macroCtx.index].map(
-            ([name, ref]): NameRecord => ({ kind: NameKind.Macro, ref, name }),
-        ),
+        ...[...macroCtx.index].map(([name, ref]): NameRecord => ({
+            kind: NameKind.Macro,
+            ref,
+            name,
+        })),
         ...macroCtx.instanceNames,
         ...comp.names,
     ]

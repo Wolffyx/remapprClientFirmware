@@ -29,10 +29,6 @@ export function someAction(
             if (pred(e.cw) || pred(e.ccw) || (e.press && pred(e.press)))
                 return true
         }
-        for (const eb of Object.values(layer.encoderBindings ?? {})) {
-            if (pred(eb.cw) || pred(eb.ccw) || (eb.press && pred(eb.press)))
-                return true
-        }
     }
     return (config.combos ?? []).some((c) => pred(c.action))
 }
@@ -114,13 +110,13 @@ function designUses(config: ConfigKeymap) {
 }
 
 /** Every ZMK flag's auto value (no overrides) and what turned it on. */
-export function zmkConfAuto(config: ConfigKeymap): Record<keyof ZmkConfFlags, AutoValue> {
+export function zmkConfAuto(
+    config: ConfigKeymap,
+): Record<keyof ZmkConfFlags, AutoValue> {
     const hw = config.keyboard.hardware
     const u = designUses(config)
     // Without picked features, Studio stays on by default (as before cards).
-    const studio = u.picked
-        ? firstOf(u.feature('liveEdit'))
-        : { on: true }
+    const studio = u.picked ? firstOf(u.feature('liveEdit')) : { on: true }
     return {
         usb: { on: true },
         ble: firstOf(u.feature('wireless')),
@@ -144,13 +140,19 @@ export function zmkConfAuto(config: ConfigKeymap): Record<keyof ZmkConfFlags, Au
         ),
         usbLogging: { on: false },
         sleep: firstOf(u.feature('battery')),
-        encoders: firstOf(u.feature('encoders'), [u.encoderKeys, 'encoder keys']),
+        encoders: firstOf(u.feature('encoders'), [
+            u.encoderKeys,
+            'encoder keys',
+        ]),
         display: firstOf([screenFor(config, 'zmk'), 'the screen']),
     }
 }
 
 /** The `firmwareConfig` override key behind each ZMK flag. */
-export const ZMK_FLAG_OVERRIDE: Record<keyof ZmkConfFlags, keyof CanonFirmwareConfig> = {
+export const ZMK_FLAG_OVERRIDE: Record<
+    keyof ZmkConfFlags,
+    keyof CanonFirmwareConfig
+> = {
     usb: 'usb',
     ble: 'ble',
     studio: 'studio',
@@ -217,19 +219,15 @@ export function qmkFeaturesAuto(
         extrakey: { on: true },
         mousekey: firstOf([u.mouse, 'mouse keys']),
         nkro: { on: true },
-        rgblight: firstOf(
-            u.feature('lighting'),
-            [!!config.keyboard.lighting?.underglow || lightingKeys, 'Lighting'],
-        ),
+        rgblight: firstOf(u.feature('lighting'), [
+            !!config.keyboard.lighting?.underglow || lightingKeys,
+            'Lighting',
+        ]),
         backlight: firstOf([u.backlight, 'Lighting']),
-        encoder: firstOf(
-            u.feature('encoders'),
-            [
-                u.encoderKeys ||
-                    config.layers.some((l) => l.encoders?.length),
-                'encoder keys',
-            ],
-        ),
+        encoder: firstOf(u.feature('encoders'), [
+            u.encoderKeys || config.layers.some((l) => l.encoders?.length),
+            'encoder keys',
+        ]),
         pointing_device: firstOf(u.feature('pointing')),
     }
 }
@@ -305,7 +303,8 @@ export function deriveZmkConf(config: ConfigKeymap): string {
             ``,
         )
 
-    if (on.display) lines.push(`# Screen (zephyr,display).`, `CONFIG_ZMK_DISPLAY=y`, ``)
+    if (on.display)
+        lines.push(`# Screen (zephyr,display).`, `CONFIG_ZMK_DISPLAY=y`, ``)
 
     if (on.backlight)
         lines.push(

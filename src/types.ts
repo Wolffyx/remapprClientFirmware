@@ -89,10 +89,13 @@ export interface PhysicalLayoutPart {
     glyph?: string
 }
 
-/** A knob's position, in centi-units (1u = 100) like PhysicalLayoutKey. */
+/** A knob's position, in centi-units (1u = 100) like PhysicalLayoutKey.
+ *  `key` = the keymap position the knob sits on, whose binding is its press;
+ *  absent = a knob with no position of its own. */
 export interface EncoderSlot {
     x: number
     y: number
+    key?: number
 }
 
 export interface PhysicalLayout {
@@ -152,12 +155,7 @@ export interface BehaviorRef {
 }
 
 export type ActionSlotKind =
-    | 'hid'
-    | 'modifier'
-    | 'layer'
-    | 'number'
-    | 'enum'
-    | 'action'
+    'hid' | 'modifier' | 'layer' | 'number' | 'enum' | 'action'
 
 export interface ActionSlot {
     // pattern-check: skip additive optional field on existing interface

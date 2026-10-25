@@ -119,17 +119,10 @@ export function emitEncoderSensors(
         warnedPress = true
     }
 
-    // Per-key encoder model: positions tagged element:'encoder', in index order.
-    // The sensor index is this order, so every layer that binds ANY encoder must
-    // emit a token for ALL of them (missing → transparent) to stay aligned.
-    const trans: CanonAction = { type: 'transparent' }
-    const encoderKeys = config.keyboard.keys
-        .map((k, i) => (k.element === 'encoder' ? i : -1))
-        .filter((i) => i >= 0)
-
+    // Slots in order = sensor order (aligned to keyboard.encoders[]). A knob
+    // key's press is its own binding, so only an unlinked slot can carry one.
     config.layers.forEach((layer, li) => {
         const tokens: string[] = []
-        // Legacy slot-indexed encoders[] (aligned to keyboard.encoders[]).
         layer.encoders?.forEach((e, ei) => {
             if (e.press) warnPress(['layers', li, 'encoders', ei, 'press'])
             tokens.push(
@@ -141,28 +134,6 @@ export function emitEncoderSensors(
                 ]),
             )
         })
-        // Per-key encoderBindings (builder element model).
-        if (
-            encoderKeys.length &&
-            Object.keys(layer.encoderBindings ?? {}).length
-        ) {
-            encoderKeys.forEach((ki) => {
-                const e = layer.encoderBindings?.[ki] ?? {
-                    cw: trans,
-                    ccw: trans,
-                }
-                if (e.press)
-                    warnPress(['layers', li, 'encoderBindings', ki, 'press'])
-                tokens.push(
-                    pairToken(e.cw, e.ccw, `${li}_k${ki}`, [
-                        'layers',
-                        li,
-                        'encoderBindings',
-                        ki,
-                    ]),
-                )
-            })
-        }
         if (tokens.length) byLayer.set(li, tokens.join(' '))
     })
 

@@ -337,7 +337,10 @@ export function raiseMockToConfig(
 
     // A representable runtime binding wins; an unrecognized kind, or a
     // transparent over a rich prior, keeps the prior.
-    const merge = (ka: KeyAction, prev: CanonAction | undefined): CanonAction => {
+    const merge = (
+        ka: KeyAction,
+        prev: CanonAction | undefined,
+    ): CanonAction => {
         const raised = raiseAction(ka, layerNames)
         if (raised === null) return prev ?? { type: 'transparent' }
         if (raised.type === 'transparent' && isNonRepresentable(prev)) {
@@ -404,6 +407,7 @@ export function configToPhysicalLayout(config: ConfigKeymap): PhysicalLayout {
     const encoders = config.keyboard.encoders?.map((e) => ({
         x: Math.round(e.x * U),
         y: Math.round(e.y * U),
+        ...(e.key !== undefined ? { key: e.key } : {}),
     }))
     return {
         id: 0,

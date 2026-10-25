@@ -165,7 +165,11 @@ function lowerAction(
         case 'transparent':
             return transparent()
         case 'battery_show':
-            return buildRemapprKeyAction(REMAPPR_KIND_BATTERY_SHOW, [], layerNames)
+            return buildRemapprKeyAction(
+                REMAPPR_KIND_BATTERY_SHOW,
+                [],
+                layerNames,
+            )
         default:
             warn(
                 `"${a.type}" is not representable in the editor runtime; shown as transparent (preserved in config)`,
@@ -309,7 +313,10 @@ export function raiseNeutralToConfig(
         const prevLayer = prevConfig.layers[li]
         const bindings = rl.keys.map((ka, bi) => {
             const prev = prevLayer?.bindings[bi]
-            if (prev && sameRuntimeForm(ka, lowerAction(prev, layerNames, prevPools))) {
+            if (
+                prev &&
+                sameRuntimeForm(ka, lowerAction(prev, layerNames, prevPools))
+            ) {
                 return prev
             }
             const raised = raiseAction(ka, layerNames, prevPools)
@@ -322,9 +329,6 @@ export function raiseNeutralToConfig(
                 : {}),
             bindings,
             ...(prevLayer?.encoders ? { encoders: prevLayer.encoders } : {}),
-            ...(prevLayer?.encoderBindings
-                ? { encoderBindings: prevLayer.encoderBindings }
-                : {}),
             ...(prevLayer?.sliderBindings
                 ? { sliderBindings: prevLayer.sliderBindings }
                 : {}),

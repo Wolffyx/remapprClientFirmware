@@ -384,12 +384,17 @@ describe('builder metadata fields', () => {
         expect(km.keyboard.hardware?.extPowerCtrl?.controlGpio).toBe('P0.14')
         expect(km.keyboard.hardware?.battery).toEqual({ pin: 'D21' })
         expect(km.keyboard.hardware?.studioAcm).toBe(true)
+        // The older per-key turns move into a slot linked to the knob key;
+        // the press becomes the key's own binding.
         const base = km.layers[0]
-        expect(base.encoderBindings?.[0]).toMatchObject({
-            cw: { type: 'key_press' },
-            ccw: { type: 'key_press' },
-            press: { type: 'key_press' },
+        expect(km.keyboard.encoders).toEqual([
+            { x: km.keyboard.keys[0].x, y: km.keyboard.keys[0].y, key: 0 },
+        ])
+        expect(base.encoders?.[0]).toEqual({
+            cw: expect.objectContaining({ type: 'key_press' }),
+            ccw: expect.objectContaining({ type: 'key_press' }),
         })
+        expect(base.bindings[0]).toMatchObject({ type: 'key_press' })
     })
 
     it('round-trips the builder fields losslessly', () => {
@@ -415,7 +420,7 @@ describe('builder metadata fields', () => {
             false,
         )
         expect(km.keyboard.keys.some((k) => k.pin !== undefined)).toBe(false)
-        expect(km.layers.some((l) => l.encoderBindings !== undefined)).toBe(
+        expect(km.keyboard.encoders?.some((e) => e.key !== undefined)).toBe(
             false,
         )
     })
