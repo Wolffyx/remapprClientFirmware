@@ -201,6 +201,11 @@ export {
 } from './matrix'
 export { resolveController } from './controller'
 export {
+    type DocumentDescription,
+    describeDocument,
+    layoutFingerprint,
+} from './describe'
+export {
     checkCompleteness,
     effectiveFirmware,
     type FirmwareReadiness,
