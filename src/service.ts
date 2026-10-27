@@ -1,4 +1,5 @@
 import type { KeyCatalog } from './catalog/types'
+import type { IdentityApi } from './identity'
 import type { KeycodeCodec } from './codec'
 import type {
     ControlBinding,
@@ -893,6 +894,9 @@ export interface KeyboardService {
     /** The device's sensors: settings, procedures, readings. Present when the
      *  firmware serves them. */
     readonly sensor?: SensorApi
+    /** Identifiers to match this device against community device items
+     *  (`scheme:value`). Each client declares its own; absent = none. */
+    readonly identity?: IdentityApi
 
     getLockState(): Promise<LockState>
 

@@ -1,5 +1,12 @@
 // Pattern check: Adapter (Tier 1) — extended — backs src/firmware/adapter.ts FirmwareAdapter; ZMK-protocol KeyboardService implementation wrapping call_rpc.
 import {
+    activeLayoutSource,
+    createIdentity,
+    nameIdentifier,
+    usbIdentifier,
+    type IdentityApi,
+} from '@firmware/identity'
+import {
     call_rpc,
     Request,
     RequestResponse,
@@ -85,7 +92,9 @@ const ZMK_CAPABILITIES: Capabilities = {
 /** Human-readable reason for a ZMK Studio `saveChanges` failure, mapped from the
  *  SaveChangesErrorCode the keyboard returned, so the UI tells the user WHY a save
  *  failed instead of surfacing a bare numeric code. */
-function saveChangesErrorMessage(err: SaveChangesErrorCode | undefined): string {
+function saveChangesErrorMessage(
+    err: SaveChangesErrorCode | undefined,
+): string {
     switch (err) {
         case SaveChangesErrorCode.SAVE_CHANGES_ERR_NO_SPACE:
             return 'Save failed: the keyboard’s settings storage is full.'
@@ -150,6 +159,13 @@ export class ZmkKeyboardService implements KeyboardService {
     private notificationLoop: Promise<void> | null = null
     private readonly notificationAbort = new AbortController()
     public readonly deviceInfo: DeviceInfo
+    /** USB ids, the ZMK device name and the active layout's hash. The shared
+     *  ZMK VID:PID matches nothing on its own; the cloud ignores it. */
+    public readonly identity: IdentityApi = createIdentity([
+        () => usbIdentifier(this.deviceInfo),
+        () => nameIdentifier('zmk_name', this.deviceInfo.name),
+        activeLayoutSource(() => this.getPhysicalLayouts()),
+    ])
 
     constructor(connection: RpcConnection, deviceInfo: DeviceInfo) {
         this.connection = connection
@@ -304,9 +320,7 @@ export class ZmkKeyboardService implements KeyboardService {
             .then((resp) => {
                 const got = resp.keymap?.getPhysicalLayouts
                 if (!got)
-                    throw new ProtocolError(
-                        'getPhysicalLayouts returned empty',
-                    )
+                    throw new ProtocolError('getPhysicalLayouts returned empty')
                 this.layouts = got
                 return got
             })

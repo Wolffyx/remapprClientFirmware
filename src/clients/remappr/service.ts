@@ -4,6 +4,12 @@
 // editor's keyboard model. Config-as-source-of-truth: device read → decode →
 // lower to a neutral editing buffer; edits mutate the buffer; commit raises →
 // compiles → seals the blob back.
+import {
+    activeLayoutSource,
+    createIdentity,
+    usbIdentifier,
+    type IdentityApi,
+} from '@firmware/identity'
 import { filterCatalogByCodec } from '../../catalog/filter'
 import type { KeyCatalog } from '../../catalog/types'
 import type {
@@ -148,6 +154,12 @@ export class RemapprKeyboardService
     implements KeyboardService, ConfigEditingApi
 {
     public readonly deviceInfo: DeviceInfo
+    /** USB ids and the layout's hash. The protocol reports no model id, so
+     *  no remappr_model identifier yet. */
+    public readonly identity: IdentityApi = createIdentity([
+        () => usbIdentifier(this.deviceInfo),
+        activeLayoutSource(() => this.getPhysicalLayouts()),
+    ])
     public readonly capabilities: Capabilities
     /** `'dongle'` for the dongle's own service, `'mouse'` for a mouse;
      *  `'keyboard'` (default) otherwise. */
