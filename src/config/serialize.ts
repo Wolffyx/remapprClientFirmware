@@ -36,7 +36,8 @@ import type {
 // start-to-finish. External callers (e.g. the inspector) get the universal base.
 let activeDefaults: TargetDefaults = resolveDefaults(null)
 
-const FRIENDLY_MOD: Record<Modifier, string> = {
+/** The surface spelling of a modifier in a chord ("Ctrl" in "Ctrl+C"). */
+export const FRIENDLY_MOD: Record<Modifier, string> = {
     LEFT_CTRL: 'Ctrl',
     LEFT_SHIFT: 'Shift',
     LEFT_ALT: 'Alt',

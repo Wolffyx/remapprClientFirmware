@@ -206,6 +206,12 @@ export {
     layoutFingerprint,
 } from './describe'
 export {
+    type ChangeOp,
+    type DocumentChange,
+    type DocumentDiff,
+    diffDocuments,
+} from './diff'
+export {
     checkCompleteness,
     effectiveFirmware,
     type FirmwareReadiness,
