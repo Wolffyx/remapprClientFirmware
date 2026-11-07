@@ -117,6 +117,8 @@ export function buildQmkKeyboardJson(
 
     const json: Record<string, unknown> = {
         keyboard_name: meta.name,
+        // QMK builds the USB manufacturer string from it: no build without.
+        manufacturer: meta.author || 'Unknown',
         ...(meta.author ? { maintainer: meta.author } : {}),
         usb,
         ...identity(ctrl),

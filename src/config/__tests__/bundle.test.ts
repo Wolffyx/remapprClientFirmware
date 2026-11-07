@@ -346,6 +346,8 @@ describe('buildProjectBundle — QMK', () => {
         const json = JSON.parse(fileText(b, 'keyboards/plank/keyboard.json'))
         expect(json.keyboard_name).toBe('Plank')
         expect(json.maintainer).toBe('me')
+        // QMK needs it for the USB manufacturer string.
+        expect(json.manufacturer).toBe('me')
         expect(json.usb).toEqual({
             vid: '0x1234',
             pid: '0x5678',
@@ -560,5 +562,29 @@ describe('QMK workflow source', () => {
 
     it('leaves a Vial workflow alone (it is current, not an old one)', () => {
         expect(upgradedWorkflow(wf, fileText(withFirmware(['vial']), wf))).toBeNull()
+    })
+
+    it('calls the reusable workflow at its real path, granting what it asks', () => {
+        const text = fileText(withFirmware(['qmk']), wf)
+        expect(text).toContain(
+            'uses: qmk/.github/.github/workflows/qmk_userspace_build.yml@main',
+        )
+        expect(text).toMatch(/ {2}build:\n {4}uses: .*\n {4}permissions:\n {6}contents: write\n/)
+        // A userspace keyboard is copied into QMK's tree before the build.
+        expect(text).toContain(
+            'preparation_command: cp -r keyboards/. qmk_firmware/keyboards/',
+        )
+    })
+
+    it('upgrades the earlier release workflow of each source to its own', () => {
+        for (const fw of [['qmk'], ['vial']]) {
+            const current = fileText(withFirmware(fw), wf)
+            const old = current
+                .replace('qmk/.github/.github/workflows/', 'qmk/.github/workflows/')
+                .replace('    permissions:\n      contents: write\n    with:', '    with:')
+                .replace(/\n {6}preparation_command: .*/, '')
+            expect(old).not.toBe(current)
+            expect(upgradedWorkflow(wf, old)).toBe(current)
+        }
     })
 })

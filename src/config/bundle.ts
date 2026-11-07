@@ -390,7 +390,35 @@ const QMK_SOURCES = {
     vial: { repo: 'vial-kb/vial-qmk', ref: 'vial' },
 } as const
 
-const qmkBuildJob = (source: { repo: string; ref: string }): string[] => [
+type QmkSource = { repo: string; ref: string }
+
+// The reusable workflow lives in the qmk/.github repo, under its own
+// .github/workflows/. It asks for `contents: write`, which the calling job
+// has to grant (a repo's default token may be read-only).
+// A userspace overlays keymaps, not keyboards: QMK only finds a keyboard
+// under qmk_firmware/keyboards/, so the build copies ours in first.
+const QMK_COPY_KEYBOARDS = 'cp -r keyboards/. qmk_firmware/keyboards/'
+
+const qmkBuildJob = (source: QmkSource): string[] => [
+    `name: Build QMK firmware`,
+    `on: [push, pull_request, workflow_dispatch]`,
+    `jobs:`,
+    `  build:`,
+    `    uses: qmk/.github/.github/workflows/qmk_userspace_build.yml@main`,
+    `    permissions:`,
+    `      contents: write`,
+    `    with:`,
+    `      qmk_repo: ${source.repo}`,
+    `      qmk_ref: ${source.ref}`,
+    `      preparation_command: ${QMK_COPY_KEYBOARDS}`,
+]
+
+const qmkBuildWorkflow = (source: QmkSource): string =>
+    [...qmkBuildJob(source), ...RELEASE_JOB, ``].join('\n')
+
+// Earlier QMK workflows, kept so a repo still holding one can be upgraded.
+// Both named a path that is not in qmk/.github, so they never built.
+const qmkBrokenJob = (source: QmkSource): string[] => [
     `name: Build QMK firmware`,
     `on: [push, pull_request, workflow_dispatch]`,
     `jobs:`,
@@ -400,25 +428,34 @@ const qmkBuildJob = (source: { repo: string; ref: string }): string[] => [
     `      qmk_repo: ${source.repo}`,
     `      qmk_ref: ${source.ref}`,
 ]
+// Before releases (P10f).
+const QMK_BUILD_WORKFLOW_V1 = [...qmkBrokenJob(QMK_SOURCES.qmk), ``].join('\n')
+// With releases (P10g), before the path fix.
+const qmkBuildWorkflowV2 = (source: QmkSource): string =>
+    [...qmkBrokenJob(source), ...RELEASE_JOB, ``].join('\n')
 
-const qmkBuildWorkflow = (source: { repo: string; ref: string }): string =>
-    [...qmkBuildJob(source), ...RELEASE_JOB, ``].join('\n')
-
-// Before releases (P10f): kept so a repo still holding it can be upgraded.
-const QMK_BUILD_WORKFLOW_V1 = [...qmkBuildJob(QMK_SOURCES.qmk), ``].join('\n')
-
-const QMK_BUILD_WORKFLOW = qmkBuildWorkflow(QMK_SOURCES.qmk)
-
-/** Workflow files Remappr writes, with every earlier text it wrote there. */
-const WORKFLOW_VERSIONS: Record<string, { current: string; earlier: string[] }> = {
-    '.github/workflows/build.yml': {
-        current: ZMK_BUILD_WORKFLOW,
-        earlier: [ZMK_BUILD_WORKFLOW_V1],
-    },
-    '.github/workflows/build_binaries.yml': {
-        current: QMK_BUILD_WORKFLOW,
-        earlier: [QMK_BUILD_WORKFLOW_V1],
-    },
+/** Workflow files Remappr writes: each text it writes there today, with
+ *  the earlier texts that upgrade to it. */
+const WORKFLOW_VERSIONS: Record<
+    string,
+    { current: string; earlier: string[] }[]
+> = {
+    '.github/workflows/build.yml': [
+        { current: ZMK_BUILD_WORKFLOW, earlier: [ZMK_BUILD_WORKFLOW_V1] },
+    ],
+    '.github/workflows/build_binaries.yml': [
+        {
+            current: qmkBuildWorkflow(QMK_SOURCES.qmk),
+            earlier: [
+                QMK_BUILD_WORKFLOW_V1,
+                qmkBuildWorkflowV2(QMK_SOURCES.qmk),
+            ],
+        },
+        {
+            current: qmkBuildWorkflow(QMK_SOURCES.vial),
+            earlier: [qmkBuildWorkflowV2(QMK_SOURCES.vial)],
+        },
+    ],
 }
 
 /**
@@ -427,9 +464,8 @@ const WORKFLOW_VERSIONS: Record<string, { current: string; earlier: string[] }> 
  * already current, edited by hand, or not Remappr's.
  */
 export function upgradedWorkflow(path: string, text: string): string | null {
-    const known = WORKFLOW_VERSIONS[path]
-    if (!known || text === known.current) return null
-    return known.earlier.includes(text) ? known.current : null
+    const known = WORKFLOW_VERSIONS[path] ?? []
+    return known.find((v) => v.earlier.includes(text))?.current ?? null
 }
 
 /** The workflow paths Remappr writes (any target). */
@@ -486,7 +522,9 @@ function qmkBundle(config: ConfigKeymap, target: Target): ProjectBundle {
         `3. Download the firmware artifact from the Actions run.`,
         ``,
         `## Build locally`,
+        `QMK finds keyboards only in its own tree, so copy this one in first:`,
         `\`\`\`sh`,
+        `cp -r ${kbDir} "$(qmk config -ro user.qmk_home | cut -d= -f2)/keyboards/"`,
         `qmk userspace-compile`,
         `# or: qmk compile -kb ${kb} -km ${km}`,
         `\`\`\``,
