@@ -382,21 +382,32 @@ function zmkSplitBundle(
 
 /* ── QMK ─────────────────────────────────────────────────────────────────── */
 
-const QMK_BUILD_JOB = [
+// The QMK a userspace builds against: upstream, or the Vial fork for a Vial
+// keymap (VIAL_ENABLE needs vial-qmk; upstream QMK has no Vial). VIA builds
+// on upstream.
+const QMK_SOURCES = {
+    qmk: { repo: 'qmk/qmk_firmware', ref: 'master' },
+    vial: { repo: 'vial-kb/vial-qmk', ref: 'vial' },
+} as const
+
+const qmkBuildJob = (source: { repo: string; ref: string }): string[] => [
     `name: Build QMK firmware`,
     `on: [push, pull_request, workflow_dispatch]`,
     `jobs:`,
     `  build:`,
     `    uses: qmk/.github/workflows/qmk_userspace_build.yml@main`,
     `    with:`,
-    `      qmk_repo: qmk/qmk_firmware`,
-    `      qmk_ref: master`,
+    `      qmk_repo: ${source.repo}`,
+    `      qmk_ref: ${source.ref}`,
 ]
 
-// Before releases (P10f): kept so a repo still holding it can be upgraded.
-const QMK_BUILD_WORKFLOW_V1 = [...QMK_BUILD_JOB, ``].join('\n')
+const qmkBuildWorkflow = (source: { repo: string; ref: string }): string =>
+    [...qmkBuildJob(source), ...RELEASE_JOB, ``].join('\n')
 
-const QMK_BUILD_WORKFLOW = [...QMK_BUILD_JOB, ...RELEASE_JOB, ``].join('\n')
+// Before releases (P10f): kept so a repo still holding it can be upgraded.
+const QMK_BUILD_WORKFLOW_V1 = [...qmkBuildJob(QMK_SOURCES.qmk), ``].join('\n')
+
+const QMK_BUILD_WORKFLOW = qmkBuildWorkflow(QMK_SOURCES.qmk)
 
 /** Workflow files Remappr writes, with every earlier text it wrote there. */
 const WORKFLOW_VERSIONS: Record<string, { current: string; earlier: string[] }> = {
@@ -519,7 +530,10 @@ function qmkBundle(config: ConfigKeymap, target: Target): ProjectBundle {
         text(`${base}/rules.mk`, rulesMk),
         text(`${base}/config.h`, configH),
         text(`qmk.json`, qmkJson + '\n'),
-        text(`.github/workflows/build_binaries.yml`, QMK_BUILD_WORKFLOW),
+        text(
+            `.github/workflows/build_binaries.yml`,
+            qmkBuildWorkflow(wantsVial ? QMK_SOURCES.vial : QMK_SOURCES.qmk),
+        ),
         text(`README.md`, readme),
     ]
     if (viaJson)

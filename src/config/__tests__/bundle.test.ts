@@ -535,3 +535,30 @@ describe('release workflows', () => {
         expect(WORKFLOW_PATHS).toContain(path)
     })
 })
+
+describe('QMK workflow source', () => {
+    const withFirmware = (firmware: string[]) =>
+        buildProjectBundle(
+            { ...seedConfig, keyboard: { ...seedConfig.keyboard, firmware } },
+            'qmk',
+        )
+    const wf = '.github/workflows/build_binaries.yml'
+
+    it('builds a Vial keymap against vial-qmk', () => {
+        const text = fileText(withFirmware(['vial']), wf)
+        expect(text).toContain('qmk_repo: vial-kb/vial-qmk')
+        expect(text).toContain('qmk_ref: vial')
+        expect(text).toContain(RELEASE_MARKER)
+    })
+
+    it('builds QMK and VIA against upstream QMK', () => {
+        for (const fw of [['qmk'], ['via']])
+            expect(fileText(withFirmware(fw), wf)).toContain(
+                'qmk_repo: qmk/qmk_firmware',
+            )
+    })
+
+    it('leaves a Vial workflow alone (it is current, not an old one)', () => {
+        expect(upgradedWorkflow(wf, fileText(withFirmware(['vial']), wf))).toBeNull()
+    })
+})
