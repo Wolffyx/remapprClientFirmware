@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { buildProjectBundle, parseKeymap } from '../index'
+import {
+    buildProjectBundle,
+    parseKeymap,
+    RELEASE_MARKER,
+    upgradedWorkflow,
+    WORKFLOW_PATHS,
+} from '../index'
 
 const seed = readFileSync(
     fileURLToPath(new URL('../../clients/mock/seed.keymap.json', import.meta.url)),
@@ -493,5 +499,39 @@ describe('buildProjectBundle — Remappr shield', () => {
         const alias = buildProjectBundle(seedConfig, 'remappr')
         expect(paths(alias)).toEqual(paths(board))
         expect(alias.rootName).toBe(board.rootName)
+    })
+})
+
+describe('release workflows', () => {
+    const zmkV1 = [
+        'name: Build ZMK firmware',
+        'on: [push, pull_request, workflow_dispatch]',
+        'jobs:',
+        '  build:',
+        '    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@v0.3',
+        '',
+    ].join('\n')
+
+    it('attaches the firmware to the release of a v* tag (ZMK and QMK)', () => {
+        for (const [target, path] of [
+            ['zmk', '.github/workflows/build.yml'],
+            ['qmk', '.github/workflows/build_binaries.yml'],
+        ] as const) {
+            const text = fileText(buildProjectBundle(seedConfig, target), path)
+            expect(text).toContain(RELEASE_MARKER)
+            expect(text).toContain("if: startsWith(github.ref, 'refs/tags/v')")
+            expect(text).toContain('gh release upload "$GITHUB_REF_NAME"')
+            expect(text).toContain('GH_TOKEN: ${{ github.token }}')
+        }
+    })
+
+    it('upgrades a workflow Remappr wrote before, and nothing else', () => {
+        const path = '.github/workflows/build.yml'
+        const current = fileText(buildProjectBundle(seedConfig, 'zmk'), path)
+        expect(upgradedWorkflow(path, zmkV1)).toBe(current)
+        expect(upgradedWorkflow(path, current)).toBeNull()
+        expect(upgradedWorkflow(path, `${zmkV1}# mine\n`)).toBeNull()
+        expect(upgradedWorkflow('.github/workflows/other.yml', zmkV1)).toBeNull()
+        expect(WORKFLOW_PATHS).toContain(path)
     })
 })

@@ -58,12 +58,56 @@ const text = (filename: string, content: string): ExportedFile => ({
 // it here and the workflow, the west manifest and the README all follow.
 const ZMK_REVISION = 'v0.3'
 
+/** Marks a workflow that attaches its firmware to GitHub Releases. */
+export const RELEASE_MARKER = 'remappr:release'
+
+// On a v* tag (Remappr's "Release to GitHub" makes one with its Release),
+// attach every firmware file the build produced to that tag's Release. The
+// build job's artifacts are downloaded whatever their names, so the same job
+// serves the ZMK and QMK reusable workflows.
+const RELEASE_JOB = [
+    `  # ${RELEASE_MARKER}: attaches the firmware to the GitHub Release of a v* tag.`,
+    `  release:`,
+    `    if: startsWith(github.ref, 'refs/tags/v')`,
+    `    needs: build`,
+    `    runs-on: ubuntu-latest`,
+    `    permissions:`,
+    `      contents: write`,
+    `    steps:`,
+    `      - uses: actions/download-artifact@v4`,
+    `        with:`,
+    `          path: firmware`,
+    `          merge-multiple: true`,
+    `      - name: Attach the firmware to the release`,
+    `        env:`,
+    '          GH_TOKEN: ${{ github.token }}',
+    '          GH_REPO: ${{ github.repository }}',
+    `        run: |`,
+    `          shopt -s globstar nullglob`,
+    `          files=(firmware/**/*.uf2 firmware/**/*.hex firmware/**/*.bin)`,
+    '          [ ${#files[@]} -gt 0 ] || { echo "No firmware files were built."; exit 1; }',
+    `          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||`,
+    `            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes ""`,
+    '          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber',
+]
+
+// Before releases (P10f): kept so a repo still holding it can be upgraded.
+const ZMK_BUILD_WORKFLOW_V1 = [
+    `name: Build ZMK firmware`,
+    `on: [push, pull_request, workflow_dispatch]`,
+    `jobs:`,
+    `  build:`,
+    `    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@${ZMK_REVISION}`,
+    ``,
+].join('\n')
+
 const ZMK_BUILD_WORKFLOW = [
     `name: Build ZMK firmware`,
     `on: [push, pull_request, workflow_dispatch]`,
     `jobs:`,
     `  build:`,
     `    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@${ZMK_REVISION}`,
+    ...RELEASE_JOB,
     ``,
 ].join('\n')
 
@@ -338,7 +382,7 @@ function zmkSplitBundle(
 
 /* ── QMK ─────────────────────────────────────────────────────────────────── */
 
-const QMK_BUILD_WORKFLOW = [
+const QMK_BUILD_JOB = [
     `name: Build QMK firmware`,
     `on: [push, pull_request, workflow_dispatch]`,
     `jobs:`,
@@ -347,8 +391,38 @@ const QMK_BUILD_WORKFLOW = [
     `    with:`,
     `      qmk_repo: qmk/qmk_firmware`,
     `      qmk_ref: master`,
-    ``,
-].join('\n')
+]
+
+// Before releases (P10f): kept so a repo still holding it can be upgraded.
+const QMK_BUILD_WORKFLOW_V1 = [...QMK_BUILD_JOB, ``].join('\n')
+
+const QMK_BUILD_WORKFLOW = [...QMK_BUILD_JOB, ...RELEASE_JOB, ``].join('\n')
+
+/** Workflow files Remappr writes, with every earlier text it wrote there. */
+const WORKFLOW_VERSIONS: Record<string, { current: string; earlier: string[] }> = {
+    '.github/workflows/build.yml': {
+        current: ZMK_BUILD_WORKFLOW,
+        earlier: [ZMK_BUILD_WORKFLOW_V1],
+    },
+    '.github/workflows/build_binaries.yml': {
+        current: QMK_BUILD_WORKFLOW,
+        earlier: [QMK_BUILD_WORKFLOW_V1],
+    },
+}
+
+/**
+ * A workflow as Remappr writes it today, when `text` is one Remappr wrote
+ * before (untouched since): the upgrade is safe. Null when the file is
+ * already current, edited by hand, or not Remappr's.
+ */
+export function upgradedWorkflow(path: string, text: string): string | null {
+    const known = WORKFLOW_VERSIONS[path]
+    if (!known || text === known.current) return null
+    return known.earlier.includes(text) ? known.current : null
+}
+
+/** The workflow paths Remappr writes (any target). */
+export const WORKFLOW_PATHS: readonly string[] = Object.keys(WORKFLOW_VERSIONS)
 
 function qmkBundle(config: ConfigKeymap, target: Target): ProjectBundle {
     const kb = sanitize(config.keyboard.id || config.meta.name)

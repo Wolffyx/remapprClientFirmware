@@ -270,7 +270,13 @@ export {
     registerCompiler,
 } from './compiler'
 
-export { type ProjectBundle, buildProjectBundle } from './bundle'
+export {
+    type ProjectBundle,
+    buildProjectBundle,
+    RELEASE_MARKER,
+    upgradedWorkflow,
+    WORKFLOW_PATHS,
+} from './bundle'
 export {
     type DeviceCaps,
     type PreflightIssue,
