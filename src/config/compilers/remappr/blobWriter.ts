@@ -536,6 +536,11 @@ export const DeviceAction = {
     sniper: 5,
 } as const
 
+/** Action kind SYSTEM (firmware action.h): a system verb, `code` = enum
+ *  remappr_system_action (SystemAction). A mouse or joystick node does only
+ *  battery_show (remappr_personality_can_system). */
+export const ACT_SYSTEM = 4
+
 /** Gamepad action kinds (firmware action.h): a button 1..32, a hat direction
  *  0..7, an axis 0..5 held at an i16 value (arg0). */
 export const ACT_NONE = 0

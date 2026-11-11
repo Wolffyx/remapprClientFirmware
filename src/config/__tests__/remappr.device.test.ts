@@ -251,6 +251,19 @@ describe('mouse device document (device-config plan, step 3)', () => {
             expect(blob.length).toBe(20 + 12 + 8 + 16)
         })
 
+        it('writes show-battery as a SYSTEM record (kind 4, verb 11) and reads it back', () => {
+            const mouse = {
+                buttonActions: [null, null, null, null, null, { action: 'batteryShow' }, null, null],
+            }
+            const cfg = parseDeviceConfig(JSON.stringify({ ...STAGED, mouse }))
+            const blob = buildRemapprDeviceBlob(cfg, { configVersion: 6 })
+            // prettier-ignore
+            expect(Array.from(blob.subarray(blob.length - 10))).toEqual([
+                0x05, 0x00, 0x04, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00,
+            ])
+            expect(decodeRemapprDeviceBlob(blob).mouse).toEqual(mouse)
+        })
+
         it('refuses a stage past the list and a sniper without its DPI', () => {
             const bad = (mouse: unknown) => () =>
                 parseDeviceConfig(JSON.stringify({ ...STAGED, mouse }))
@@ -382,6 +395,17 @@ describe('joystick device config', () => {
         expect(
             buildRemapprDeviceBlob({ ...cfg, joystick: r.joystick }, { configVersion: 2 }),
         ).toEqual(blob)
+    })
+
+    it('writes show-battery as a SYSTEM record (kind 4, verb 11) and reads it back', () => {
+        const joystick = { buttonActions: [null, null, { action: 'batteryShow' }] }
+        const cfg = parseDeviceConfig(JSON.stringify({ ...JOY, joystick }))
+        const blob = buildRemapprDeviceBlob(cfg, { configVersion: 2 })
+        // prettier-ignore
+        expect(Array.from(blob.subarray(blob.length - 10))).toEqual([
+            0x02, 0x00, 0x04, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        expect(decodeRemapprDeviceBlob(blob).joystick).toEqual(joystick)
     })
 
     it('carries a radial stick in the axis flags (bit1)', () => {

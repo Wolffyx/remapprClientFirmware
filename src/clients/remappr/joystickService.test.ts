@@ -20,7 +20,7 @@ import {
     RemapprJoystickService,
     type JoystickServiceDeps,
 } from './joystickService'
-import type { AxisState, InputLayoutEntry } from './protocol'
+import { HwCap, type AxisState, type InputLayoutEntry } from './protocol'
 
 const entry = (
     cls: number,
@@ -321,6 +321,24 @@ describe('RemapprJoystickService', () => {
         expect(writes[0]?.joystick?.buttonActions?.[0]).toEqual({
             action: 'button',
             button: 9,
+        })
+        await svc.disconnect()
+    })
+
+    it('offers show-battery only with a battery, and writes it as a button action', async () => {
+        const ids = async (hwCaps?: number) =>
+            (await make({ hwCaps }).svc.controls.getCatalog()).actions.map((a) => a.id)
+        expect(await ids(HwCap.USB)).not.toContain('sys:battery')
+        expect(await ids(HwCap.USB | HwCap.BATTERY)).toContain('sys:battery')
+
+        const { svc, writes } = make({ hwCaps: HwCap.BATTERY })
+        await svc.controls.setBinding!('p0', 'btn:0', { a: 'sys:battery' })
+        await svc.commit()
+        expect(writes[0]?.joystick?.buttonActions?.[0]).toEqual({
+            action: 'batteryShow',
+        })
+        expect((await svc.controls.getBindings('p0'))['btn:0']).toEqual({
+            a: 'sys:battery',
         })
         await svc.disconnect()
     })

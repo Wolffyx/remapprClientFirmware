@@ -9,6 +9,7 @@
 // ones back. A view through the dongle is read-only.
 import type { ConfigDevice } from '../../config/device'
 import { ProtocolError } from '../../errors'
+import { withBatteryShow } from '../../devices/battery'
 import { KeylessServiceBase } from '../../devices/keylessService'
 import {
     createLayoutOverride,
@@ -390,17 +391,31 @@ export class RemapprMouseService extends KeylessServiceBase {
         }
     }
 
+    /** Show-battery is offered when the mouse has a battery, or a button
+     *  already binds it (so the bound action keeps its label). */
+    private offersBatteryShow(): boolean {
+        return (
+            !!this.capabilities.power?.battery ||
+            !!this.draft?.mouse?.buttonActions?.some(
+                (a) => a?.action === 'batteryShow',
+            )
+        )
+    }
+
     private readControls(): ControlsApi {
         return {
             getModel: () => Promise.resolve(this.layout.model()),
             getCatalog: async () => {
                 await this.load()
-                return mouseCatalog(
+                const catalog = mouseCatalog(
                     this.motionCfg,
                     this.rates,
                     this.draft?.mouse,
                     this.sensorInfo,
                 )
+                return this.offersBatteryShow()
+                    ? withBatteryShow(catalog)
+                    : catalog
             },
             getProfiles: () =>
                 Promise.resolve({ profiles: [PROFILE], activeId: PROFILE.id }),

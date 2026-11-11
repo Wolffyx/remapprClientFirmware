@@ -23,6 +23,7 @@ import type {
     MacroApi,
     MouseMotionApi,
     NodesApi,
+    SensorApi,
     UnicodeApi,
 } from '../../service'
 import type {
@@ -90,6 +91,7 @@ import {
     type LinkLimitKnob,
     Namespace,
     parseLinkLimits,
+    powerCapability,
     Status,
     statusName,
 } from './protocol'
@@ -139,6 +141,12 @@ export interface RemapprServiceDeps {
     /** §5.2-E unicode input-method facade — set on a directly-attached node
      *  advertising Cap.UNICODE; omitted otherwise. */
     unicode?: UnicodeApi
+    /** Hardware caps word (GET_PERSONALITY_MAP), for its power hardware
+     *  (battery, power off); omitted when the device reported none. */
+    hwCaps?: number
+    /** SENSOR facade — set where the firmware serves SENSOR (its parts: the
+     *  battery, sensors); omitted otherwise. */
+    sensor?: SensorApi
 }
 
 /** Round `b` up to a multiple of `align` with zero padding (flash alignment). */
@@ -181,6 +189,8 @@ export class RemapprKeyboardService
     /** §5.2-E host input method for `&unicode` bindings — present on a directly-
      *  attached node advertising Cap.UNICODE; omitted otherwise. */
     public readonly unicode?: UnicodeApi
+    /** Parts (battery, sensors) where the firmware serves SENSOR. */
+    public readonly sensor?: SensorApi
     /** Read-only macro list (§24): the active config's macros surfaced to the
      *  Macros tab by their real DT names. Editing (setMacro) lands with the
      *  round-trip; for now `readonly: true`. */
@@ -264,6 +274,7 @@ export class RemapprKeyboardService
         this.nodes = deps.nodes
         this.cluster = deps.cluster
         this.unicode = deps.unicode
+        this.sensor = deps.sensor
         this.limits = deps.limits
         this.deviceInfo = deps.deviceInfo
         // Knob slots from the device's layout so its turns validate on export.
@@ -288,6 +299,8 @@ export class RemapprKeyboardService
         // path's smaller max_sealed_chunk (16) does not apply to direct writes.
         this.sealedChunk = LEGACY_SEALED_CHUNK
 
+        // Battery / power off from the hw caps; its timeouts are node.power.
+        const power = powerCapability(deps.hwCaps)
         this.capabilities = {
             lock: 'none',
             rename: !this.readOnly,
@@ -304,6 +317,7 @@ export class RemapprKeyboardService
             persistence: true,
             maxLayers: this.maxLayers,
             readOnly: this.readOnly,
+            ...(power ? { power } : {}),
         }
 
         this.seedLayersFromConfig()
