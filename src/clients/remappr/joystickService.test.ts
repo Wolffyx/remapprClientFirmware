@@ -325,6 +325,28 @@ describe('RemapprJoystickService', () => {
         await svc.disconnect()
     })
 
+    it('offers the stick fields its AXES parts hold', async () => {
+        const fields = async (over: Partial<JoystickServiceDeps>) =>
+            (await make(over).svc.controls.getCatalog()).fields.stick
+        const all = ['out', 'inner', 'outer', 'round', 'curve', 'invY', 'click']
+        expect(await fields({})).toEqual(all)
+        expect(
+            await fields({ axesSettings: async () => undefined }),
+        ).toEqual(all)
+        expect(
+            await fields({
+                axesSettings: async () =>
+                    new Set(['deadzoneInner', 'axisInvert']),
+            }),
+        ).toEqual(['out', 'inner', 'invY', 'click'])
+        // A part list that cannot be read leaves every field offered.
+        expect(
+            await fields({
+                axesSettings: () => Promise.reject(new Error('GET_PARTS')),
+            }),
+        ).toEqual(all)
+    })
+
     it('offers show-battery only with a battery, and writes it as a button action', async () => {
         const ids = async (hwCaps?: number) =>
             (await make({ hwCaps }).svc.controls.getCatalog()).actions.map((a) => a.id)

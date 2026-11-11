@@ -19,6 +19,7 @@ import type {
     JoystickButtonAction,
 } from '../../config/types'
 import { JOYSTICK_AXIS_IDS } from '../../config/compilers/remappr/joystick'
+import { AXIS_SETTINGS } from './axesLayout'
 import { BATTERY_SHOW_ACTION } from '../../devices/battery'
 import { defaultLayout } from '../../devices/defaultLayout'
 import type {
@@ -237,9 +238,33 @@ function stickOutputs(
 }
 
 /** What the joystick can be set to. */
+/** A stick's shaping fields and the AXES part setting each needs. */
+const STICK_SHAPING: readonly (readonly [keyof StickBinding, string])[] = [
+    ['inner', AXIS_SETTINGS.inner],
+    ['outer', AXIS_SETTINGS.outer],
+    ['round', AXIS_SETTINGS.radial],
+    ['curve', AXIS_SETTINGS.curve],
+    ['invY', AXIS_SETTINGS.invert],
+]
+
+/** The stick fields: every shaping field, or (`axesSettings`, what the
+ *  device's AXES parts list) only those its parts hold. */
+function stickFields(
+    axesSettings?: ReadonlySet<string>,
+): (keyof StickBinding)[] {
+    const shaping = STICK_SHAPING.filter(
+        ([, setting]) => !axesSettings || axesSettings.has(setting),
+    ).map(([field]) => field)
+    return ['out', ...shaping, 'click']
+}
+
+/** The joystick's catalog. `axesSettings`, the settings its AXES parts list
+ *  (firmware that keeps the shaping in the part), narrows the stick fields to
+ *  what the device holds; absent, all of them. */
 export function joystickCatalog(
     j: ConfigJoystick | undefined,
     inputs: ReadonlyMap<string, InputLayoutEntry>,
+    axesSettings?: ReadonlySet<string>,
 ): ControlsCatalog {
     return {
         groups: [
@@ -265,7 +290,7 @@ export function joystickCatalog(
         outputs: { stick: stickOutputs(j, inputs) },
         fields: {
             button: ['a'],
-            stick: ['out', 'inner', 'outer', 'round', 'curve', 'invY', 'click'],
+            stick: stickFields(axesSettings),
             hat: ['up', 'down', 'left', 'right', 'ways'],
         },
     }

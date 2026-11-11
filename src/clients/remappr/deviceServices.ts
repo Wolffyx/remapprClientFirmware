@@ -17,6 +17,7 @@ import { buildMouseMotionApi } from './mouse'
 import { Namespace } from './protocol'
 import { getRateLimits, setReportRate } from './reportRate'
 import type { RemapprRpc } from './rpc'
+import type { SensorApi } from '../../service'
 import {
     buildSensorApi,
     listSensors,
@@ -118,6 +119,33 @@ function axesOf(
     }
 }
 
+/** The settings the AXES parts list, read once (with every part's
+ *  description); undefined without AXES parts. */
+function settingsOf(
+    sensor: SensorApi,
+    axes: () => Promise<AxesLayout | undefined>,
+): () => Promise<ReadonlySet<string> | undefined> {
+    let pending: Promise<ReadonlySet<string> | undefined> | null = null
+    const read = async (): Promise<ReadonlySet<string> | undefined> => {
+        const layout = await axes()
+        if (!layout) return undefined
+        const ours = new Set(layout.parts.map((p) => p.part))
+        const parts = await sensor.getSensors()
+        return new Set(
+            parts
+                .filter((p) => ours.has(p.index))
+                .flatMap((p) => p.settings.map((s) => s.name)),
+        )
+    }
+    return () => {
+        pending ??= read().catch((e: unknown) => {
+            pending = null
+            throw e
+        })
+        return pending
+    }
+}
+
 /** A joystick, edited in the device editor and drawn from its own layout,
  *  with live calibration. */
 export async function buildJoystickService(
@@ -133,6 +161,8 @@ export async function buildJoystickService(
         ? buildSensorApi(rpc, { targetNode, writable: true })
         : undefined
     const axes = sensor ? axesOf(rpc, targetNode) : undefined
+    const axesSettings =
+        sensor && axes ? settingsOf(sensor, axes) : undefined
     return new RemapprJoystickService({
         deviceInfo,
         limits: discovery.limits,
@@ -152,6 +182,7 @@ export async function buildJoystickService(
                   ...(sensor && axes ? { axes: { layout: axes, sensor } } : {}),
               })
             : undefined,
+        ...(axesSettings ? { axesSettings } : {}),
         writable: true,
         hwCaps: discovery.personality?.hwCaps,
         layout,

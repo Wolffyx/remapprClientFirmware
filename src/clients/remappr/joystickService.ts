@@ -47,6 +47,9 @@ export interface JoystickServiceDeps {
     device?: DeviceConfigApi
     /** Live JOYSTICK verbs; absent when the firmware does not serve them. */
     joystick?: JoystickVerbs
+    /** The settings the device's AXES parts list (firmware that keeps the
+     *  sticks' shaping in the part); undefined when it has none. */
+    axesSettings?: () => Promise<ReadonlySet<string> | undefined>
     /** GET_PERSONALITY_MAP hw caps (battery, power off); absent = not reported. */
     hwCaps?: number
     /** False for a read-only view. */
@@ -268,6 +271,17 @@ export class RemapprJoystickService extends KeylessServiceBase {
         }
     }
 
+    /** What the AXES parts hold. A part list that cannot be read leaves
+     *  every stick field offered (the document holds them all) rather than
+     *  failing the whole catalog. */
+    private async axesSettings(): Promise<ReadonlySet<string> | undefined> {
+        try {
+            return await this.deps.axesSettings?.()
+        } catch {
+            return undefined
+        }
+    }
+
     private draftApi(): DeviceConfigDraft {
         return {
             get: () => this.draft,
@@ -306,7 +320,11 @@ export class RemapprJoystickService extends KeylessServiceBase {
             getModel: () => Promise.resolve(this.layout.model()),
             getCatalog: async () => {
                 await this.load()
-                const catalog = joystickCatalog(this.draft?.joystick, this.inputs)
+                const catalog = joystickCatalog(
+                    this.draft?.joystick,
+                    this.inputs,
+                    await this.axesSettings(),
+                )
                 return this.offersBatteryShow()
                     ? withBatteryShow(catalog)
                     : catalog
