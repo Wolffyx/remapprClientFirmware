@@ -6,6 +6,12 @@
 // ONLY the 0xE2/UCH router; the namespace is provisional (ns_version 0). The
 // SET_* verbs and CALIBRATE are mutating — product builds seal them (§19);
 // served plaintext while the device's control auth is dev-disabled.
+//
+// Firmware with AXES parts (docs/part-wire-v1.md §4) keeps each input's
+// shaping and calibration in the part: there the facade calibrates, sets
+// deadzones, invert and radial through the PART namespace, and keeps the
+// JOYSTICK verbs for what stays the joystick's (state, report axes, config).
+// JOYSTICK SET_DEADZONE / CALIBRATE are only bridged for one release.
 
 import {
     JOY_CAL_ALL,
@@ -24,10 +30,18 @@ import {
 } from './protocol'
 import { once, repeatable, type CallTarget, type RemapprRpc } from './rpc'
 import type { DiscoveryResult } from './discovery'
+import {
+    AXIS_CALIBRATION,
+    AXIS_SETTINGS,
+    type AxesChannel,
+    type AxesLayout,
+} from './axesLayout'
 import type {
     JoystickApi,
     JoystickAxisFlags,
     JoystickCalStep,
+    SensorApi,
+    SensorProcedureStep,
 } from '../../service'
 
 /** The JOYSTICK verbs as the wire has them: like JoystickApi, but calibrate
@@ -162,11 +176,113 @@ export async function setDeadzone(
     )
 }
 
+/** The AXES parts that hold a joystick's shaping and calibration. */
+export interface AxesPartAccess {
+    /** Where the inputs are; undefined when the device has no AXES part. */
+    layout(): Promise<AxesLayout | undefined>
+    sensor: SensorApi
+}
+
+const PART_STEPS: Readonly<Record<JoystickCalStep, SensorProcedureStep>> = {
+    begin: 'begin',
+    centre: 'next',
+    finish: 'next',
+    cancel: 'cancel',
+    reset: 'reset',
+    undo: 'undo',
+}
+
+function locate(layout: AxesLayout, input: number): AxesChannel {
+    const at = layout.locate(input)
+    if (!at) throw new Error(`The joystick has no analog input ${input}.`)
+    return at
+}
+
+/** What a finished calibration suggests for each input of `layout`, by input
+ *  (null where it measured nothing, or for an input it did not cover). */
+async function partSuggestions(
+    layout: AxesLayout,
+    sensor: SensorApi,
+    covered: (input: number) => boolean,
+): Promise<CalSuggestion[]> {
+    const out: CalSuggestion[] = []
+    for (let input = 0; input < layout.count; input++) {
+        const at = locate(layout, input)
+        const got = covered(input)
+            ? await sensor.getSuggestions(at.part, AXIS_CALIBRATION, at.ch)
+            : []
+        const pct = (name: string): number | null =>
+            got.find((g) => g.name === name)?.value ?? null
+        out.push({
+            inner: pct(AXIS_SETTINGS.inner),
+            outer: pct(AXIS_SETTINGS.outer),
+        })
+    }
+    return out
+}
+
+/** One calibration step through the AXES parts: on `input`'s channel, or on
+ *  every channel of every part. Finish resolves to the suggestions. */
+async function partCalibrate(
+    layout: AxesLayout,
+    sensor: SensorApi,
+    step: JoystickCalStep,
+    input?: number,
+): Promise<CalSuggestion[]> {
+    const targets =
+        input === undefined
+            ? layout.parts.map((p) => ({ part: p.part, ch: 'all' as const }))
+            : [locate(layout, input)]
+    for (const t of targets) {
+        await sensor.runProcedure(t.part, AXIS_CALIBRATION, PART_STEPS[step], t.ch)
+    }
+    if (step !== 'finish') return []
+    return partSuggestions(
+        layout,
+        sensor,
+        (i) => input === undefined || i === input,
+    )
+}
+
+/** Both deadzones of one channel. The part refuses a pair that reaches 100 %
+ *  at any moment, so if the first write is refused the other goes first. */
+async function partDeadzone(
+    sensor: SensorApi,
+    at: AxesChannel,
+    inner: number,
+    outer: number,
+): Promise<void> {
+    const set = (name: string, v: number) =>
+        sensor.setSetting(at.part, name, v, at.ch)
+    try {
+        await set(AXIS_SETTINGS.inner, inner)
+    } catch {
+        await set(AXIS_SETTINGS.outer, outer)
+        await set(AXIS_SETTINGS.inner, inner)
+        return
+    }
+    await set(AXIS_SETTINGS.outer, outer)
+}
+
+/** Invert and (when given) radial of one channel. */
+async function partFlags(
+    sensor: SensorApi,
+    at: AxesChannel,
+    flags: JoystickAxisFlags,
+): Promise<void> {
+    await sensor.setSetting(at.part, AXIS_SETTINGS.invert, flags.invert, at.ch)
+    if (flags.radial !== undefined) {
+        await sensor.setSetting(at.part, AXIS_SETTINGS.radial, flags.radial, at.ch)
+    }
+}
+
 /** The `service.joystick` facade. `writable` false keeps the reads and
- *  rejects every change. `targetNode` addresses a node behind the dongle. */
+ *  rejects every change. `targetNode` addresses a node behind the dongle.
+ *  With `axes`, calibration and shaping go through the AXES parts when the
+ *  device has them. */
 export function buildJoystickApi(
     rpc: RemapprRpc,
-    opts: { targetNode?: number; writable: boolean },
+    opts: { targetNode?: number; writable: boolean; axes?: AxesPartAccess },
 ): JoystickVerbs {
     const node = opts.targetNode ?? 0
     const guard = (): void => {
@@ -182,15 +298,25 @@ export function buildJoystickApi(
         getConfig: () => getAxisConfig(rpc, node),
         async calibrate(step, input) {
             guard()
-            return calibrate(rpc, step, input, node)
+            const layout = await opts.axes?.layout()
+            if (!layout || !opts.axes) return calibrate(rpc, step, input, node)
+            return partCalibrate(layout, opts.axes.sensor, step, input)
         },
         async setAxisMap(input, out, flags) {
             guard()
             await setAxisMap(rpc, input, out, flags, node)
+            const layout = await opts.axes?.layout()
+            if (!layout || !opts.axes) return
+            await partFlags(opts.axes.sensor, locate(layout, input), flags)
         },
         async setDeadzone(input, inner, outer) {
             guard()
-            await setDeadzone(rpc, input, { inner, outer }, node)
+            const layout = await opts.axes?.layout()
+            if (!layout || !opts.axes) {
+                await setDeadzone(rpc, input, { inner, outer }, node)
+                return
+            }
+            await partDeadzone(opts.axes.sensor, locate(layout, input), inner, outer)
         },
     }
 }

@@ -10,6 +10,8 @@ import {
     Status,
 } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
+import { axesLayout } from './axesLayout'
+import type { SensorApi } from '../../service'
 
 function fakeRpc(
     handler: (
@@ -204,5 +206,129 @@ describe('joystick wire (JOYSTICK namespace)', () => {
         expect((await api.getState()).buttons).toBe(0x11)
         await expect(api.calibrate('begin')).rejects.toThrow(/Read-only/)
         await expect(api.setDeadzone(0, 1, 1)).rejects.toThrow(/Read-only/)
+    })
+})
+
+describe('joystick through its AXES parts (PART namespace)', () => {
+    // Part 0 a battery, part 1 the stick (inputs 0-1), part 2 a slider pair
+    // (inputs 2-3).
+    const LAYOUT = axesLayout([
+        { index: 0, cls: 13, channels: 1 },
+        { index: 1, cls: 4, channels: 2 },
+        { index: 2, cls: 4, channels: 2 },
+    ])!
+
+    function harness(opts: { refuseFirst?: string } = {}) {
+        const calls: unknown[][] = []
+        const verbs: number[] = []
+        let refuse = opts.refuseFirst
+        const sensor = {
+            writable: true,
+            async setSetting(part: number, name: string, value: unknown, ch?: number) {
+                calls.push(['set', part, name, value, ch])
+                if (name === refuse) {
+                    refuse = undefined
+                    throw new Error('SET_SETTING → ERR_ARG')
+                }
+                return value
+            },
+            async runProcedure(part: number, name: string, step: string, ch?: unknown) {
+                calls.push(['run', part, name, step, ch])
+                return { state: 'running', phase: 1, progress: 0, total: 0 }
+            },
+            async getSuggestions(part: number, name: string, ch?: number) {
+                calls.push(['suggest', part, name, ch])
+                return part === 1 && ch === 1
+                    ? [
+                          { name: 'deadzoneInner', value: 4 },
+                          { name: 'deadzoneOuter', value: 6 },
+                      ]
+                    : []
+            },
+        } as unknown as SensorApi
+        const rpc = fakeRpc(async (_ns, verb) => {
+            verbs.push(verb)
+            return { status: Status.OK, data: new Uint8Array() }
+        })
+        const api = buildJoystickApi(rpc, {
+            writable: true,
+            axes: { layout: async () => LAYOUT, sensor },
+        })
+        return { api, calls, verbs }
+    }
+
+    it('runs a calibration step on the input\'s channel', async () => {
+        const { api, calls, verbs } = harness()
+        expect(await api.calibrate('centre', 3)).toEqual([])
+        expect(calls).toEqual([['run', 2, 'axisCalibration', 'next', 1]])
+        expect(verbs).toEqual([])
+    })
+
+    it('runs a step on every channel of every AXES part', async () => {
+        const { api, calls } = harness()
+        await api.calibrate('begin')
+        expect(calls).toEqual([
+            ['run', 1, 'axisCalibration', 'begin', 'all'],
+            ['run', 2, 'axisCalibration', 'begin', 'all'],
+        ])
+    })
+
+    it('finishes with what each covered input suggests, by input', async () => {
+        const { api, calls } = harness()
+        expect(await api.calibrate('finish', 1)).toEqual([
+            { inner: null, outer: null },
+            { inner: 4, outer: 6 },
+            { inner: null, outer: null },
+            { inner: null, outer: null },
+        ])
+        expect(calls.filter((c) => c[0] === 'suggest')).toEqual([
+            ['suggest', 1, 'axisCalibration', 1],
+        ])
+    })
+
+    it('sets both deadzones, the edge first when the centre is refused', async () => {
+        const plain = harness()
+        await plain.api.setDeadzone(2, 10, 5)
+        expect(plain.calls).toEqual([
+            ['set', 2, 'deadzoneInner', 10, 0],
+            ['set', 2, 'deadzoneOuter', 5, 0],
+        ])
+        const swapped = harness({ refuseFirst: 'deadzoneInner' })
+        await swapped.api.setDeadzone(0, 60, 0)
+        expect(swapped.calls).toEqual([
+            ['set', 1, 'deadzoneInner', 60, 0],
+            ['set', 1, 'deadzoneOuter', 0, 0],
+            ['set', 1, 'deadzoneInner', 60, 0],
+        ])
+    })
+
+    it('maps the report axis on the joystick and the flags on the part', async () => {
+        const { api, calls, verbs } = harness()
+        await api.setAxisMap(1, 0, { invert: true, radial: false })
+        expect(verbs).toEqual([JoystickVerb.SET_AXIS_MAP])
+        expect(calls).toEqual([
+            ['set', 1, 'axisInvert', true, 1],
+            ['set', 1, 'axisRadial', false, 1],
+        ])
+    })
+
+    it('uses the JOYSTICK verbs on a device without AXES parts', async () => {
+        const verbs: number[] = []
+        const rpc = fakeRpc(async (_ns, verb) => {
+            verbs.push(verb)
+            return { status: Status.OK, data: new Uint8Array() }
+        })
+        const api = buildJoystickApi(rpc, {
+            writable: true,
+            axes: { layout: async () => undefined, sensor: {} as SensorApi },
+        })
+        await api.calibrate('begin')
+        await api.setDeadzone(0, 4, 6)
+        expect(verbs).toEqual([JoystickVerb.CALIBRATE, JoystickVerb.SET_DEADZONE])
+    })
+
+    it('rejects an input no AXES part has', async () => {
+        const { api } = harness()
+        await expect(api.setDeadzone(4, 1, 1)).rejects.toThrow(/no analog input 4/)
     })
 })

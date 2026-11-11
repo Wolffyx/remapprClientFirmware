@@ -549,9 +549,13 @@ export const ACT_GAMEPAD_HAT = 17
 export const ACT_GAMEPAD_AXIS = 18
 
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_JOYSTICK layout
-/** TBL_JOYSTICK (id 28) v1: the hat ways (0 = 8) and one 8-byte entry per
- *  analog input it configures. */
+/** TBL_JOYSTICK (id 28): the hat ways (0 = 8) and one entry per analog input
+ *  it configures. v1 (8-byte entries) carries each input's report axis and
+ *  shaping; v2 (2-byte entries) the report axis only, the shaping then being
+ *  the AXES part's settings in TBL_PART (firmware docs/part-wire-v1.md §4). */
 export interface JoystickTable {
+    /** 1 when absent. */
+    version?: 1 | 2
     hatWays: number
     axes: Array<{
         input: number
@@ -569,6 +573,7 @@ export const JOY_FLAG_INVERT = 1 << 0
 export const JOY_FLAG_RADIAL = 1 << 1
 export const JOYSTICK_TBL_HDR_LEN = 2
 export const JOYSTICK_TBL_AXIS_LEN = 8
+export const JOYSTICK_TBL_AXIS_LEN_V2 = 2
 
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_PART layout
 /** One TBL_PART (id 29, was TBL_SENSOR) entry: a setting's value for one of
@@ -849,17 +854,19 @@ export class BlobBuilder {
     }
 
     // pattern-check: skip one more table-emit method on the existing Builder
-    /** TBL_JOYSTICK (id 28) v1: u8 hat_ways, u8 axis_count, then per entry
-     *  u8 input, u8 out_axis, u8 flags, u8 curve, u8 inner_pct, u8 outer_pct,
-     *  u16 reserved — matching firmware decode_joystick.c. */
+    /** TBL_JOYSTICK (id 28): u8 hat_ways, u8 axis_count, then per entry
+     *  u8 input, u8 out_axis and (v1 only) u8 flags, u8 curve, u8 inner_pct,
+     *  u8 outer_pct, u16 reserved — matching firmware decode_joystick.c. */
     joystickTable(j: JoystickTable): this {
-        this.tableBegin(TableId.Joystick, 1)
+        const version = j.version ?? 1
+        this.tableBegin(TableId.Joystick, version)
         this.w.u8(j.hatWays)
         this.w.u8(j.axes.length)
         for (const a of j.axes) {
-            for (const v of [a.input, a.out, a.flags, a.curve, a.inner, a.outer]) {
-                this.w.u8(v)
-            }
+            this.w.u8(a.input)
+            this.w.u8(a.out)
+            if (version === 2) continue
+            for (const v of [a.flags, a.curve, a.inner, a.outer]) this.w.u8(v)
             this.w.u16(0) // reserved
         }
         this.tableEnd()

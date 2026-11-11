@@ -8,6 +8,7 @@
 // own transport and a node behind the dongle; only the site differs — which
 // RPC it borrows or owns, and the short-id every call is addressed to.
 import type { DeviceInfo } from '../../types'
+import { type AxesLayout, axesLayout } from './axesLayout'
 import { buildDeviceConfigApi } from './deviceConfig'
 import type { DiscoveryResult } from './discovery'
 import { readInputLayout } from './inputLayout'
@@ -16,7 +17,12 @@ import { buildMouseMotionApi } from './mouse'
 import { Namespace } from './protocol'
 import { getRateLimits, setReportRate } from './reportRate'
 import type { RemapprRpc } from './rpc'
-import { buildSensorApi, servesSensor } from './sensor'
+import {
+    buildSensorApi,
+    listSensors,
+    type SensorWire,
+    servesSensor,
+} from './sensor'
 import { RemapprMouseService } from './mouseService'
 import { RemapprJoystickService } from './joystickService'
 
@@ -90,6 +96,28 @@ export async function buildMouseService(
     })
 }
 
+/** Where the device keeps its analog inputs, read once from its part list
+ *  (GET_PARTS; a failed read is asked again next time). Undefined for
+ *  firmware without channels (PART ns_version 0) or without AXES parts. */
+function axesOf(
+    rpc: RemapprRpc,
+    targetNode: number,
+): () => Promise<AxesLayout | undefined> {
+    let pending: Promise<AxesLayout | undefined> | null = null
+    const read = async (): Promise<AxesLayout | undefined> => {
+        const wire: SensorWire = {}
+        const parts = await listSensors(rpc, targetNode, wire)
+        return (wire.nsVersion ?? 0) >= 1 ? axesLayout(parts) : undefined
+    }
+    return () => {
+        pending ??= read().catch((e: unknown) => {
+            pending = null
+            throw e
+        })
+        return pending
+    }
+}
+
 /** A joystick, edited in the device editor and drawn from its own layout,
  *  with live calibration. */
 export async function buildJoystickService(
@@ -101,6 +129,10 @@ export async function buildJoystickService(
         discovery.personality?.namespaces,
         targetNode,
     )
+    const sensor = servesSensor(discovery)
+        ? buildSensorApi(rpc, { targetNode, writable: true })
+        : undefined
+    const axes = sensor ? axesOf(rpc, targetNode) : undefined
     return new RemapprJoystickService({
         deviceInfo,
         limits: discovery.limits,
@@ -110,10 +142,15 @@ export async function buildJoystickService(
                   targetNode,
                   name: deviceInfo.name,
                   writable: true,
+                  ...(axes ? { axes } : {}),
               })
             : undefined,
         joystick: servesJoystick(discovery)
-            ? buildJoystickApi(rpc, { targetNode, writable: true })
+            ? buildJoystickApi(rpc, {
+                  targetNode,
+                  writable: true,
+                  ...(sensor && axes ? { axes: { layout: axes, sensor } } : {}),
+              })
             : undefined,
         writable: true,
         hwCaps: discovery.personality?.hwCaps,

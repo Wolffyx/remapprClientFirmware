@@ -22,6 +22,7 @@ import type { SensorInfo } from '../../devices/types'
 import type { DeviceConfigApi, DeviceConfigSnapshot } from '../../service'
 
 import { readConfigBlob } from './configRead'
+import type { AxesLayout } from './axesLayout'
 import {
     BLOB_ALIGN,
     Cmd,
@@ -143,6 +144,10 @@ export interface DeviceConfigTarget {
      *  serves them: `write` leaves out a sensor setting the device would
      *  refuse (it validates TBL_SENSOR strictly). */
     sensors?: () => Promise<readonly SensorInfo[]>
+    /** Where the device keeps its analog inputs (its AXES parts), when it
+     *  has any: a joystick's shaping is then written to and read from those
+     *  parts' settings (TBL_PART) rather than TBL_JOYSTICK v1. */
+    axes?: () => Promise<AxesLayout | undefined>
 }
 
 /** A document with no settings: every field on the device's default. */
@@ -206,7 +211,9 @@ export function buildDeviceConfigApi(
                 stored: false,
             }
         }
-        const decoded = decodeRemapprDeviceBlob(blob)
+        const decoded = decodeRemapprDeviceBlob(blob, {
+            axes: await target.axes?.(),
+        })
         // A stored config this client cannot read is refused rather than shown
         // as defaults: saving over it would drop settings nobody saw.
         if (decoded.code !== DecodeCode.OK) {
@@ -277,8 +284,13 @@ export function buildDeviceConfigApi(
         const info = await deviceInfo()
         const version = (info.hasActive ? info.configVersion : 0) + 1
         const sensors = parsed.data.sensor ? await target.sensors?.() : undefined
+        const axes = parsed.data.joystick ? await target.axes?.() : undefined
         const blob = padToAlign(
-            buildRemapprDeviceBlob(parsed.data, { configVersion: version, sensors }),
+            buildRemapprDeviceBlob(parsed.data, {
+                configVersion: version,
+                sensors,
+                axes,
+            }),
         )
 
         await push(blob, version)
