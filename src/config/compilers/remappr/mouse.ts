@@ -145,11 +145,26 @@ const NAME_BY_CODE = Object.fromEntries(
 
 type Wire = Pick<ActionBindingRecord, 'kind' | 'code' | 'arg0'>
 
-/** A button action on the wire: show-battery is a SYSTEM verb, the rest are
- *  DEVICE actions carrying their DPI in arg0. */
+/** The button actions that are SYSTEM verbs, by their code. */
+const SYSTEM_ACTIONS = {
+    batteryShow: SystemAction.battery_show,
+    unpair: SystemAction.unpair,
+} as const
+type SystemButtonAction = keyof typeof SYSTEM_ACTIONS
+const SYSTEM_BY_CODE = new Map<number, SystemButtonAction>(
+    Object.entries(SYSTEM_ACTIONS).map(([name, code]) => [
+        code,
+        name as SystemButtonAction,
+    ]),
+)
+const isSystem = (action: string): action is SystemButtonAction =>
+    action in SYSTEM_ACTIONS
+
+/** A button action on the wire: show-battery and unpair are SYSTEM verbs, the
+ *  rest are DEVICE actions carrying their DPI in arg0. */
 function toWire(a: MouseButtonAction): Wire {
-    if (a.action === 'batteryShow') {
-        return { kind: ACT_SYSTEM, code: SystemAction.battery_show, arg0: 0 }
+    if (isSystem(a.action)) {
+        return { kind: ACT_SYSTEM, code: SYSTEM_ACTIONS[a.action], arg0: 0 }
     }
     return { kind: ACT_DEVICE, code: DeviceAction[a.action], arg0: a.dpi ?? 0 }
 }
@@ -158,7 +173,8 @@ function toWire(a: MouseButtonAction): Wire {
  *  know (another kind, code or system verb). */
 function fromWire(kind: number, code: number, dpi: number): MouseButtonAction | null {
     if (kind === ACT_SYSTEM) {
-        return code === SystemAction.battery_show ? { action: 'batteryShow' } : null
+        const action = SYSTEM_BY_CODE.get(code)
+        return action ? { action } : null
     }
     const action = kind === ACT_DEVICE ? NAME_BY_CODE[code] : undefined
     if (!action) return null

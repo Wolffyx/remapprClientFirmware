@@ -286,6 +286,7 @@ const TO_WIRE: {
         code: SystemAction.battery_show,
         arg0: 0,
     }),
+    unpair: () => ({ kind: ACT_SYSTEM, code: SystemAction.unpair, arg0: 0 }),
 }
 
 function toWire(a: JoystickButtonAction): Wire {
@@ -301,6 +302,12 @@ export function joystickActionRecords(
     )
 }
 
+/** The SYSTEM verbs a joystick button binds, by their code. */
+const SYSTEM_FROM_WIRE: Readonly<Record<number, JoystickButtonAction>> = {
+    [SystemAction.battery_show]: { action: 'batteryShow' },
+    [SystemAction.unpair]: { action: 'unpair' },
+}
+
 const FROM_WIRE: Readonly<
     Record<number, (code: number, arg0: number) => JoystickButtonAction | null>
 > = {
@@ -314,8 +321,7 @@ const FROM_WIRE: Readonly<
         const value = arg0 >= 0x8000 ? arg0 - 0x10000 : arg0
         return axis ? { action: 'axis', axis, value } : null
     },
-    [ACT_SYSTEM]: (code) =>
-        code === SystemAction.battery_show ? { action: 'batteryShow' } : null,
+    [ACT_SYSTEM]: (code) => SYSTEM_FROM_WIRE[code] ?? null,
 }
 
 /**

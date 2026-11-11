@@ -313,6 +313,22 @@ describe('RemapprMouseService', () => {
         expect(await ids(HwCap.USB, bound)).toContain('sys:battery')
     })
 
+    it('offers unpair with a radio, or when a button binds it; one Device group', async () => {
+        const catalog = async (hwCaps?: number, doc: ConfigDevice = DOC) =>
+            make({ hwCaps }, doc).svc.controls.getCatalog()
+        const ids = async (hwCaps?: number, doc: ConfigDevice = DOC) =>
+            (await catalog(hwCaps, doc)).actions.map((a) => a.id)
+        expect(await ids(HwCap.USB)).not.toContain('sys:unpair')
+        const both = await catalog(HwCap.RADIO_2G4 | HwCap.BATTERY)
+        expect(both.actions.map((a) => a.id)).toEqual(
+            expect.arrayContaining(['sys:battery', 'sys:unpair']),
+        )
+        expect(both.groups.filter((g) => g.id === 'device')).toHaveLength(1)
+        const bound = applyMouseBinding(DOC, 'back', { a: 'sys:unpair' })
+        expect(bound.mouse?.buttonActions?.[3]).toEqual({ action: 'unpair' })
+        expect(await ids(HwCap.USB, bound)).toContain('sys:unpair')
+    })
+
     it('binds show-battery to a button and gives the button back', () => {
         const doc = applyMouseBinding(DOC, 'back', { a: 'sys:battery' })
         expect(doc.mouse?.buttonActions?.[3]).toEqual({ action: 'batteryShow' })

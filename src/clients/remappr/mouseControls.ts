@@ -16,7 +16,11 @@
 import type { ConfigDevice, ConfigDeviceSensor } from '../../config/device'
 import type { ConfigMouse, MouseButtonAction } from '../../config/types'
 import { MOUSE_BUTTON_NAMES } from '../../config/deviceFields'
-import { BATTERY_SHOW_ACTION } from '../../devices/battery'
+import {
+    isSystemAction,
+    SYSTEM_ACTIONS,
+    systemActionOf,
+} from '../../devices/systemActions'
 import { defaultLayout } from '../../devices/defaultLayout'
 import type {
     ButtonBinding,
@@ -81,7 +85,8 @@ const DEV_LABELS: Readonly<
     dpiDown: () => 'DPI down',
     dpiSet: (dpi) => `DPI ${dpi}`,
     sniper: (dpi) => `Sniper ${dpi} DPI (hold)`,
-    batteryShow: () => 'Show battery',
+    batteryShow: () => SYSTEM_ACTIONS.batteryShow.label,
+    unpair: () => SYSTEM_ACTIONS.unpair.label,
 }
 const STEPS: readonly MouseButtonAction[] = [
     { action: 'dpiCycle' },
@@ -93,15 +98,16 @@ const SNIPER_PRESETS = [200, 400, 800]
 /** DPI stages the firmware keeps (TBL_MOUSE v3). */
 const MAX_DPI_STAGES = 5
 
-/** Show-battery has the id every device shares; a DPI action its own. */
+/** A system action has the id every device shares; a DPI action its own. */
 const devId = (a: MouseButtonAction): string =>
-    a.action === 'batteryShow'
-        ? BATTERY_SHOW_ACTION
+    isSystemAction(a.action)
+        ? SYSTEM_ACTIONS[a.action].id
         : `${DEV_PREFIX}${a.action}${a.dpi ? `:${a.dpi}` : ''}`
 
 /** A catalog id back to the button action, or null for any other id. */
 function devAction(id: string | null | undefined): MouseButtonAction | null {
-    if (id === BATTERY_SHOW_ACTION) return { action: 'batteryShow' }
+    const system = systemActionOf(id)
+    if (system) return { action: system }
     if (!id?.startsWith(DEV_PREFIX)) return null
     const [action, dpi] = id.slice(DEV_PREFIX.length).split(':')
     if (!(action! in DEV_LABELS)) return null
@@ -120,7 +126,7 @@ function dpiActions(
         (dpi): MouseButtonAction => ({ action: 'sniper', dpi }),
     )
     const bound = (mouse?.buttonActions ?? []).filter(
-        (a): a is MouseButtonAction => !!a && a.action !== 'batteryShow',
+        (a): a is MouseButtonAction => !!a && !isSystemAction(a.action),
     )
     const byId = new Map(
         [...STEPS, ...sniper, ...bound].map((a) => [devId(a), a] as const),

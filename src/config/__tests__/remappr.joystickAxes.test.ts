@@ -164,3 +164,29 @@ describe('joystick shaping in the AXES part (TBL_JOYSTICK v2 + TBL_PART)', () =>
         ])
     })
 })
+
+describe("unpair on a button (SYSTEM verb 8)", () => {
+  it("round-trips on a joystick and a mouse", () => {
+    const joy = doc({ buttonActions: [null, { action: "unpair" }] });
+    const jb = buildRemapprDeviceBlob(joy, { configVersion: 2 });
+    // the last record: position 1, kind SYSTEM (4), code 8
+    expect(Array.from(jb.subarray(jb.length - 10, jb.length - 4))).toEqual([
+      0x01, 0x00, 0x04, 0x00, 0x08, 0x00,
+    ]);
+    expect(decodeRemapprDeviceBlob(jb).joystick).toEqual(joy.joystick);
+
+    const mouse = parseDeviceConfig(
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: "remappr.device",
+        meta: { name: "Bench mouse" },
+        personality: "mouse",
+        mouse: {
+          buttonActions: [null, null, { action: "unpair" }, null, null, null, null, null],
+        },
+      }),
+    );
+    const mb = buildRemapprDeviceBlob(mouse, { configVersion: 2 });
+    expect(decodeRemapprDeviceBlob(mb).mouse).toEqual(mouse.mouse);
+  });
+});

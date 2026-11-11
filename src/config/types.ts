@@ -958,10 +958,18 @@ export interface ConfigMouse {
 
 /** What a mouse button can do besides report a button: a DEVICE action
  *  (firmware action.h enum remappr_device_action; `dpi` is required for
- *  dpiSet and sniper), or batteryShow (SYSTEM: show the charge on the
+ *  dpiSet and sniper), or a SYSTEM verb: unpair (forget the dongle and pair
+ *  afresh) or batteryShow (show the charge on the
  *  mouse's LEDs / display). */
 export interface MouseButtonAction {
-    action: 'dpiCycle' | 'dpiUp' | 'dpiDown' | 'dpiSet' | 'sniper' | 'batteryShow'
+    action:
+        | 'dpiCycle'
+        | 'dpiUp'
+        | 'dpiDown'
+        | 'dpiSet'
+        | 'sniper'
+        | 'batteryShow'
+        | 'unpair'
     dpi?: number
 }
 
@@ -1001,6 +1009,7 @@ export type JoystickButtonAction =
     | { action: 'hat'; dir: number }
     | { action: 'axis'; axis: JoystickAxisId; value: number }
     | { action: 'batteryShow' }
+    | { action: 'unpair' }
 
 /** Joystick settings compiled to TBL_JOYSTICK + TBL_ACTION_BINDING
  *  (input-layout plan §4). Calibration belongs to the unit and is never here. */

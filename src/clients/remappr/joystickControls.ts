@@ -21,6 +21,7 @@ import type {
 import { JOYSTICK_AXIS_IDS } from '../../config/compilers/remappr/joystick'
 import { AXIS_SETTINGS } from './axesLayout'
 import { BATTERY_SHOW_ACTION } from '../../devices/battery'
+import { UNPAIR_ACTION } from '../../devices/systemActions'
 import { defaultLayout } from '../../devices/defaultLayout'
 import type {
     ButtonBinding,
@@ -142,6 +143,7 @@ const ACTION_ID: {
     hat: (a) => `${HAT}${a.dir}`,
     axis: (a) => `${AXIS}${a.axis}:${a.value}`,
     batteryShow: () => BATTERY_SHOW_ACTION,
+    unpair: () => UNPAIR_ACTION,
 }
 
 /** A gamepad action as a catalog id (null = nothing, Disabled). */
@@ -158,6 +160,7 @@ export function parseActionId(
 ): JoystickButtonAction | undefined {
     if (id === null) return { action: 'none' }
     if (id === BATTERY_SHOW_ACTION) return { action: 'batteryShow' }
+    if (id === UNPAIR_ACTION) return { action: 'unpair' }
     if (id.startsWith(BTN))
         return { action: 'button', button: Number(id.slice(BTN.length)) }
     if (id.startsWith(HAT))

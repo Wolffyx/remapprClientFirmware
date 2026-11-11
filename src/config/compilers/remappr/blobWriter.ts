@@ -257,8 +257,10 @@ export const SystemAction = {
     debug_toggle: 5,
     nkro_toggle: 6,
     swap_keys: 7,
-    // 8 = REMAPPR_SYS_UNPAIR (a P1 radio control verb, never a keymap behavior —
-    // the compiler does not emit it), so the absolute ext-power codes resume at 9.
+    // &unpair: forget the bonded dongle and pair afresh. Not a keymap behavior
+    // (the keymap compiler does not emit it); a mouse or joystick button may
+    // bind it (TBL_ACTION_BINDING SYSTEM).
+    unpair: 8,
     ext_power_on: 9,
     ext_power_off: 10,
     battery_show: 11, // &battery: show the charge on the device's LEDs / display

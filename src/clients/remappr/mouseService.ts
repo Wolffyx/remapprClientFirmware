@@ -9,7 +9,10 @@
 // ones back. A view through the dongle is read-only.
 import type { ConfigDevice } from '../../config/device'
 import { ProtocolError } from '../../errors'
-import { withBatteryShow } from '../../devices/battery'
+import {
+    type SystemActionName,
+    withSystemActions,
+} from '../../devices/systemActions'
 import { KeylessServiceBase } from '../../devices/keylessService'
 import {
     createLayoutOverride,
@@ -42,6 +45,7 @@ import {
 } from './mouseControls'
 import type { InputLayout } from './inputLayout'
 import {
+    HwCap,
     type Limits,
     type MotionConfig,
     powerCapability,
@@ -391,15 +395,18 @@ export class RemapprMouseService extends KeylessServiceBase {
         }
     }
 
-    /** Show-battery is offered when the mouse has a battery, or a button
-     *  already binds it (so the bound action keeps its label). */
-    private offersBatteryShow(): boolean {
-        return (
-            !!this.capabilities.power?.battery ||
-            !!this.draft?.mouse?.buttonActions?.some(
-                (a) => a?.action === 'batteryShow',
-            )
-        )
+    /** The system actions offered: show-battery when the mouse has a
+     *  battery, unpair when it has a radio, and either one a button already
+     *  binds (so the bound action keeps its label). */
+    private systemActions(): SystemActionName[] {
+        const bound = (name: SystemActionName): boolean =>
+            !!this.draft?.mouse?.buttonActions?.some((a) => a?.action === name)
+        const radio = ((this.deps.hwCaps ?? 0) & HwCap.RADIO_2G4) !== 0
+        const offered: Record<SystemActionName, boolean> = {
+            batteryShow: !!this.capabilities.power?.battery || bound('batteryShow'),
+            unpair: radio || bound('unpair'),
+        }
+        return (Object.keys(offered) as SystemActionName[]).filter((n) => offered[n])
     }
 
     private readControls(): ControlsApi {
@@ -413,9 +420,7 @@ export class RemapprMouseService extends KeylessServiceBase {
                     this.draft?.mouse,
                     this.sensorInfo,
                 )
-                return this.offersBatteryShow()
-                    ? withBatteryShow(catalog)
-                    : catalog
+                return withSystemActions(catalog, this.systemActions())
             },
             getProfiles: () =>
                 Promise.resolve({ profiles: [PROFILE], activeId: PROFILE.id }),
