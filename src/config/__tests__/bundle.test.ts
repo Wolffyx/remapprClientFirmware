@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
     buildProjectBundle,
     parseKeymap,
+    RELEASE_CONDITION,
     RELEASE_MARKER,
     upgradedWorkflow,
     WORKFLOW_PATHS,
@@ -514,14 +515,14 @@ describe('release workflows', () => {
         '',
     ].join('\n')
 
-    it('attaches the firmware to the release of a v* tag (ZMK and QMK)', () => {
+    it('attaches the firmware to the release of a release tag (ZMK and QMK)', () => {
         for (const [target, path] of [
             ['zmk', '.github/workflows/build.yml'],
             ['qmk', '.github/workflows/build_binaries.yml'],
         ] as const) {
             const text = fileText(buildProjectBundle(seedConfig, target), path)
             expect(text).toContain(RELEASE_MARKER)
-            expect(text).toContain("if: startsWith(github.ref, 'refs/tags/v')")
+            expect(text).toContain(`    if: ${RELEASE_CONDITION}\n`)
             expect(text).toContain('gh release upload "$GITHUB_REF_NAME"')
             expect(text).toContain('GH_TOKEN: ${{ github.token }}')
         }
@@ -536,7 +537,40 @@ describe('release workflows', () => {
         expect(upgradedWorkflow('.github/workflows/other.yml', zmkV1)).toBeNull()
         expect(WORKFLOW_PATHS).toContain(path)
     })
+
+    it('upgrades a workflow that released plain v* tags only', () => {
+        const path = '.github/workflows/build.yml'
+        const current = fileText(buildProjectBundle(seedConfig, 'zmk'), path)
+        expect(upgradedWorkflow(path, plainTagsOnly(current))).toBe(current)
+    })
+
+    it('runs on per-item tags and on plain v* tags, not on branches', () => {
+        // Actions' own semantics, for the tags Remappr makes.
+        const runs = (ref: string): boolean => {
+            const name = ref.replace(/^refs\/(tags|heads)\//, '')
+            return (
+                ref.startsWith('refs/tags/v') ||
+                (ref.startsWith('refs/tags/') && name.includes('-v'))
+            )
+        }
+        expect(RELEASE_CONDITION).toBe(
+            "startsWith(github.ref, 'refs/tags/v') || (startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-v'))",
+        )
+        expect(runs('refs/tags/v1.0.0')).toBe(true)
+        expect(runs('refs/tags/remappr-qmk-test-v0.4.0')).toBe(true)
+        expect(runs('refs/heads/main')).toBe(false)
+        expect(runs('refs/heads/my-vial')).toBe(false)
+    })
 })
+
+/** A current workflow as it was when releases ran on plain v* tags only. */
+const plainTagsOnly = (text: string): string =>
+    text
+        .replace('Release of a release tag.', 'Release of a v* tag.')
+        .replace(
+            `    if: ${RELEASE_CONDITION}\n`,
+            "    if: startsWith(github.ref, 'refs/tags/v')\n",
+        )
 
 describe('QMK workflow source', () => {
     const withFirmware = (firmware: string[]) =>
@@ -576,14 +610,17 @@ describe('QMK workflow source', () => {
         )
     })
 
-    it('upgrades the earlier release workflow of each source to its own', () => {
+    it('upgrades the earlier release workflows of each source to its own', () => {
         for (const fw of [['qmk'], ['vial']]) {
             const current = fileText(withFirmware(fw), wf)
-            const old = current
+            const built = plainTagsOnly(current)
+            expect(built).not.toBe(current)
+            expect(upgradedWorkflow(wf, built)).toBe(current)
+            const old = built
                 .replace('qmk/.github/.github/workflows/', 'qmk/.github/workflows/')
                 .replace('    permissions:\n      contents: write\n    with:', '    with:')
                 .replace(/\n {6}preparation_command: .*/, '')
-            expect(old).not.toBe(current)
+            expect(old).not.toBe(built)
             expect(upgradedWorkflow(wf, old)).toBe(current)
         }
     })

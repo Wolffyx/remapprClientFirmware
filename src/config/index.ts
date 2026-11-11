@@ -273,6 +273,7 @@ export {
 export {
     type ProjectBundle,
     buildProjectBundle,
+    RELEASE_CONDITION,
     RELEASE_MARKER,
     upgradedWorkflow,
     WORKFLOW_PATHS,

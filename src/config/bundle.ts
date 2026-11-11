@@ -61,14 +61,22 @@ const ZMK_REVISION = 'v0.3'
 /** Marks a workflow that attaches its firmware to GitHub Releases. */
 export const RELEASE_MARKER = 'remappr:release'
 
-// On a v* tag (Remappr's "Release to GitHub" makes one with its Release),
-// attach every firmware file the build produced to that tag's Release. The
-// build job's artifacts are downloaded whatever their names, so the same job
-// serves the ZMK and QMK reusable workflows.
-const RELEASE_JOB = [
-    `  # ${RELEASE_MARKER}: attaches the firmware to the GitHub Release of a v* tag.`,
+/**
+ * When the release job runs: on a release tag. Remappr's "Release to GitHub"
+ * tags `<item>-v<semver>` (several items can share a repo, each releasing
+ * its own versions); plain `v<semver>` tags are from before that.
+ */
+export const RELEASE_CONDITION =
+    "startsWith(github.ref, 'refs/tags/v') || (startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-v'))"
+
+// On a release tag (Remappr's "Release to GitHub" makes one with its
+// Release), attach every firmware file the build produced to that tag's
+// Release. The build job's artifacts are downloaded whatever their names, so
+// the same job serves the ZMK and QMK reusable workflows.
+const releaseJob = (what: string, condition: string): string[] => [
+    `  # ${RELEASE_MARKER}: attaches the firmware to the GitHub Release of ${what}.`,
     `  release:`,
-    `    if: startsWith(github.ref, 'refs/tags/v')`,
+    `    if: ${condition}`,
     `    needs: build`,
     `    runs-on: ubuntu-latest`,
     `    permissions:`,
@@ -91,6 +99,14 @@ const RELEASE_JOB = [
     '          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber',
 ]
 
+const RELEASE_JOB = releaseJob('a release tag', RELEASE_CONDITION)
+// Plain v* tags only (P10g, before per-item tags): kept so a repo still
+// holding it can be upgraded.
+const RELEASE_JOB_V1 = releaseJob(
+    'a v* tag',
+    "startsWith(github.ref, 'refs/tags/v')",
+)
+
 // Before releases (P10f): kept so a repo still holding it can be upgraded.
 const ZMK_BUILD_WORKFLOW_V1 = [
     `name: Build ZMK firmware`,
@@ -101,15 +117,20 @@ const ZMK_BUILD_WORKFLOW_V1 = [
     ``,
 ].join('\n')
 
-const ZMK_BUILD_WORKFLOW = [
-    `name: Build ZMK firmware`,
-    `on: [push, pull_request, workflow_dispatch]`,
-    `jobs:`,
-    `  build:`,
-    `    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@${ZMK_REVISION}`,
-    ...RELEASE_JOB,
-    ``,
-].join('\n')
+const zmkBuildWorkflow = (release: string[]): string =>
+    [
+        `name: Build ZMK firmware`,
+        `on: [push, pull_request, workflow_dispatch]`,
+        `jobs:`,
+        `  build:`,
+        `    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@${ZMK_REVISION}`,
+        ...release,
+        ``,
+    ].join('\n')
+
+const ZMK_BUILD_WORKFLOW = zmkBuildWorkflow(RELEASE_JOB)
+// With releases of plain v* tags (P10g).
+const ZMK_BUILD_WORKFLOW_V2 = zmkBuildWorkflow(RELEASE_JOB_V1)
 
 const ZMK_WEST_YML = [
     `manifest:`,
@@ -415,6 +436,9 @@ const qmkBuildJob = (source: QmkSource): string[] => [
 
 const qmkBuildWorkflow = (source: QmkSource): string =>
     [...qmkBuildJob(source), ...RELEASE_JOB, ``].join('\n')
+// Built, releasing plain v* tags only (before per-item tags).
+const qmkBuildWorkflowV3 = (source: QmkSource): string =>
+    [...qmkBuildJob(source), ...RELEASE_JOB_V1, ``].join('\n')
 
 // Earlier QMK workflows, kept so a repo still holding one can be upgraded.
 // Both named a path that is not in qmk/.github, so they never built.
@@ -432,7 +456,7 @@ const qmkBrokenJob = (source: QmkSource): string[] => [
 const QMK_BUILD_WORKFLOW_V1 = [...qmkBrokenJob(QMK_SOURCES.qmk), ``].join('\n')
 // With releases (P10g), before the path fix.
 const qmkBuildWorkflowV2 = (source: QmkSource): string =>
-    [...qmkBrokenJob(source), ...RELEASE_JOB, ``].join('\n')
+    [...qmkBrokenJob(source), ...RELEASE_JOB_V1, ``].join('\n')
 
 /** Workflow files Remappr writes: each text it writes there today, with
  *  the earlier texts that upgrade to it. */
@@ -441,7 +465,10 @@ const WORKFLOW_VERSIONS: Record<
     { current: string; earlier: string[] }[]
 > = {
     '.github/workflows/build.yml': [
-        { current: ZMK_BUILD_WORKFLOW, earlier: [ZMK_BUILD_WORKFLOW_V1] },
+        {
+            current: ZMK_BUILD_WORKFLOW,
+            earlier: [ZMK_BUILD_WORKFLOW_V1, ZMK_BUILD_WORKFLOW_V2],
+        },
     ],
     '.github/workflows/build_binaries.yml': [
         {
@@ -449,11 +476,15 @@ const WORKFLOW_VERSIONS: Record<
             earlier: [
                 QMK_BUILD_WORKFLOW_V1,
                 qmkBuildWorkflowV2(QMK_SOURCES.qmk),
+                qmkBuildWorkflowV3(QMK_SOURCES.qmk),
             ],
         },
         {
             current: qmkBuildWorkflow(QMK_SOURCES.vial),
-            earlier: [qmkBuildWorkflowV2(QMK_SOURCES.vial)],
+            earlier: [
+                qmkBuildWorkflowV2(QMK_SOURCES.vial),
+                qmkBuildWorkflowV3(QMK_SOURCES.vial),
+            ],
         },
     ],
 }
