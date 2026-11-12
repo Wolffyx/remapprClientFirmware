@@ -28,6 +28,8 @@ import {
 } from './compilers/remappr/autocorrect'
 import type { FeatureName } from './featureWarnings'
 import { LimitsFeature, LinkProfileKnob } from '../clients/remappr/protocol'
+import type { SensorInfo } from '../devices/types'
+import { MATRIX_SETTINGS } from './compilers/remappr/matrix'
 import type { LinkLimitKnob } from '../configEditing'
 
 /* ── timing defaults (§7.4) ──────────────────────────────────────────────── */
@@ -44,6 +46,8 @@ export interface TimingFieldDef {
     /** Firmware feature bit required to honor this field; undefined ⇒ always
      *  honored (core timing / pre-§7.4.1 debounce). */
     feature?: FeatureName
+    /** Folded away by default (a part's advanced setting). */
+    advanced?: boolean
 }
 
 const GROUP_TAP = 'Tap-hold & combo'
@@ -174,11 +178,57 @@ export function fieldSupported(
     return (featureBitmask & LimitsFeature[field.feature]) !== 0
 }
 
+/** Timing fields a device part holds itself, keyed by `defaults` field. */
+const PART_HELD: Readonly<Partial<Record<TimingFieldKey, string>>> =
+    MATRIX_SETTINGS
+
+/**
+ * The timing fields the device's `parts` hold as their own settings (a key
+ * matrix's scan period and debounce), described by the part: its label,
+ * help and range, grouped under the part's name, and honored whatever the
+ * firmware's feature bits say. 0 keeps the board's value. A field no part
+ * lists (or one its personality drives) is absent: the plain field applies.
+ */
+export function partTimingFields(
+    parts: readonly SensorInfo[],
+): Map<TimingFieldKey, TimingFieldDef> {
+    const out = new Map<TimingFieldKey, TimingFieldDef>()
+    for (const [key, name] of Object.entries(PART_HELD) as [
+        TimingFieldKey,
+        string,
+    ][]) {
+        for (const part of parts) {
+            const s = part.settings.find((x) => x.name === name)
+            if (!s || s.personality || out.has(key)) continue
+            out.set(key, {
+                key,
+                label: s.label,
+                description: `${s.help ? `${s.help} ` : ''}0 keeps the board’s value.`,
+                group: part.model,
+                min: 0,
+                max: s.max ?? 0xffff,
+                advanced: s.advanced,
+            })
+        }
+    }
+    return out
+}
+
+/** Every timing field for a device whose parts hold `held` (partTimingFields):
+ *  the plain fields first, then the part-held ones as the part describes them. */
+export function timingFieldsFor(
+    held: ReadonlyMap<TimingFieldKey, TimingFieldDef>,
+): TimingFieldDef[] {
+    return [...TIMING_FIELDS.filter((f) => !held.has(f.key)), ...held.values()]
+}
+
 /** The fields as contiguous `[group, fields]` sections in declared order, for a
  *  sectioned render. */
-export function groupedTimingFields(): [string, TimingFieldDef[]][] {
+export function groupedTimingFields(
+    fields: readonly TimingFieldDef[] = TIMING_FIELDS,
+): [string, TimingFieldDef[]][] {
     const out: [string, TimingFieldDef[]][] = []
-    for (const f of TIMING_FIELDS) {
+    for (const f of fields) {
         const last = out[out.length - 1]
         if (last && last[0] === f.group) last[1].push(f)
         else out.push([f.group, [f]])

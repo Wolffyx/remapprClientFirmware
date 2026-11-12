@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { CanonConditionalLayer } from '../types'
 import type { CanonHoldTapDef, CanonModMorph } from '../types'
 import { LimitsFeature } from '../../clients/remappr/protocol'
+import type { SensorInfo } from '../../devices/types'
 
 import {
     ALL_MODIFIERS,
@@ -21,6 +22,8 @@ import {
     featureSupported,
     fieldSupported,
     groupedTimingFields,
+    partTimingFields,
+    timingFieldsFor,
     holdTapPatch,
     modMorphPatch,
     modifierLabel,
@@ -408,5 +411,57 @@ describe('autocorrect dictionary editor helpers', () => {
         expect(once.length).toBeGreaterThan(mine.length)
         expect(twice).toEqual(once)
         expect(autocorrectError(once)).toBeNull()
+    })
+})
+
+describe('timing fields a part holds', () => {
+    const matrix = (personality = false): SensorInfo => ({
+        index: 1,
+        cls: 'matrix',
+        model: 'Key matrix',
+        channels: 1,
+        io: [],
+        settings: [
+            {
+                name: 'debouncePressMs',
+                label: 'Press debounce',
+                type: 'int',
+                unit: 'ms',
+                min: 1,
+                max: 65535,
+                step: 1,
+                advanced: true,
+                default: 5,
+                value: 5,
+                personality,
+                help: 'How long a key must read pressed.',
+            },
+        ],
+        procedures: [],
+        metrics: [],
+    })
+
+    it('describes a part-held field from the part, after the plain ones', () => {
+        const held = partTimingFields([matrix()])
+        expect([...held.keys()]).toEqual(['matrixPressDebounceMs'])
+        const f = held.get('matrixPressDebounceMs')!
+        expect(f).toMatchObject({
+            label: 'Press debounce',
+            group: 'Key matrix',
+            min: 0,
+            max: 65535,
+            advanced: true,
+        })
+        expect(f.description).toContain('0 keeps')
+        const all = timingFieldsFor(held)
+        expect(all).toHaveLength(TIMING_FIELDS.length)
+        expect(all[all.length - 1]).toBe(f)
+        const groups = groupedTimingFields(all).map(([g]) => g)
+        expect(groups[groups.length - 1]).toBe('Key matrix')
+    })
+
+    it('leaves a field the personality drives to the plain field', () => {
+        expect(partTimingFields([matrix(true)]).size).toBe(0)
+        expect(timingFieldsFor(new Map())).toEqual([...TIMING_FIELDS])
     })
 })

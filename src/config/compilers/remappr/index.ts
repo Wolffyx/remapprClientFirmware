@@ -74,7 +74,9 @@ import { encodeAutocorrectDictionary } from './autocorrect'
 import { powerRecord } from './power'
 import { radioRecord } from './radio'
 import { mouseRecord } from './mouse'
-import { sensorEntries } from './sensor'
+import { mergePartEntries, sensorEntries } from './sensor'
+import { type MatrixField, type MatrixFold, matrixPartEntries } from './matrix'
+import type { SensorInfo } from '../../../devices/types'
 import type { CanonicalKeyId } from '../../../catalog/types'
 import type {
     CanonHoldTapDef,
@@ -1137,10 +1139,36 @@ function lowerAction(
 // path (version from meta) and the live-device commit path (version = active+1).
 // Does NOT 16-byte-pad — the golden artifact is unpadded; flash-alignment padding
 // is applied at push time by the control service, not baked into the blob.
+/** What the compiler may know about the device a blob is for. */
+export interface RemapprBlobOpts {
+    /** The device's described parts (GET_PARTS + their settings): its MATRIX
+     *  parts then hold the config's matrix timing (compilers/remappr/matrix.ts). */
+    parts?: readonly SensorInfo[]
+}
+
+/** The matrix timing that goes to the MATRIX parts, warned about where a part
+ *  would refuse a value. None without the device's part list. */
+function foldMatrix(
+    config: ConfigKeymap,
+    diag: DiagnosticBag,
+    parts: readonly SensorInfo[] | undefined,
+): MatrixFold {
+    if (!parts) return { entries: [], folded: new Set(), skipped: [] }
+    const fold = matrixPartEntries(config.defaults, parts)
+    for (const skip of fold.skipped) {
+        diag.warn(`matrix timing "${skip.key}" left out: ${skip.reason}`, [
+            'defaults',
+            skip.key,
+        ])
+    }
+    return fold
+}
+
 function encodeBlob(
     config: ConfigKeymap,
     diag: DiagnosticBag,
     configVersion: number,
+    opts: RemapprBlobOpts = {},
 ): Uint8Array {
     const numLayers = config.layers.length
     // numPositions is the physical key count. Prefer the declared geometry, but a
@@ -1345,17 +1373,22 @@ function encodeBlob(
 
     const defaultTermMs = config.defaults?.tappingTermMs ?? 200
     const releaseMs = config.defaults?.releaseDebounceMs ?? 0
+    // Matrix timing a MATRIX part holds goes to TBL_PART; the tail carries 0
+    // (= none) for it (firmware docs/part-wire-v1.md §4).
+    const matrix = foldMatrix(config, diag, opts.parts)
+    const tail = (f: MatrixField): number | undefined =>
+        matrix.folded.has(f) ? undefined : config.defaults?.[f]
 
     const builder = new BlobBuilder()
         .layerTable(numLayers, numPositions, defaultTermMs, releaseMs, {
             pressDebounceMs: config.defaults?.pressDebounceMs,
-            matrixPressDebounceMs: config.defaults?.matrixPressDebounceMs,
-            matrixReleaseDebounceMs: config.defaults?.matrixReleaseDebounceMs,
+            matrixPressDebounceMs: tail('matrixPressDebounceMs'),
+            matrixReleaseDebounceMs: tail('matrixReleaseDebounceMs'),
             capsWordIdleMs: config.defaults?.capsWordIdleMs,
             stickyReleaseDefaultMs: config.defaults?.stickyReleaseDefaultMs,
             macroDefaultWaitMs: config.defaults?.macroDefaultWaitMs,
             macroDefaultTapMs: config.defaults?.macroDefaultTapMs,
-            matrixPollPeriodMs: config.defaults?.matrixPollPeriodMs,
+            matrixPollPeriodMs: tail('matrixPollPeriodMs'),
         })
         .behaviorTable(behaviors)
         .bindingTable(cells)
@@ -1404,7 +1437,10 @@ function encodeBlob(
             skip.key,
         ])
     }
-    if (sensor.entries.length > 0) builder.sensorTable(sensor.entries)
+    // One TBL_PART: those defaults, then the matrix timing (the user's own
+    // tuning wins over a product default for the same setting).
+    const partTable = mergePartEntries(sensor.entries, matrix.entries)
+    if (partTable.length > 0) builder.sensorTable(partTable)
     // TBL_RGB (§4c): per-key static colors from keyboard.lighting.perKey, emitted
     // as a flat (non-per-layer) RGB888 map over every physical position; unset
     // positions stay black (0,0,0). The firmware LED sink renders it locally.
@@ -1599,14 +1635,15 @@ function exportConfigVersion(config: ConfigKeymap): number {
  * Pure ConfigKeymap → RMBC blob entry point for callers outside the compile
  * pipeline (the live-device commit path). Returns the blob bytes plus the
  * diagnostics raised while lowering. `configVersion` must be `active + 1` so the
- * firmware accepts the commit (§21 ERR_VERSION rejects ≤ active).
+ * firmware accepts the commit (§21 ERR_VERSION rejects ≤ active). `parts`,
+ * the device's described parts, puts the matrix timing into its MATRIX parts.
  */
 export function buildRemapprBlob(
     config: ConfigKeymap,
-    opts: { configVersion: number },
+    opts: { configVersion: number } & RemapprBlobOpts,
 ): { blob: Uint8Array; diagnostics: readonly Diagnostic[] } {
     const diag = new DiagnosticBag()
-    const blob = encodeBlob(config, diag, opts.configVersion)
+    const blob = encodeBlob(config, diag, opts.configVersion, opts)
     return { blob, diagnostics: diag.all }
 }
 

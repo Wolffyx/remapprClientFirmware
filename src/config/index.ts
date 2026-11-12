@@ -173,6 +173,8 @@ export {
     linkKnobRange,
     withLinkOverride,
     linkProfileError,
+    partTimingFields,
+    timingFieldsFor,
 } from './editorFields'
 export {
     type DeviceNumberField,

@@ -39,7 +39,7 @@ import type {
     LockState,
     PhysicalLayout,
 } from '../../types'
-import type { DeviceKind } from '../../devices/types'
+import type { DeviceKind, SensorInfo } from '../../devices/types'
 import { ProtocolError } from '../../errors'
 import {
     type CanonAutocorrectEntry,
@@ -55,6 +55,7 @@ import {
     serializeKeymap,
 } from '../../config'
 import { buildRemapprBlob } from '../../config/compilers/remappr'
+import { MATRIX_FIELDS } from '../../config/compilers/remappr/matrix'
 
 import {
     buildRemapprActionTypes,
@@ -191,6 +192,9 @@ export class RemapprKeyboardService
     public readonly unicode?: UnicodeApi
     /** Parts (battery, sensors) where the firmware serves SENSOR. */
     public readonly sensor?: SensorApi
+    // The parts' descriptions, read once when a commit first needs them
+    // (descriptors are constant); a failed read is asked again next time.
+    private partsRead: Promise<readonly SensorInfo[]> | null = null
     /** Read-only macro list (§24): the active config's macros surfaced to the
      *  Macros tab by their real DT names. Editing (setMacro) lands with the
      *  round-trip; for now `readonly: true`. */
@@ -1000,7 +1004,10 @@ export class RemapprKeyboardService
             this.withEdits(this.config),
         )
         const version = this.configVersion + 1
-        const { blob } = buildRemapprBlob(next, { configVersion: version })
+        const { blob } = buildRemapprBlob(next, {
+            configVersion: version,
+            parts: await this.partsFor(next),
+        })
         const padded = padTo(blob, BLOB_ALIGN)
 
         await this.writeOk(
@@ -1032,6 +1039,24 @@ export class RemapprKeyboardService
         this.configVersion = version
         this.clearEdits()
         this.markPending(false)
+    }
+
+    /** The device's described parts when `config` sets matrix timing (its
+     *  MATRIX parts then hold it, compilers/remappr/matrix.ts); undefined
+     *  otherwise or without the PART namespace. */
+    private async partsFor(
+        config: ConfigKeymap,
+    ): Promise<readonly SensorInfo[] | undefined> {
+        const sensor = this.sensor
+        if (!sensor) return undefined
+        if (!MATRIX_FIELDS.some((f) => (config.defaults?.[f] ?? 0) > 0)) {
+            return undefined
+        }
+        this.partsRead ??= sensor.getSensors().catch((e: unknown) => {
+            this.partsRead = null
+            throw e
+        })
+        return this.partsRead
     }
 
     // pattern-check: skip — sealed-vs-plain fallback inside two existing private

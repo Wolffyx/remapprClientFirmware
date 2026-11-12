@@ -90,6 +90,8 @@ import {
 import { readPower } from './power'
 import { readRadio } from './radio'
 import { readMouseTable } from './mouse'
+import { matrixDefaultsFromParts } from './matrix'
+import { readPartEntries } from './sensor'
 
 const HID_PAGE_KEYBOARD = 7
 const HID_PAGE_CONSUMER = 12
@@ -746,6 +748,21 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         matrixPollPeriodMs = lr.u16()
     }
     if (numLayers === 0 || numPositions === 0) return fail(DecodeCode.BOUNDS)
+    // Matrix timing a MATRIX part holds (TBL_PART) wins over the tail, as on
+    // the device (compilers/remappr/matrix.ts).
+    const partT = table(TableId.Sensor)
+    const partEntries = partT
+        ? readPartEntries(bytes, partT.start, partT.end)
+        : []
+    if (typeof partEntries === 'string') diag.warn(`part table: ${partEntries}`)
+    const matrix =
+        typeof partEntries === 'string'
+            ? {}
+            : matrixDefaultsFromParts(partEntries)
+    matrixPressDebounceMs = matrix.matrixPressDebounceMs ?? matrixPressDebounceMs
+    matrixReleaseDebounceMs =
+        matrix.matrixReleaseDebounceMs ?? matrixReleaseDebounceMs
+    matrixPollPeriodMs = matrix.matrixPollPeriodMs ?? matrixPollPeriodMs
 
     // ── BEHAVIOR (required) ──
     const behT = table(TableId.Behavior)

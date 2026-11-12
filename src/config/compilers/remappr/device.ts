@@ -47,7 +47,12 @@ import {
 } from './mouse'
 import { powerRecord, readPower } from './power'
 import { radioRecord, readRadio } from './radio'
-import { deviceSensorEntries, readPartEntries, readSensorTable } from './sensor'
+import {
+    deviceSensorEntries,
+    mergePartEntries,
+    readPartEntries,
+    readSensorTable,
+} from './sensor'
 import {
     JOYSTICK_ACTION_POSITIONS,
     joystickActionRecords,
@@ -99,16 +104,6 @@ function addJoystick(
     return parts
 }
 
-/** One TBL_PART: the document's sensor entries, then the joystick's; a
- *  later entry for the same (part, setting, channel) replaces an earlier
- *  (the device refuses a duplicate). */
-function partEntries(
-    ...lists: readonly SensorTableEntry[][]
-): SensorTableEntry[] {
-    const byKey = new Map<string, SensorTableEntry>()
-    for (const e of lists.flat()) byKey.set(`${e.sensor}/${e.id}/${e.ch ?? 0}`, e)
-    return [...byKey.values()]
-}
 
 /**
  * Device config -> RMBC blob. `configVersion` must be above the device's active
@@ -141,7 +136,7 @@ export function buildRemapprDeviceBlob(
     const axes = config.joystick
         ? addJoystick(builder, config.joystick, opts.axes)
         : []
-    const parts = partEntries(sensor, axes)
+    const parts = mergePartEntries(sensor, axes)
     if (parts.length) builder.sensorTable(parts)
     const power = config.power ? powerRecord(config.power) : undefined
     if (power) builder.powerTable(power)

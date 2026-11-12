@@ -93,6 +93,17 @@ export function sensorEntries(
     return { entries: [...byId.values()], skipped }
 }
 
+/** One TBL_PART from several lists of entries, in order; a later entry for
+ *  the same (part, setting, channel) replaces an earlier (the device refuses
+ *  a duplicate). */
+export function mergePartEntries(
+    ...lists: readonly SensorTableEntry[][]
+): SensorTableEntry[] {
+    const byKey = new Map<string, SensorTableEntry>()
+    for (const e of lists.flat()) byKey.set(`${e.sensor}/${e.id}/${e.ch ?? 0}`, e)
+    return [...byKey.values()]
+}
+
 /** A device document's `sensor` section -> TBL_SENSOR entries. */
 export function deviceSensorEntries(
     sensor: ConfigDeviceSensor | undefined,
