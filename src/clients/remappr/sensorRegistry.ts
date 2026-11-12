@@ -181,7 +181,7 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         macro: 'SCAN_PERIOD_MS',
         label: 'Scan period',
         type: 'int',
-        help: 'Time between full scans of the key matrix.',
+        help: 'Time between reads (a full scan of a key matrix, one reading of a slider): shorter reacts faster, longer saves power.',
     },
     {
         id: 0x31,
@@ -213,7 +213,7 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         macro: 'AXIS_INVERT',
         label: 'Invert',
         type: 'bool',
-        help: 'Reverse the axis direction.',
+        help: 'Reverse the direction (an axis, or which end of a slider reads full).',
     },
     {
         id: 0x41,
@@ -251,6 +251,14 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         label: 'Edge deadzone',
         type: 'int',
         help: 'The band at the edge that already reads as full.',
+    },
+    {
+        id: 0x45,
+        name: 'deadband',
+        macro: 'DEADBAND',
+        label: 'Deadband',
+        type: 'int',
+        help: 'The smallest move that counts, so a jittery slider does not keep sending the same value.',
     },
     {
         id: 0x50,
@@ -349,7 +357,7 @@ export const SENSOR_PROCEDURES: readonly RegistryProcedure[] = [
         name: 'axisCalibration',
         label: 'Axis calibration',
         phases: [
-            'Move the stick to every edge, slowly, then press Next.',
+            'Move the stick or slider slowly to every end of its travel, then press Next.',
             'Let the stick rest at the centre while it measures.',
         ],
     },
