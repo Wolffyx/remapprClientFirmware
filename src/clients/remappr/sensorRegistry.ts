@@ -302,6 +302,36 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
             { code: 2, name: 'low', label: 'With the key, and when low' },
         ],
     },
+    {
+        id: 0x70,
+        name: 'brightness',
+        macro: 'BRIGHTNESS',
+        label: 'Brightness',
+        type: 'int',
+        help: 'How bright the display is while the device is awake.',
+    },
+    {
+        id: 0x71,
+        name: 'invert',
+        macro: 'INVERT',
+        label: 'Invert',
+        type: 'bool',
+        help: 'Light background with dark content.',
+    },
+    {
+        id: 0x72,
+        name: 'rotation',
+        macro: 'ROTATION',
+        label: 'Rotation',
+        type: 'enum',
+        help: 'Turns what the display shows, clockwise, for a panel mounted sideways or upside down.',
+        options: [
+            { code: 0, name: 'deg0', label: '0°' },
+            { code: 1, name: 'deg90', label: '90°' },
+            { code: 2, name: 'deg180', label: '180°' },
+            { code: 3, name: 'deg270', label: '270°' },
+        ],
+    },
 ]
 
 export const SENSOR_PROCEDURES: readonly RegistryProcedure[] = [
