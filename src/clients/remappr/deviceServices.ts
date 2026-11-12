@@ -25,6 +25,7 @@ import {
     servesSensor,
 } from './sensor'
 import { buildHostValuesApi, servesHost } from './hostValues'
+import { buildScreensApi } from './screens'
 import { RemapprMouseService } from './mouseService'
 import { RemapprJoystickService } from './joystickService'
 
@@ -87,7 +88,10 @@ export async function buildMouseService(
             : undefined,
         sensor,
         ...(servesHost(discovery)
-            ? { hostValues: buildHostValuesApi(rpc, { targetNode }) }
+            ? {
+                  hostValues: buildHostValuesApi(rpc, { targetNode }),
+                  screens: buildScreensApi(sensor),
+              }
             : {}),
         rate: {
             get: () => getRateLimits(rpc, targetNode),
@@ -188,7 +192,10 @@ export async function buildJoystickService(
             : undefined,
         ...(axesSettings ? { axesSettings } : {}),
         ...(servesHost(discovery)
-            ? { hostValues: buildHostValuesApi(rpc, { targetNode }) }
+            ? {
+                  hostValues: buildHostValuesApi(rpc, { targetNode }),
+                  screens: buildScreensApi(sensor),
+              }
             : {}),
         writable: true,
         hwCaps: discovery.personality?.hwCaps,

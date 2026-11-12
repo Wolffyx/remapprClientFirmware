@@ -28,6 +28,7 @@ import type {
     DeviceConfigDraft,
     JoystickApi,
     HostValuesApi,
+    ScreensApi,
 } from '../../service'
 import type { DeviceInfo, ExportedFile } from '../../types'
 import type { InputLayout } from './inputLayout'
@@ -72,6 +73,8 @@ export interface JoystickServiceDeps {
     /** Values this computer pushes for the screens; absent when the
      *  firmware does not serve the HOST namespace. */
     hostValues?: HostValuesApi
+    /** What the screens can show and how they draw. */
+    screens?: ScreensApi
 }
 
 const PROFILE = { id: 'p0', name: 'Default' } as const
@@ -103,6 +106,7 @@ export class RemapprJoystickService extends KeylessServiceBase {
     readonly limits?: Limits
     readonly joystick?: JoystickApi
     readonly hostValues?: HostValuesApi
+    readonly screens?: ScreensApi
     readonly device?: DeviceConfigApi
     readonly controls: ControlsApi
 
@@ -124,6 +128,7 @@ export class RemapprJoystickService extends KeylessServiceBase {
         this.inputs = joystickInputs(deps.layout)
         this.joystick = deps.joystick && this.joystickApi(deps.joystick)
         this.hostValues = deps.hostValues
+        this.screens = deps.screens
         this.layout = createLayoutOverride(
             joystickModel(deps.deviceInfo.name, deps.layout),
             {

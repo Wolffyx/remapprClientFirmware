@@ -135,6 +135,87 @@ describe('TBL_DISPLAY', () => {
         expect(decoded.displays).toEqual(HOSTSYNC)
     })
 
+    it("keeps each display part's own settings in TBL_PART", () => {
+        const withSettings: ConfigDisplay[] = [
+            { ...HOSTSYNC[0], part: 2, settings: { brightness: 40, invert: true, rotation: 2 } },
+        ]
+        const doc = parseDeviceConfig(
+            JSON.stringify({
+                schemaVersion: 1,
+                kind: 'remappr.device',
+                meta: { name: 'M' },
+                personality: 'mouse',
+                sensor: { settings: { angleSnap: true } },
+                displays: withSettings,
+            }),
+        )
+        const blob = buildRemapprDeviceBlob(doc, { configVersion: 1 })
+        const pt = readBlobFrames(blob).frames.find((f) => f.id === TableId.Sensor)!
+        // count 4: the sensor's one, then the display's three (0x70-0x72).
+        expect(hex(blob.subarray(pt.start, pt.start + 2))).toBe('0400')
+        const decoded = decodeRemapprDeviceBlob(blob)
+        expect(decoded.displays).toEqual(withSettings)
+        expect(decoded.sensor).toEqual({ settings: { angleSnap: true } })
+
+        // A mouse with no sensor settings: the display's entries are not the sensor's.
+        const only = buildRemapprDeviceBlob(
+            parseDeviceConfig(
+                JSON.stringify({
+                    schemaVersion: 1,
+                    kind: 'remappr.device',
+                    meta: { name: 'M' },
+                    personality: 'mouse',
+                    displays: withSettings,
+                }),
+            ),
+            { configVersion: 1 },
+        )
+        expect(decodeRemapprDeviceBlob(only).sensor).toBeUndefined()
+
+        const keymap = parseKeymap(
+            JSON.stringify({
+                schemaVersion: 1,
+                kind: 'remappr.keymap',
+                meta: { name: 'Tiny', target: 'remappr' },
+                keyboard: { id: 't', name: 'T', keys: [{ x: 0, y: 0 }] },
+                layers: [{ name: 'base', bindings: ['A'] }],
+                node: { displays: withSettings },
+            }),
+        )
+        const kb = buildRemapprBlob(keymap, { configVersion: 1 })
+        expect(kb.diagnostics).toEqual([])
+        expect(decodeRemapprBlob(kb.blob).config!.node?.displays).toEqual(withSettings)
+    })
+
+    it('leaves out a display setting the part would refuse', () => {
+        const keymap = parseKeymap(
+            JSON.stringify({
+                schemaVersion: 1,
+                kind: 'remappr.keymap',
+                meta: { name: 'Tiny', target: 'remappr' },
+                keyboard: { id: 't', name: 'T', keys: [{ x: 0, y: 0 }] },
+                layers: [{ name: 'base', bindings: ['A'] }],
+                node: { displays: [{ ...HOSTSYNC[0], settings: { brightness: 40 } }] },
+            }),
+        )
+        const parts = [
+            {
+                index: 0,
+                cls: 'display',
+                model: 'SH1106',
+                channels: 1,
+                io: [],
+                procedures: [],
+                metrics: [],
+                settings: [
+                    { name: 'brightness', label: 'Brightness', type: 'int', unit: '%', min: 50, max: 100, default: 100, value: 100, personality: false },
+                ],
+            },
+        ] as never
+        const { diagnostics } = buildRemapprBlob(keymap, { configVersion: 1, parts })
+        expect(diagnostics[0].path).toEqual(['node', 'displays', 0, 'settings', 'brightness'])
+    })
+
     it('needs what each kind draws', () => {
         expect(() =>
             parseDeviceConfig(

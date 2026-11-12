@@ -93,7 +93,7 @@ import { readRadio } from './radio'
 import { readMouseTable } from './mouse'
 import { matrixDefaultsFromParts } from './matrix'
 import { readPartEntries } from './sensor'
-import { readDisplayTable } from './display'
+import { readDisplayTable, withDisplaySettings } from './display'
 
 const HID_PAGE_KEYBOARD = 7
 const HID_PAGE_CONSUMER = 12
@@ -914,7 +914,12 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
 
     // ── DISPLAY (optional, id 31, display part design §3) → node.displays ──
     const displayT = table(TableId.Display)
-    const displays = displayT ? readDisplays(bytes, displayT, diag) : undefined
+    const shown = displayT ? readDisplays(bytes, displayT, diag) : undefined
+    // Their parts' own settings ride in TBL_PART.
+    const displays =
+        shown && typeof partEntries !== 'string'
+            ? withDisplaySettings(shown, partEntries)
+            : shown
 
     // ── POWER (optional, id 30, sleep-wake design) → node.power ──
     const powerT = table(TableId.Power)

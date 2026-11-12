@@ -47,7 +47,12 @@ import {
     readMouseTable,
 } from './mouse'
 import { powerRecord, readPower } from './power'
-import { encodeDisplays, readDisplayTable } from './display'
+import {
+    displaySettingEntries,
+    encodeDisplays,
+    readDisplayTable,
+    withDisplaySettings,
+} from './display'
 import { radioRecord, readRadio } from './radio'
 import {
     deviceSensorEntries,
@@ -151,7 +156,8 @@ export function buildRemapprDeviceBlob(
     const axes = config.joystick
         ? addJoystick(builder, config.joystick, opts.axes)
         : []
-    const parts = mergePartEntries(sensor, axes)
+    const shown = displaySettingEntries(config.displays, opts.sensors).entries
+    const parts = mergePartEntries(sensor, shown, axes)
     if (parts.length) builder.sensorTable(parts)
     const power = config.power ? powerRecord(config.power) : undefined
     if (power) builder.powerTable(power)
@@ -240,7 +246,19 @@ function decodeDisplays(
     if (!t) return {}
     if (t.version !== 1) return DecodeCode.TABLE_VER
     const displays = readDisplayTable(bytes, t.start, t.end)
-    return typeof displays === 'string' ? DecodeCode.TABLE_FRAME : { displays }
+    if (typeof displays === 'string') return DecodeCode.TABLE_FRAME
+    // Their parts' own settings ride in TBL_PART.
+    const pt = table(TableId.Sensor)
+    const entries = pt ? readPartEntries(bytes, pt.start, pt.end) : []
+    if (typeof entries === 'string') return DecodeCode.TABLE_FRAME
+    return { displays: withDisplaySettings(displays, entries) }
+}
+
+/** The parts TBL_DISPLAY names (their TBL_PART entries are the displays'). */
+function displayParts(bytes: Uint8Array, table: Frames): ReadonlySet<number> {
+    const t = table(TableId.Display)
+    const displays = t ? readDisplayTable(bytes, t.start, t.end) : []
+    return new Set(typeof displays === 'string' ? [] : displays.map((d) => d.part))
 }
 
 /** A device's own tables beside TBL_POWER and TBL_DISPLAY, or a code. */
@@ -307,7 +325,7 @@ function decodeMouseTables(
     const st = table(TableId.Sensor)
     if (st) {
         if (st.version < 1 || st.version > 2) return DecodeCode.TABLE_VER
-        const sensor = readSensorTable(bytes, st.start, st.end)
+        const sensor = readSensorTable(bytes, st.start, st.end, displayParts(bytes, table))
         if (typeof sensor === 'string') return DecodeCode.TABLE_FRAME
         if (sensor.settings) out.sensor = sensor
     }

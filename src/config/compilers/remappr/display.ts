@@ -23,12 +23,17 @@ import {
     screenSourceId,
     screenSourceName,
 } from '../../../clients/remappr/screenRegistry'
+import { registrySetting, sensorSettingKey } from '../../../clients/remappr/sensorRegistry'
+import type { SensorInfo } from '../../../devices/types'
 import type {
     ConfigDisplay,
     ConfigScreenPage,
     ConfigScreenWidget,
+    ConfigSensorValue,
 } from '../../types'
+import type { SensorTableEntry } from './blobWriter'
 import { ByteReader } from './decode'
+import { type SensorSkip, sensorEntries } from './sensor'
 
 /** What one device holds (firmware REMAPPR_SCREEN_*_MAX). */
 export const SCREEN_LIMITS = {
@@ -336,4 +341,42 @@ export function readDisplayTable(
         byPart.set(part, [...(byPart.get(part) ?? []), page])
     }
     return [...byPart].map(([part, ps]) => ({ part, pages: ps }))
+}
+
+/* ---- the display parts' own settings (TBL_PART) ------------------------------ */
+
+/**
+ * Each display's `settings` -> TBL_PART entries for its part. A setting the
+ * registry does not know, or (with `parts`, the device's description) one the
+ * part would refuse, is skipped with its display's index.
+ */
+export function displaySettingEntries(
+    displays: readonly ConfigDisplay[] | undefined,
+    parts?: readonly SensorInfo[],
+): { entries: SensorTableEntry[]; skipped: (SensorSkip & { display: number })[] } {
+    const entries: SensorTableEntry[] = []
+    const skipped: (SensorSkip & { display: number })[] = []
+    ;(displays ?? []).forEach((d, display) => {
+        const r = sensorEntries(d.settings, d.part, parts)
+        entries.push(...r.entries)
+        skipped.push(...r.skipped.map((k) => ({ ...k, display })))
+    })
+    return { entries, skipped }
+}
+
+/** The displays with their parts' settings read back from TBL_PART entries
+ *  (channel 0; a BOOL the registry knows as a boolean). */
+export function withDisplaySettings(
+    displays: readonly ConfigDisplay[],
+    entries: readonly SensorTableEntry[],
+): ConfigDisplay[] {
+    return displays.map((d) => {
+        const settings: Record<string, ConfigSensorValue> = {}
+        for (const e of entries) {
+            if (e.sensor !== d.part || (e.ch ?? 0) !== 0) continue
+            const bool = registrySetting(e.id)?.type === 'bool'
+            settings[sensorSettingKey(e.id)] = bool ? e.value !== 0 : e.value
+        }
+        return Object.keys(settings).length ? { ...d, settings } : { ...d }
+    })
 }

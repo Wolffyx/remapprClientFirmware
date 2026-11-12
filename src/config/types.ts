@@ -1158,6 +1158,9 @@ export interface ConfigScreenPage {
 export interface ConfigDisplay {
     part: number
     pages: ConfigScreenPage[]
+    /** The display part's own settings by registry name (brightness, invert,
+     *  rotation, ...), written to TBL_PART for that part. */
+    settings?: Record<string, ConfigSensorValue>
 }
 
 export interface ConfigNode {

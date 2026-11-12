@@ -24,6 +24,7 @@ import type {
     MouseMotionApi,
     NodesApi,
     HostValuesApi,
+    ScreensApi,
     SensorApi,
     UnicodeApi,
 } from '../../service'
@@ -152,6 +153,8 @@ export interface RemapprServiceDeps {
     /** Values this computer pushes for the screens; absent when the
      *  firmware does not serve the HOST namespace. */
     hostValues?: HostValuesApi
+    /** What the screens can show and how they draw. */
+    screens?: ScreensApi
 }
 
 /** Round `b` up to a multiple of `align` with zero padding (flash alignment). */
@@ -197,6 +200,7 @@ export class RemapprKeyboardService
     /** Parts (battery, sensors) where the firmware serves SENSOR. */
     public readonly sensor?: SensorApi
     public readonly hostValues?: HostValuesApi
+    public readonly screens?: ScreensApi
     // The parts' descriptions, read once when a commit first needs them
     // (descriptors are constant); a failed read is asked again next time.
     private partsRead: Promise<readonly SensorInfo[]> | null = null
@@ -285,6 +289,7 @@ export class RemapprKeyboardService
         this.unicode = deps.unicode
         this.sensor = deps.sensor
         this.hostValues = deps.hostValues
+        this.screens = deps.screens
         this.limits = deps.limits
         this.deviceInfo = deps.deviceInfo
         // Knob slots from the device's layout so its turns validate on export.
@@ -1048,16 +1053,17 @@ export class RemapprKeyboardService
     }
 
     /** The device's described parts when `config` sets matrix timing (its
-     *  MATRIX parts then hold it, compilers/remappr/matrix.ts); undefined
+     *  MATRIX parts then hold it, compilers/remappr/matrix.ts) or a display
+     *  part's settings (checked against what the part takes); undefined
      *  otherwise or without the PART namespace. */
     private async partsFor(
         config: ConfigKeymap,
     ): Promise<readonly SensorInfo[] | undefined> {
         const sensor = this.sensor
         if (!sensor) return undefined
-        if (!MATRIX_FIELDS.some((f) => (config.defaults?.[f] ?? 0) > 0)) {
-            return undefined
-        }
+        const matrix = MATRIX_FIELDS.some((f) => (config.defaults?.[f] ?? 0) > 0)
+        const shown = config.node?.displays?.some((d) => d.settings)
+        if (!matrix && !shown) return undefined
         this.partsRead ??= sensor.getSensors().catch((e: unknown) => {
             this.partsRead = null
             throw e

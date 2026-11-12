@@ -1486,6 +1486,12 @@ export const DisplaysSchema = z
                     }),
                 )
                 .min(1),
+            settings: sensorValuesSchema(false)
+                .optional()
+                .describe(
+                    "The display part's own settings by registry name (brightness, " +
+                        'invert, rotation, ...); a setting left out stays on the default.',
+                ),
         }),
     )
     .describe('What each display shows: its part index and its pages (TBL_DISPLAY).')

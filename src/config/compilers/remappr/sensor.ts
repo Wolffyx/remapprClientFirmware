@@ -141,16 +141,19 @@ export function readPartEntries(
  * TBL_SENSOR payload in [start, end) -> the first sensor's settings by name
  * (a BOOL the registry knows as a boolean, everything else as its number).
  * A document holds one sensor's settings, so entries for any other sensor
- * are not read back. Returns an error message for a frame too short for its
+ * (or for a part in @p others) are not read back. Returns an error message for a frame too short for its
  * count.
  */
 export function readSensorTable(
     bytes: Uint8Array,
     start: number,
     end: number,
+    others: ReadonlySet<number> = new Set(),
 ): ConfigDeviceSensor | string {
-    const entries = readPartEntries(bytes, start, end)
-    if (typeof entries === 'string') return entries
+    const all = readPartEntries(bytes, start, end)
+    if (typeof all === 'string') return all
+    // Parts another section holds (the displays) are not the sensor.
+    const entries = all.filter((e) => !others.has(e.sensor))
     const index = entries[0]?.sensor
     if (index === undefined) return {}
     const settings: Record<string, ConfigSensorValue> = {}

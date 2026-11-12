@@ -72,7 +72,7 @@ import {
 } from './blobWriter'
 import { encodeAutocorrectDictionary } from './autocorrect'
 import { powerRecord } from './power'
-import { encodeDisplays } from './display'
+import { displaySettingEntries, encodeDisplays } from './display'
 import { radioRecord } from './radio'
 import { mouseRecord } from './mouse'
 import { mergePartEntries, sensorEntries } from './sensor'
@@ -1438,9 +1438,25 @@ function encodeBlob(
             skip.key,
         ])
     }
-    // One TBL_PART: those defaults, then the matrix timing (the user's own
-    // tuning wins over a product default for the same setting).
-    const partTable = mergePartEntries(sensor.entries, matrix.entries)
+    // The display parts' own settings (brightness, invert, rotation).
+    const shownParts = displaySettingEntries(config.node?.displays, opts.parts)
+    for (const skip of shownParts.skipped) {
+        diag.warn(`display setting "${skip.key}" left out: ${skip.reason}`, [
+            'node',
+            'displays',
+            skip.display,
+            'settings',
+            skip.key,
+        ])
+    }
+    // One TBL_PART: those defaults, the displays' settings, then the matrix
+    // timing (the user's own tuning wins over a product default for the same
+    // setting).
+    const partTable = mergePartEntries(
+        sensor.entries,
+        shownParts.entries,
+        matrix.entries,
+    )
     if (partTable.length > 0) builder.sensorTable(partTable)
     // TBL_RGB (§4c): per-key static colors from keyboard.lighting.perKey, emitted
     // as a flat (non-per-layer) RGB888 map over every physical position; unset

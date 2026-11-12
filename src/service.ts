@@ -48,6 +48,7 @@ import type {
 import type { SideloadApi } from './sideload'
 import type { ConfigKeymap } from './config'
 import type { ConfigDevice } from './config/device'
+import type { ConfigDisplay, ConfigScreenPage, ConfigScreenWidget } from './config/types'
 
 // pattern-check: skip optional behavior-flags field added to existing Capabilities DTO — feature gate per firmware
 export interface FirmwareBehaviorFlags {
@@ -798,6 +799,81 @@ export interface HostValuesApi {
     clear(): Promise<void>
 }
 
+/** One display of the device: its part and its panel as built. */
+export interface ScreenPanel {
+    /** Its part index (a document's `displays[].part`). */
+    readonly part: number
+    readonly model: string
+    /** Pixels as built, before the part's rotation. */
+    readonly width: number
+    readonly height: number
+    /** The part as it describes itself (its settings: brightness, ...). */
+    readonly info: SensorInfo
+}
+
+/** A value a screen widget can show, by its document name. */
+export interface ScreenSourceInfo {
+    readonly name: string
+    readonly label: string
+    /** The device's own value, or one this computer pushes. */
+    readonly from: 'device' | 'host'
+}
+
+/** A value drawn in a preview: a number, a text, or (the time) a Date. */
+export type ScreenPreviewValue = number | string | Date
+
+export interface ScreenRenderOpts {
+    width: number
+    height: number
+    /** The part's rotation code (clockwise quarter turns). */
+    rotation?: number
+    invert?: boolean
+    /** A source's value by document name; undefined draws as the device
+     *  draws a missing value. */
+    values?: (source: string) => ScreenPreviewValue | undefined
+}
+
+export interface ScreenBox {
+    x: number
+    y: number
+    w: number
+    h: number
+}
+
+// Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as HostValuesApi / SensorApi: one surface an adapter may or may not implement, gated by presence.
+/** What the device's displays can show and how they draw it, so an editor
+ *  can offer the right values and preview a page pixel for pixel. */
+export interface ScreensApi {
+    /** The device's displays (none = []). */
+    displays(): Promise<readonly ScreenPanel[]>
+    /** Every value a widget can show. */
+    readonly sources: readonly ScreenSourceInfo[]
+    /** Widest / tallest picture a widget holds. */
+    readonly imageMax: number
+    /** The size widgets see on a w x h panel turned `rotation`. */
+    logicalSize(width: number, height: number, rotation: number): { width: number; height: number }
+    /** A page as the panel shows it: width x height bytes, 1 = lit. */
+    render(page: ConfigScreenPage | undefined, opts: ScreenRenderOpts): Uint8Array
+    /** Panel pixel -> the logical pixel it shows. */
+    panelToLogical(
+        px: number,
+        py: number,
+        opts: { width: number; height: number; rotation: number },
+    ): { x: number; y: number }
+    /** A widget's box -> where it lands on the panel. */
+    panelBox(box: ScreenBox, opts: { width: number; height: number; rotation: number }): ScreenBox
+    /** RGBA pixels -> a picture widget's `image` (1-bit, dithered unless
+     *  `dither` is false; `invert` lights the dark parts). */
+    image(
+        rgba: ArrayLike<number>,
+        width: number,
+        height: number,
+        opts?: { dither?: boolean; invert?: boolean },
+    ): NonNullable<ConfigScreenWidget['image']>
+    /** What the device would refuse, with paths into `displays`. */
+    problems(displays: readonly ConfigDisplay[]): { path: (string | number)[]; message: string }[]
+}
+
 export interface SensorApi {
     /** False on a read-only view. */
     readonly writable: boolean
@@ -932,6 +1008,9 @@ export interface KeyboardService {
     /** Values this computer pushes for the device's screens. Present when
      *  the firmware serves them. */
     readonly hostValues?: HostValuesApi
+    /** What the device's screens can show and how they draw. Present when
+     *  the firmware draws screens from its config. */
+    readonly screens?: ScreensApi
     /** Identifiers to match this device against community device items
      *  (`scheme:value`). Each client declares its own; absent = none. */
     readonly identity?: IdentityApi
