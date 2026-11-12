@@ -32,6 +32,7 @@ import type {
     DeviceConfigApi,
     DeviceConfigDraft,
     MouseMotionApi,
+    HostValuesApi,
     SensorApi,
 } from '../../service'
 import type { DeviceInfo, ExportedFile } from '../../types'
@@ -64,6 +65,9 @@ export interface MouseServiceDeps {
     /** The sensor's settings, procedures and readings; absent when the
      *  firmware does not serve the SENSOR namespace. */
     sensor?: SensorApi
+    /** Values this computer pushes for the screens; absent when the
+     *  firmware does not serve the HOST namespace. */
+    hostValues?: HostValuesApi
     /** False for a read-only view. */
     writable: boolean
     /** GET_PERSONALITY_MAP hw_caps (0 / absent = not reported). */
@@ -105,6 +109,7 @@ export class RemapprMouseService extends KeylessServiceBase {
     readonly limits?: Limits
     readonly motion?: MouseMotionApi
     readonly sensor?: SensorApi
+    readonly hostValues?: HostValuesApi
     readonly device?: DeviceConfigApi
     readonly controls: ControlsApi
 
@@ -129,6 +134,7 @@ export class RemapprMouseService extends KeylessServiceBase {
         this.limits = deps.limits
         this.motion = deps.motion
         this.sensor = deps.sensor
+        this.hostValues = deps.hostValues
         // Drawn as the mouse reports itself, else generic; a layout drawn in
         // the Builder is remembered per mouse and wins while it fits.
         this.layout = createLayoutOverride(

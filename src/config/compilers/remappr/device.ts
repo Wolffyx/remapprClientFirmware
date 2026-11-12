@@ -14,6 +14,7 @@ import type { AxesLayout } from '../../../clients/remappr/axesLayout'
 import type { SensorInfo } from '../../../devices/types'
 import type { ConfigDevice, ConfigDeviceSensor, DongleSettings } from '../../device'
 import type {
+    ConfigDisplay,
     ConfigJoystick,
     ConfigMouse,
     ConfigPowerSettings,
@@ -46,6 +47,7 @@ import {
     readMouseTable,
 } from './mouse'
 import { powerRecord, readPower } from './power'
+import { encodeDisplays, readDisplayTable } from './display'
 import { radioRecord, readRadio } from './radio'
 import {
     deviceSensorEntries,
@@ -105,6 +107,19 @@ function addJoystick(
 }
 
 
+/** A device document's displays -> TBL_DISPLAY payload. The schema checks
+ *  the shapes; what it cannot (an unknown value, bad image data, more than a
+ *  device holds) is thrown, so a write never drops a display silently. */
+function displayPayload(displays: readonly ConfigDisplay[]): Uint8Array {
+    const { payload, problems } = encodeDisplays(displays)
+    if (!payload) {
+        throw new Error(
+            problems.map((p) => `displays.${p.path.join('.')}: ${p.message}`).join('; '),
+        )
+    }
+    return payload
+}
+
 /**
  * Device config -> RMBC blob. `configVersion` must be above the device's active
  * one (the firmware refuses a stale commit). The config is assumed validated
@@ -140,6 +155,7 @@ export function buildRemapprDeviceBlob(
     if (parts.length) builder.sensorTable(parts)
     const power = config.power ? powerRecord(config.power) : undefined
     if (power) builder.powerTable(power)
+    if (config.displays?.length) builder.displayTable(displayPayload(config.displays))
     return builder.finalize(
         config.schemaVersion,
         BLOB_READER_VERSION,
@@ -149,6 +165,8 @@ export function buildRemapprDeviceBlob(
 
 export interface DeviceDecodeResult {
     code: DecodeCodeValue
+    /** What the device's displays show (a blob that carries TBL_DISPLAY). */
+    displays?: ConfigDisplay[]
     /** Which device the blob is for, present iff `code === OK`. */
     personality?: DevicePersonality
     /** The dongle's settings (a dongle blob). */
@@ -210,8 +228,33 @@ export interface DeviceDecodeOpts {
 }
 type DeviceTables = Pick<
     DeviceDecodeResult,
-    'dongle' | 'mouse' | 'radio' | 'joystick' | 'sensor' | 'power'
+    'dongle' | 'mouse' | 'radio' | 'joystick' | 'sensor' | 'power' | 'displays'
 >
+
+/** TBL_DISPLAY, or a decode code; {} when absent. */
+function decodeDisplays(
+    bytes: Uint8Array,
+    table: Frames,
+): Pick<DeviceTables, 'displays'> | DecodeCodeValue {
+    const t = table(TableId.Display)
+    if (!t) return {}
+    if (t.version !== 1) return DecodeCode.TABLE_VER
+    const displays = readDisplayTable(bytes, t.start, t.end)
+    return typeof displays === 'string' ? DecodeCode.TABLE_FRAME : { displays }
+}
+
+/** A device's own tables beside TBL_POWER and TBL_DISPLAY, or a code. */
+function withShared(
+    bytes: Uint8Array,
+    table: Frames,
+    own: DeviceTables,
+): DeviceTables | DecodeCodeValue {
+    const power = decodePowerTable(bytes, table)
+    if (typeof power === 'number') return power
+    const displays = decodeDisplays(bytes, table)
+    if (typeof displays === 'number') return displays
+    return { ...own, ...power, ...displays }
+}
 
 /** TBL_POWER of a mouse or joystick blob, or a decode code; {} when absent. */
 function decodePowerTable(
@@ -268,9 +311,7 @@ function decodeMouseTables(
         if (typeof sensor === 'string') return DecodeCode.TABLE_FRAME
         if (sensor.settings) out.sensor = sensor
     }
-    const power = decodePowerTable(bytes, table)
-    if (typeof power === 'number') return power
-    return { ...out, ...power }
+    return withShared(bytes, table, out)
 }
 
 /** TBL_JOYSTICK, with (v2) its inputs' shaping from TBL_PART; undefined
@@ -307,9 +348,7 @@ function decodeJoystickTables(
         if (typeof buttonActions === 'string') return DecodeCode.TABLE_FRAME
         if (buttonActions) joystick = { ...joystick, buttonActions }
     }
-    const power = decodePowerTable(bytes, table)
-    if (typeof power === 'number') return power
-    return { ...(joystick ? { joystick } : {}), ...power }
+    return withShared(bytes, table, joystick ? { joystick } : {})
 }
 
 const TABLES_BY_PERSONALITY: Record<

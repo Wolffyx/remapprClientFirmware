@@ -24,6 +24,7 @@ import {
     type SensorWire,
     servesSensor,
 } from './sensor'
+import { buildHostValuesApi, servesHost } from './hostValues'
 import { RemapprMouseService } from './mouseService'
 import { RemapprJoystickService } from './joystickService'
 
@@ -85,6 +86,9 @@ export async function buildMouseService(
             ? buildMouseMotionApi(rpc, { targetNode, writable: true })
             : undefined,
         sensor,
+        ...(servesHost(discovery)
+            ? { hostValues: buildHostValuesApi(rpc, { targetNode }) }
+            : {}),
         rate: {
             get: () => getRateLimits(rpc, targetNode),
             set: (hz) => setReportRate(rpc, hz, targetNode),
@@ -183,6 +187,9 @@ export async function buildJoystickService(
               })
             : undefined,
         ...(axesSettings ? { axesSettings } : {}),
+        ...(servesHost(discovery)
+            ? { hostValues: buildHostValuesApi(rpc, { targetNode }) }
+            : {}),
         writable: true,
         hwCaps: discovery.personality?.hwCaps,
         layout,

@@ -40,6 +40,7 @@ import type {
     ConfigLinkProfile,
     ConfigLinkProfileOverride,
     ConfigPowerSettings,
+    ConfigDisplay,
     ConfigRadioSettings,
     ConfigMouse,
     ConfigNode,
@@ -92,6 +93,7 @@ import { readRadio } from './radio'
 import { readMouseTable } from './mouse'
 import { matrixDefaultsFromParts } from './matrix'
 import { readPartEntries } from './sensor'
+import { readDisplayTable } from './display'
 
 const HID_PAGE_KEYBOARD = 7
 const HID_PAGE_CONSUMER = 12
@@ -910,6 +912,10 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const radioT = table(TableId.Radio)
     const radio = radioT ? readRadioTable(bytes, radioT, diag) : undefined
 
+    // ── DISPLAY (optional, id 31, display part design §3) → node.displays ──
+    const displayT = table(TableId.Display)
+    const displays = displayT ? readDisplays(bytes, displayT, diag) : undefined
+
     // ── POWER (optional, id 30, sleep-wake design) → node.power ──
     const powerT = table(TableId.Power)
     const power = powerT ? readPowerTable(bytes, powerT, diag) : undefined
@@ -937,7 +943,8 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         cluster ||
         linkProfile ||
         radio ||
-        power
+        power ||
+        displays
             ? {
                   ...(pers.personality ? { personality: pers.personality } : {}),
                   ...(pers.role ? { role: pers.role } : {}),
@@ -947,6 +954,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
                   ...(linkProfile ? { linkProfile } : {}),
                   ...(radio ? { radio } : {}),
                   ...(power ? { power } : {}),
+                  ...(displays ? { displays } : {}),
               }
             : undefined
 
@@ -1261,6 +1269,25 @@ function readRadioTable(
         return undefined
     }
     return readRadio(bytes, t.start)
+}
+
+// pattern-check: skip frame checks around the shared display reader
+// TBL_DISPLAY (id 31): the pages per display (compilers/remappr/display.ts).
+function readDisplays(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigDisplay[] | undefined {
+    if (t.version !== 1) {
+        diag.error(`display table version ${t.version} not supported`)
+        return undefined
+    }
+    const displays = readDisplayTable(bytes, t.start, t.end)
+    if (typeof displays === 'string') {
+        diag.error(displays)
+        return undefined
+    }
+    return displays
 }
 
 // pattern-check: skip frame checks around the shared power reader

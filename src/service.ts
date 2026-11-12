@@ -783,6 +783,21 @@ export interface SensorReading {
  *  the next saved config replaces it. A procedure's result belongs to the
  *  unit and stays across configs. Settings and procedures are named as their
  *  descriptors name them. */
+/** Values this computer shows on the device's screens (time, CPU, media,
+ *  text). Each value expires on the device when it is not refreshed (a few
+ *  seconds; the time a day), so a closed app leaves "--" instead of a stale
+ *  number. Keys are named as the registry names them (`time`, `cpu`,
+ *  `mediaTitle`, `user0`...). */
+export interface HostValuesApi {
+    /** The keys the device's saved screens show: push only those. */
+    keys(): Promise<string[]>
+    /** Push one value: a number, a text (up to 64 bytes), or a time (shown
+     *  in this computer's local time, ticking on by itself). */
+    set(key: string, value: number | string | Date): Promise<void>
+    /** Forget every value. */
+    clear(): Promise<void>
+}
+
 export interface SensorApi {
     /** False on a read-only view. */
     readonly writable: boolean
@@ -914,6 +929,9 @@ export interface KeyboardService {
     /** The device's sensors: settings, procedures, readings. Present when the
      *  firmware serves them. */
     readonly sensor?: SensorApi
+    /** Values this computer pushes for the device's screens. Present when
+     *  the firmware serves them. */
+    readonly hostValues?: HostValuesApi
     /** Identifiers to match this device against community device items
      *  (`scheme:value`). Each client declares its own; absent = none. */
     readonly identity?: IdentityApi

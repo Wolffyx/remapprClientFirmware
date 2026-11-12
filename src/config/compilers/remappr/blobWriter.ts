@@ -50,6 +50,7 @@ export const TableId = {
     Joystick: 28, // joystick axes + hat (input-layout plan §4)
     Sensor: 29, // sensor settings (sensor-settings plan §4)
     Power: 30, // idle / sleep / off timeouts (sleep-wake design)
+    Display: 31, // what each display shows (display part design §3)
 } as const
 
 /** enum remappr_personality (firmware include/remappr/role.h). */
@@ -1165,6 +1166,15 @@ export class BlobBuilder {
     /** TBL_POWER (id 30), 16 bytes: u16 set, u8 flags (0), u8 reserved, u32
      *  idle_ms, u32 sleep_ms, u32 off_ms (0 = never). Mirrors the firmware
      *  include/remappr/power.h. */
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_DISPLAY (id 31): a payload built by compilers/remappr/display.ts. */
+    displayTable(payload: Uint8Array): this {
+        this.tableBegin(TableId.Display, 1)
+        for (const b of payload) this.w.u8(b)
+        this.tableEnd()
+        return this
+    }
+
     powerTable(r: PowerTableRecord): this {
         const on = (bit: number): boolean => (r.set & bit) !== 0
         this.tableBegin(TableId.Power, 1)

@@ -23,6 +23,7 @@ import type {
     MacroApi,
     MouseMotionApi,
     NodesApi,
+    HostValuesApi,
     SensorApi,
     UnicodeApi,
 } from '../../service'
@@ -148,6 +149,9 @@ export interface RemapprServiceDeps {
     /** SENSOR facade — set where the firmware serves SENSOR (its parts: the
      *  battery, sensors); omitted otherwise. */
     sensor?: SensorApi
+    /** Values this computer pushes for the screens; absent when the
+     *  firmware does not serve the HOST namespace. */
+    hostValues?: HostValuesApi
 }
 
 /** Round `b` up to a multiple of `align` with zero padding (flash alignment). */
@@ -192,6 +196,7 @@ export class RemapprKeyboardService
     public readonly unicode?: UnicodeApi
     /** Parts (battery, sensors) where the firmware serves SENSOR. */
     public readonly sensor?: SensorApi
+    public readonly hostValues?: HostValuesApi
     // The parts' descriptions, read once when a commit first needs them
     // (descriptors are constant); a failed read is asked again next time.
     private partsRead: Promise<readonly SensorInfo[]> | null = null
@@ -279,6 +284,7 @@ export class RemapprKeyboardService
         this.cluster = deps.cluster
         this.unicode = deps.unicode
         this.sensor = deps.sensor
+        this.hostValues = deps.hostValues
         this.limits = deps.limits
         this.deviceInfo = deps.deviceInfo
         // Knob slots from the device's layout so its turns validate on export.

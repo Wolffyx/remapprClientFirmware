@@ -1433,6 +1433,63 @@ export const PowerSettingsSchema = z
     )
 
 // pattern-check: skip adding well-known optional fields to an existing zod schema
+const px = (min: number) => z.number().int().min(min).max(255)
+
+const ScreenWidgetSchema = z
+    .object({
+        kind: z.enum(['text', 'value', 'bar', 'image', 'clock', 'rect']),
+        x: px(0),
+        y: px(0),
+        w: px(1),
+        h: px(1),
+        font: z.enum(['small', 'large']).optional(),
+        align: z.enum(['left', 'centre', 'right']).optional(),
+        invert: z.boolean().optional(),
+        frame: z.boolean().optional(),
+        text: z.string().max(255).optional(),
+        source: z.string().optional(),
+        max: z.number().int().min(1).max(65535).optional(),
+        format: z.enum(['hm', 'hms', 'date']).optional(),
+        image: z
+            .object({ width: px(1), height: px(1), data: z.string() })
+            .optional(),
+    })
+    .superRefine((w, ctx) => {
+        // What each kind needs to draw anything.
+        const needs: Record<string, (keyof typeof w)[]> = {
+            text: ['text'],
+            value: ['source'],
+            bar: ['source', 'max'],
+            image: ['image'],
+        }
+        for (const key of needs[w.kind] ?? []) {
+            if (w[key] === undefined) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: [key],
+                    message: `a ${w.kind} widget needs "${key}"`,
+                })
+            }
+        }
+    })
+    .describe('One widget of a screen page, in the panel\'s logical pixels.')
+
+export const DisplaysSchema = z
+    .array(
+        z.object({
+            part: z.number().int().min(0).max(255),
+            pages: z
+                .array(
+                    z.object({
+                        default: z.boolean().optional(),
+                        widgets: z.array(ScreenWidgetSchema),
+                    }),
+                )
+                .min(1),
+        }),
+    )
+    .describe('What each display shows: its part index and its pages (TBL_DISPLAY).')
+
 export const NodeSchema = z
     .looseObject({
         personality: z
@@ -1446,6 +1503,7 @@ export const NodeSchema = z
         radio: RadioSettingsSchema.optional(),
         power: PowerSettingsSchema.optional(),
         sensor: NodeSensorSchema.optional(),
+        displays: DisplaysSchema.optional(),
     })
     .describe(
         'Per-personality node configuration; a dongle has a limited surface, a ' +

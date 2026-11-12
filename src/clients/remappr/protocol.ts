@@ -202,6 +202,9 @@ export const Namespace = {
      *  (sensor-settings plan §3). Provisional (ns_version 0): served only when
      *  the personality map lists it. */
     SENSOR: 0x0a,
+    /** Values the host pushes for the device's screens (display part design
+     *  §4); listed in the personality map when the firmware serves it. */
+    HOST: 0x0b,
 } as const
 
 export const UchFlag = {

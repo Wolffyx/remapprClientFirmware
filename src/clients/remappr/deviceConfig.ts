@@ -226,7 +226,7 @@ export function buildDeviceConfigApi(
                 `the device holds a ${decoded.personality} config, not a ${target.personality} one`,
             )
         }
-        const { dongle, mouse, radio, joystick, sensor, power } = decoded
+        const { dongle, mouse, radio, joystick, sensor, power, displays } = decoded
         return {
             config: {
                 ...emptyDeviceConfig(target.personality, target.name),
@@ -236,6 +236,7 @@ export function buildDeviceConfigApi(
                 ...(joystick ? { joystick } : {}),
                 ...(sensor ? { sensor } : {}),
                 ...(power ? { power } : {}),
+                ...(displays ? { displays } : {}),
             },
             configVersion: decoded.configVersion ?? info.configVersion,
             stored: true,

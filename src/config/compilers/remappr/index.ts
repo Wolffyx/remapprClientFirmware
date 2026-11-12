@@ -72,6 +72,7 @@ import {
 } from './blobWriter'
 import { encodeAutocorrectDictionary } from './autocorrect'
 import { powerRecord } from './power'
+import { encodeDisplays } from './display'
 import { radioRecord } from './radio'
 import { mouseRecord } from './mouse'
 import { mergePartEntries, sensorEntries } from './sensor'
@@ -1559,6 +1560,14 @@ function encodeBlob(
     // TBL_POWER (sleep-wake design): idle / sleep / off timeouts on battery.
     const power = nodeCfg?.power ? powerRecord(nodeCfg.power) : undefined
     if (power) builder.powerTable(power)
+    // TBL_DISPLAY (display part design §3): what the device's displays show.
+    if (nodeCfg?.displays?.length) {
+        const shown = encodeDisplays(nodeCfg.displays)
+        for (const p of shown.problems) {
+            diag.error(p.message, ['node', 'displays', ...p.path])
+        }
+        if (shown.payload) builder.displayTable(shown.payload)
+    }
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
     if (leaders.length > 0) builder.leaderTable(leaders)

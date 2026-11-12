@@ -1120,6 +1120,46 @@ export interface ConfigAutocorrect {
 // pattern-check: skip adding well-known optional fields to an existing wire-DTO
 /** Per-personality node configuration (v2). Open shape; `personality` and the
  *  `mouse` pointer block are well-known, the rest is preserved for later phases. */
+/** One widget of a screen page (display part design §3, TBL_DISPLAY): a box in
+ *  the panel's logical pixels (after its rotation) and what it shows. */
+export interface ConfigScreenWidget {
+    kind: 'text' | 'value' | 'bar' | 'image' | 'clock' | 'rect'
+    x: number
+    y: number
+    w: number
+    h: number
+    /** small = 6x8 cells, large = 12x16 (default small). */
+    font?: 'small' | 'large'
+    align?: 'left' | 'centre' | 'right'
+    /** The box inverted after drawing. */
+    invert?: boolean
+    /** A one-pixel outline around the box (rect: outline only). */
+    frame?: boolean
+    /** text: what it says (printable ASCII). */
+    text?: string
+    /** value / bar: a device value (`battery`, `activeLayer`, ...) or a host
+     *  value (`host.cpu`, `host.user0`, ...) — screenRegistry.ts. */
+    source?: string
+    /** bar: the value that fills it. */
+    max?: number
+    /** clock: hm (14:05), hms (14:05:09) or date (2026-11-12). */
+    format?: 'hm' | 'hms' | 'date'
+    /** image: 1-bit rows (bit 7 = leftmost, rows of whole bytes), base64. */
+    image?: { width: number; height: number; data: string }
+}
+
+export interface ConfigScreenPage {
+    /** Shown first on its display (else the display's first page). */
+    default?: boolean
+    widgets: ConfigScreenWidget[]
+}
+
+/** What one display shows: its DISPLAY part (by part index) and its pages. */
+export interface ConfigDisplay {
+    part: number
+    pages: ConfigScreenPage[]
+}
+
 export interface ConfigNode {
     personality?: 'keyboard' | 'mouse' | 'joystick' | 'dongle'
     /** Pointer settings (§4b, TBL_MOUSE) — present on mouse / hybrid nodes. */
@@ -1145,6 +1185,8 @@ export interface ConfigNode {
     /** The sensor's product defaults (TBL_SENSOR, the board's
      *  remappr,setting-defaults). */
     sensor?: ConfigNodeSensor
+    /** What the device's displays show (TBL_DISPLAY). */
+    displays?: ConfigDisplay[]
     [k: string]: unknown
 }
 

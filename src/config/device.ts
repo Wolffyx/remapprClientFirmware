@@ -48,6 +48,7 @@ import {
     JoystickSchema,
     MouseSchema,
     PowerSettingsSchema,
+    DisplaysSchema,
     RadioSettingsSchema,
 } from './schema'
 
@@ -142,15 +143,24 @@ export const DeviceConfigSchema = z
         joystick: JoystickSchema.optional(),
         sensor: DeviceSensorSchema.optional(),
         power: PowerSettingsSchema.optional(),
+        displays: DisplaysSchema.optional(),
     })
     .superRefine((d, ctx) => {
         // A section another device reads would be silently ignored: refuse it.
         const own: Record<string, string[]> = {
             dongle: ['dongle'],
-            mouse: ['mouse', 'radio', 'sensor', 'power'],
-            joystick: ['joystick', 'power'],
+            mouse: ['mouse', 'radio', 'sensor', 'power', 'displays'],
+            joystick: ['joystick', 'power', 'displays'],
         }
-        const sections = ['dongle', 'mouse', 'radio', 'joystick', 'sensor', 'power'] as const
+        const sections = [
+            'dongle',
+            'mouse',
+            'radio',
+            'joystick',
+            'sensor',
+            'power',
+            'displays',
+        ] as const
         for (const key of sections) {
             if (d[key] !== undefined && !own[d.personality].includes(key)) {
                 ctx.addIssue({
