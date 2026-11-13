@@ -358,7 +358,7 @@ export const SENSOR_PROCEDURES: readonly RegistryProcedure[] = [
         label: 'Axis calibration',
         phases: [
             'Move the stick or slider slowly to every end of its travel, then press Next.',
-            'Let the stick rest at the centre while it measures.',
+            'Let go of it and leave it still for a second, then press Next.',
         ],
     },
 ]
