@@ -54,7 +54,8 @@ describe('sliders', () => {
     it('round-trips keys mode, a level preset and the motor', () => {
         const km = parseKeymap(src)
         expect(km.keyboard.keys[1]!.motor?.pins?.in1).toBe('D8')
-        expect(km.layers[0]!.sliderBindings?.[1]).toMatchObject({
+        expect(km.keyboard.sliders).toEqual([{ x: 1, y: 0, key: 1 }])
+        expect(km.layers[0]!.sliders?.[0]).toMatchObject({
             map: 'keys',
             steps: 16,
             up: { type: 'key_press' },
@@ -70,19 +71,19 @@ describe('sliders', () => {
     it('survives the demo runtime: lowered, edited, raised', () => {
         const km = parseKeymap(src)
         const { layers } = lowerConfigToMock(km)
-        expect(layers[0]!.sliders?.[1]?.map).toBe('keys')
-        expect(layers[0]!.sliders?.[1]?.up?.kind).toBeDefined()
+        expect(layers[0]!.sliders?.[0]?.map).toBe('keys')
+        expect(layers[0]!.sliders?.[0]?.up?.kind).toBeDefined()
         const edited = layers.map((l, i) => ({
             ...l,
             ...(i === 1
-                ? { sliders: { 1: { map: 'volume', min: 10, max: 90 } } }
+                ? { sliders: [{ map: 'volume', min: 10, max: 90 }] }
                 : {}),
         }))
         const raised = raiseMockToConfig(edited, km)
-        expect(raised.layers[0]!.sliderBindings?.[1]?.up).toEqual(
-            km.layers[0]!.sliderBindings?.[1]?.up,
+        expect(raised.layers[0]!.sliders?.[0]?.up).toEqual(
+            km.layers[0]!.sliders?.[0]?.up,
         )
-        expect(raised.layers[1]!.sliderBindings?.[1]).toEqual({
+        expect(raised.layers[1]!.sliders?.[0]).toEqual({
             map: 'volume',
             min: 10,
             max: 90,

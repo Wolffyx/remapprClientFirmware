@@ -397,19 +397,24 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
             },
         }
         this.sliders = {
-            setSlider: async (layerId, keyIndex, slider) => {
+            setSlider: async (layerId, slot, slider) => {
                 this.requireUnlocked()
                 const li = this.layerIndexById(layerId)
                 if (li < 0)
                     throw new ProtocolError(`Unknown layer id: ${layerId}`)
-                if (keyIndex < 0 || keyIndex >= this.keyCount)
-                    throw new ProtocolError(
-                        `Key index out of range: ${keyIndex}`,
-                    )
+                const count = this.sliderCount()
+                if (slot < 0 || slot >= count)
+                    throw new ProtocolError(`Slider out of range: ${slot}`)
                 const layer = this.layers[li]
-                const { [keyIndex]: _old, ...rest } = layer.sliders ?? {}
-                const sliders = slider ? { ...rest, [keyIndex]: slider } : rest
-                this.layers[li] = { ...layer, sliders }
+                const sliders = Array.from(
+                    { length: count },
+                    (_, i) => layer.sliders?.[i] ?? null,
+                )
+                sliders[slot] = slider
+                const { sliders: _old, ...rest } = layer
+                this.layers[li] = sliders.some((b) => b)
+                    ? { ...rest, sliders }
+                    : rest
                 this.markPending(true)
             },
         }
@@ -701,6 +706,10 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
         return this.seedCfg.keyboard.encoders?.length ?? 0
     }
 
+    private sliderCount(): number {
+        return this.seedCfg.keyboard.sliders?.length ?? 0
+    }
+
     private layerNames(): string[] {
         return this.layers.map((l) => l.name)
     }
@@ -818,7 +827,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                     )
                     return { cw, ccw }
                 }),
-                ...(l.sliders ? { sliders: { ...l.sliders } } : {}),
+                ...(l.sliders ? { sliders: [...l.sliders] } : {}),
             })),
             availableLayers:
                 (this.capabilities.maxLayers ?? 8) - this.layers.length,

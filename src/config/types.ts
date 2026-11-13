@@ -226,6 +226,11 @@ export interface CanonEncoderSlot {
     key?: number
 }
 
+/** A slider's slot. `key` = the slider key (`element: "slider"`) it is;
+ *  absent = a slider with no key of its own (a device's fader, a decoded blob).
+ *  The slot index is the slider index every firmware uses (see sliders.ts). */
+export type CanonSliderSlot = CanonEncoderSlot
+
 export interface CanonEncoderBinding {
     cw: CanonAction
     ccw: CanonAction
@@ -283,10 +288,10 @@ export interface CanonLayer {
     /** Turn bindings, index-aligned to `keyboard.encoders[]`. A slot linked to
      *  a knob key carries no press (the key's binding is the press). */
     encoders?: CanonEncoderBinding[]
-    /** Per-key slider value-mappings, keyed by the position's index in
-     *  `keyboard.keys` (the key must have `element: "slider"`) — one analog
-     *  input element per physical position. */
-    sliderBindings?: Record<number, CanonSliderBinding>
+    /** What each slider does on this layer, index-aligned to
+     *  `keyboard.sliders[]`. `null` = as on the base layer (on the base layer:
+     *  nothing set). */
+    sliders?: (CanonSliderBinding | null)[]
 }
 
 export interface CanonCombo {
@@ -741,6 +746,9 @@ export interface ConfigKeyboard {
     name: string
     keys: CanonGeometry[]
     encoders?: CanonEncoderSlot[]
+    /** Slider slots (see sliders.ts): the slot index is the slider index every
+     *  firmware uses; `key` = the slider key (`element: "slider"`) it is. */
+    sliders?: CanonSliderSlot[]
     /** Board-level matrix descriptor (dims + diode + scan mode). */
     matrix?: CanonKeyboardMatrix
     /** Controller / MCU identity (board/shield/processor/bootloader/…). */

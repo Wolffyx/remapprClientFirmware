@@ -13,6 +13,7 @@
 // is an explicit gap that emits a diagnostic and a NONE placeholder so the blob
 // still forms. Closing those gaps is the §44.3 roadmap (firmware side first).
 
+import { sliderRecords } from './slider'
 import type { ExportedFile } from '../../../types'
 import { HID_USAGE_BY_CANONICAL } from '../../../catalog/entries'
 // Side-effect: the sibling `board` module registers the `remappr-board` shield /
@@ -1265,6 +1266,16 @@ function encodeBlob(
         ),
     }))
 
+    // Sliders (optional, slider part design §4b): slot = slider index; their
+    // STEPS actions join the BEHAVIOR table like the encoders' outputs.
+    const sliders = sliderRecords(
+        config,
+        (action, path) =>
+            getOrAdd(lowerAction(action, diag, path, macroCtx, layerIndex, comp)),
+        diag,
+        TARGET,
+    )
+
     // Encoders (optional, §4a). Slot-array form: layer.encoders[slot] is
     // index-aligned to keyboard.encoders[], so the slot ordinal is the firmware
     // encoder_index. cw/ccw/press each lower to a behavior index (cw/ccw are
@@ -1418,6 +1429,7 @@ function encodeBlob(
     if (macroCtx.records.length > 0) builder.macroTable(macroCtx.records)
     if (combos.length > 0) builder.comboTable(combos)
     if (encoders.length > 0) builder.encoderTable(encoders)
+    if (sliders.length > 0) builder.sliderTable(sliders)
     // TBL_MOUSE (§4b): pointer settings from the v2 node.mouse block. Emitted
     // when the node declares any pointer intent; version 2 only when it uses an
     // inverts / swap / scroll divisor / button-map field (compilers/remappr/

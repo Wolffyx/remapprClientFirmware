@@ -8,6 +8,7 @@ export type {
     CanonAction,
     CanonEncoderBinding,
     CanonEncoderSlot,
+    CanonSliderSlot,
     CanonSliderBinding,
     CanonSliderMotor,
     SliderMap,
@@ -354,7 +355,18 @@ export {
 } from './firmwareSwitches'
 export { DESIGN_FEATURE_NAME } from './firmwareConf'
 export { ELEMENT_SHAPE, PART_SHAPE, partGlyph, partToLayout } from './parts'
-export { SLIDER_MAP_INFO, type SliderMapInfo, sliderMapInfo } from './sliders'
+export {
+    SLIDER_MAP_INFO,
+    type SliderMapInfo,
+    sliderMapInfo,
+    type LegacySliderBindings,
+    syncSliders,
+    remapSliderKeys,
+    sliderSlotOf,
+    sliderBindingAt,
+    setSliderBinding,
+} from './sliders'
+export { syncInputSlots, remapInputKeys } from './inputSlots'
 export {
     DISPLAY_MODULES,
     DISPLAY_PIN_NAMES,

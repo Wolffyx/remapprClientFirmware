@@ -455,7 +455,8 @@ describe('slider value-maps', () => {
                 0: { map: 'volume', min: 0, max: 100 },
             }),
         )
-        expect(km.layers[0].sliderBindings?.[0]).toMatchObject({
+        expect(km.keyboard.sliders).toEqual([{ x: 0, y: 0, key: 0 }])
+        expect(km.layers[0].sliders?.[0]).toMatchObject({
             map: 'volume',
             min: 0,
             max: 100,
@@ -470,7 +471,7 @@ describe('slider value-maps', () => {
         const twice = parseKeymap(text)
         expect(stripHints(twice)).toEqual(stripHints(once))
         expect(serializeKeymap(twice)).toEqual(text)
-        expect(twice.layers[0].sliderBindings?.[0].action).toMatchObject({
+        expect(twice.layers[0].sliders?.[0]?.action).toMatchObject({
             type: 'key_press',
         })
     })
@@ -487,11 +488,26 @@ describe('slider value-maps', () => {
         expect(res.success).toBe(false)
     })
 
-    it('omits sliderBindings when absent', () => {
+    it('omits sliders when absent', () => {
         const km = parseKeymap(serializeKeymap(parseKeymap(seed)))
-        expect(km.layers.some((l) => l.sliderBindings !== undefined)).toBe(
-            false,
+        expect(km.layers.some((l) => l.sliders !== undefined)).toBe(false)
+        expect(km.keyboard.sliders).toBeUndefined()
+    })
+
+    it('rejects a layer with more slider bindings than slots', () => {
+        const res = safeParseSurface(
+            JSON.stringify({
+                ...JSON.parse(sliderConfig({})),
+                layers: [
+                    {
+                        name: 'base',
+                        bindings: ['Q', 'W'],
+                        sliders: [{ map: 'volume' }],
+                    },
+                ],
+            }),
         )
+        expect(res.success).toBe(false)
     })
 })
 

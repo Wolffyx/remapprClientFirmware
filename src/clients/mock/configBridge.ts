@@ -110,7 +110,7 @@ export interface LowerResult {
         name: string
         keys: KeyAction[]
         encoders?: EncoderAction[]
-        sliders?: Record<number, SliderAction>
+        sliders?: (SliderAction | null)[]
     }[]
     diagnostics: Diagnostic[]
 }
@@ -240,37 +240,34 @@ export function lowerConfigToMock(config: ConfigKeymap): LowerResult {
         })
     }
 
-    // Sliders keep their key-index keys; up / down lower like any binding.
+    // One runtime slider per declared slot (null = as on the base layer);
+    // up / down lower like any binding.
+    const sliderCount = config.keyboard.sliders?.length ?? 0
+    const lowerSlider = (
+        s: CanonSliderBinding,
+        path: (string | number)[],
+    ): SliderAction => ({
+        map: s.map,
+        ...(s.min !== undefined ? { min: s.min } : {}),
+        ...(s.max !== undefined ? { max: s.max } : {}),
+        ...(s.steps !== undefined ? { steps: s.steps } : {}),
+        ...(s.up ? { up: lowerAction(s.up, [...path, 'up']) } : {}),
+        ...(s.down ? { down: lowerAction(s.down, [...path, 'down']) } : {}),
+    })
     const lowerSliders = (
-        bound: Record<number, CanonSliderBinding> | undefined,
+        bound: readonly (CanonSliderBinding | null)[] | undefined,
         li: number,
-    ): Record<number, SliderAction> | undefined => {
-        if (!bound || !Object.keys(bound).length) return undefined
-        return Object.fromEntries(
-            Object.entries(bound).map(([k, s]) => {
-                const path = ['layers', li, 'sliderBindings', k]
-                return [
-                    Number(k),
-                    {
-                        map: s.map,
-                        ...(s.min !== undefined ? { min: s.min } : {}),
-                        ...(s.max !== undefined ? { max: s.max } : {}),
-                        ...(s.steps !== undefined ? { steps: s.steps } : {}),
-                        ...(s.up
-                            ? { up: lowerAction(s.up, [...path, 'up']) }
-                            : {}),
-                        ...(s.down
-                            ? { down: lowerAction(s.down, [...path, 'down']) }
-                            : {}),
-                    },
-                ]
-            }),
-        )
+    ): (SliderAction | null)[] | undefined => {
+        if (sliderCount === 0 || !bound?.some((b) => b)) return undefined
+        return Array.from({ length: sliderCount }, (_, si) => {
+            const b = bound[si]
+            return b ? lowerSlider(b, ['layers', li, 'sliders', si]) : null
+        })
     }
 
     const layers = config.layers.map((layer, li) => {
         const encoders = lowerEncoders(layer.encoders, li)
-        const sliders = lowerSliders(layer.sliderBindings, li)
+        const sliders = lowerSliders(layer.sliders, li)
         return {
             name: layer.name,
             keys: layer.bindings.map((b, bi) =>
@@ -410,10 +407,10 @@ export function raiseMockToConfig(
                   }
               })
             : prevLayer?.encoders
-        // Sliders raise per key; with no runtime sliders, keep the config's.
-        const sliderBindings = rl.sliders
-            ? raiseSliders(rl.sliders, prevLayer?.sliderBindings, merge)
-            : prevLayer?.sliderBindings
+        // Sliders raise per slot; with no runtime sliders, keep the config's.
+        const sliders = rl.sliders
+            ? raiseSliders(rl.sliders, prevLayer?.sliders, merge)
+            : prevLayer?.sliders
         return {
             name: rl.name,
             ...(prevLayer?.description
@@ -421,9 +418,7 @@ export function raiseMockToConfig(
                 : {}),
             bindings,
             ...(encoders ? { encoders } : {}),
-            ...(sliderBindings && Object.keys(sliderBindings).length
-                ? { sliderBindings }
-                : {}),
+            ...(sliders?.some((b) => b) ? { sliders } : {}),
         }
     })
 
@@ -433,29 +428,25 @@ export function raiseMockToConfig(
 /** Runtime sliders → config slider bindings. A `custom` binding the runtime
  *  can't show keeps its prior action. */
 function raiseSliders(
-    sliders: Record<number, SliderAction>,
-    prev: Record<number, CanonSliderBinding> | undefined,
+    sliders: readonly (SliderAction | null)[],
+    prev: readonly (CanonSliderBinding | null)[] | undefined,
     merge: (ka: KeyAction, prev: CanonAction | undefined) => CanonAction,
-): Record<number, CanonSliderBinding> {
-    return Object.fromEntries(
-        Object.entries(sliders).map(([k, s]) => {
-            const before = prev?.[Number(k)]
-            return [
-                Number(k),
-                {
-                    map: s.map as SliderMap,
-                    ...(s.min !== undefined ? { min: s.min } : {}),
-                    ...(s.max !== undefined ? { max: s.max } : {}),
-                    ...(s.steps !== undefined ? { steps: s.steps } : {}),
-                    ...(s.up ? { up: merge(s.up, before?.up) } : {}),
-                    ...(s.down ? { down: merge(s.down, before?.down) } : {}),
-                    ...(s.map === 'custom' && before?.action
-                        ? { action: before.action }
-                        : {}),
-                },
-            ]
-        }),
-    )
+): (CanonSliderBinding | null)[] {
+    return sliders.map((s, si) => {
+        if (!s) return null
+        const before = prev?.[si] ?? undefined
+        return {
+            map: s.map as SliderMap,
+            ...(s.min !== undefined ? { min: s.min } : {}),
+            ...(s.max !== undefined ? { max: s.max } : {}),
+            ...(s.steps !== undefined ? { steps: s.steps } : {}),
+            ...(s.up ? { up: merge(s.up, before?.up) } : {}),
+            ...(s.down ? { down: merge(s.down, before?.down) } : {}),
+            ...(s.map === 'custom' && before?.action
+                ? { action: before.action }
+                : {}),
+        }
+    })
 }
 
 /* ── geometry: config → runtime physical layout ────────────────────────── */
@@ -488,11 +479,17 @@ export function configToPhysicalLayout(config: ConfigKeymap): PhysicalLayout {
         y: Math.round(e.y * U),
         ...(e.key !== undefined ? { key: e.key } : {}),
     }))
+    const sliders = config.keyboard.sliders?.map((e) => ({
+        x: Math.round(e.x * U),
+        y: Math.round(e.y * U),
+        ...(e.key !== undefined ? { key: e.key } : {}),
+    }))
     return {
         id: 0,
         name: config.meta.name || 'Custom',
         keys,
         ...(encoders?.length ? { encoders } : {}),
+        ...(sliders?.length ? { sliders } : {}),
         ...(parts?.length ? { parts } : {}),
     }
 }

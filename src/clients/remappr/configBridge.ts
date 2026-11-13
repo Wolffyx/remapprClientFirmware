@@ -16,11 +16,20 @@ import type {
     CanonAction,
     CanonHoldTarget,
     CanonKeyPress,
+    CanonSliderBinding,
     ConfigKeymap,
     Modifier,
+    SliderMap,
 } from '../../config'
 import { DiagnosticBag, type Diagnostic } from '../../config'
-import type { EncoderAction, EncoderSlot, KeyAction, Layer } from '../../types'
+import type {
+    EncoderAction,
+    EncoderSlot,
+    KeyAction,
+    Layer,
+    SliderAction,
+    SliderSlot,
+} from '../../types'
 import {
     buildRemapprKeyAction,
     HID_KP,
@@ -193,7 +202,14 @@ function composite(
 
 export interface LowerResult {
     /** Runtime layers (name + KeyActions), index-aligned with config.layers. */
-    layers: { name: string; keys: KeyAction[]; encoders?: EncoderAction[] }[]
+    layers: {
+        name: string
+        keys: KeyAction[]
+        encoders?: EncoderAction[]
+        /** Index-aligned with `config.keyboard.sliders`; null = as on the
+         *  base layer. Absent when the layer sets none. */
+        sliders?: (SliderAction | null)[]
+    }[]
     diagnostics: Diagnostic[]
 }
 
@@ -204,7 +220,10 @@ export function lowerConfigToNeutral(config: ConfigKeymap): LowerResult {
     const diag = new DiagnosticBag()
     const names = config.layers.map((l) => l.name)
     const pools = poolsOf(config)
+    const lowerOne = (a: CanonAction, path: (string | number)[]): KeyAction =>
+        lowerAction(a, names, pools, diag, path)
     const layers = config.layers.map((layer, li) => ({
+        ...lowerSliders(layer.sliders, li, lowerOne),
         name: layer.name,
         keys: layer.bindings.map((b, bi) =>
             lowerAction(b, names, pools, diag, ['layers', li, 'bindings', bi]),
@@ -235,6 +254,54 @@ export function lowerConfigToNeutral(config: ConfigKeymap): LowerResult {
             : {}),
     }))
     return { layers, diagnostics: [...diag.all] }
+}
+
+/** A layer's sliders lowered (up / down as KeyActions); nothing when it sets
+ *  none. */
+function lowerSliders(
+    sliders: readonly (CanonSliderBinding | null)[] | undefined,
+    li: number,
+    lower: (a: CanonAction, path: (string | number)[]) => KeyAction,
+): { sliders?: (SliderAction | null)[] } {
+    if (!sliders?.some((s) => s)) return {}
+    return {
+        sliders: sliders.map((s, si) => {
+            if (!s) return null
+            const at = ['layers', li, 'sliders', si]
+            return {
+                map: s.map,
+                ...(s.min !== undefined ? { min: s.min } : {}),
+                ...(s.max !== undefined ? { max: s.max } : {}),
+                ...(s.steps !== undefined ? { steps: s.steps } : {}),
+                ...(s.up ? { up: lower(s.up, [...at, 'up']) } : {}),
+                ...(s.down ? { down: lower(s.down, [...at, 'down']) } : {}),
+            }
+        }),
+    }
+}
+
+/** Runtime sliders raised onto the config's (an untouched up / down keeps its
+ *  prior; `custom` keeps its action). */
+function raiseSliders(
+    sliders: readonly (SliderAction | null)[],
+    prev: readonly (CanonSliderBinding | null)[] | undefined,
+    keepOrRaise: (ka: KeyAction, prev: CanonAction | undefined) => CanonAction,
+): (CanonSliderBinding | null)[] {
+    return sliders.map((s, si) => {
+        if (!s) return null
+        const before = prev?.[si] ?? undefined
+        return {
+            map: s.map as SliderMap,
+            ...(s.min !== undefined ? { min: s.min } : {}),
+            ...(s.max !== undefined ? { max: s.max } : {}),
+            ...(s.steps !== undefined ? { steps: s.steps } : {}),
+            ...(s.up ? { up: keepOrRaise(s.up, before?.up) } : {}),
+            ...(s.down ? { down: keepOrRaise(s.down, before?.down) } : {}),
+            ...(s.map === 'custom' && before?.action
+                ? { action: before.action }
+                : {}),
+        }
+    })
 }
 
 /* ── raise: runtime → config (merged) ──────────────────────────────────── */
@@ -329,7 +396,7 @@ function sameRuntimeForm(a: KeyAction, b: KeyAction): boolean {
  * data (combos, macros, tap-dances, mod-morphs, conditional layers) is preserved.
  */
 export function raiseNeutralToConfig(
-    runtimeLayers: readonly Pick<Layer, 'name' | 'keys' | 'encoders'>[],
+    runtimeLayers: readonly Pick<Layer, 'name' | 'keys' | 'encoders' | 'sliders'>[],
     prevConfig: ConfigKeymap,
 ): ConfigKeymap {
     const layerNames = runtimeLayers.map((l) => l.name)
@@ -370,13 +437,48 @@ export function raiseNeutralToConfig(
                 : {}),
             bindings,
             ...(encoders ? { encoders } : {}),
-            ...(prevLayer?.sliderBindings
-                ? { sliderBindings: prevLayer.sliderBindings }
-                : {}),
+            ...withRaisedSliders(rl.sliders, prevLayer?.sliders, keepOrRaise),
         }
     })
 
     return { ...prevConfig, layers }
+}
+
+/** The layer's `sliders`: raised from the runtime's, else the config's kept;
+ *  nothing when none is set. */
+function withRaisedSliders(
+    runtime: readonly (SliderAction | null)[] | undefined,
+    prev: readonly (CanonSliderBinding | null)[] | undefined,
+    keepOrRaise: (ka: KeyAction, prev: CanonAction | undefined) => CanonAction,
+): { sliders?: (CanonSliderBinding | null)[] } {
+    const sliders = runtime ? raiseSliders(runtime, prev, keepOrRaise) : prev
+    return sliders?.some((s) => s) ? { sliders: [...sliders] } : {}
+}
+
+/** `config` with a `keyboard.sliders` slot for every slider: the device's own
+ *  (centi-units → key units, with its key), else one per slider binding the
+ *  blob carries. The blob stores what sliders do but no slots. Unchanged when
+ *  it already has them. */
+export function withSliderSlots(
+    config: ConfigKeymap,
+    deviceSliders: readonly SliderSlot[] = [],
+): ConfigKeymap {
+    const have = config.keyboard.sliders?.length ?? 0
+    const bound = Math.max(0, ...config.layers.map((l) => l.sliders?.length ?? 0))
+    const want = Math.max(deviceSliders.length, bound)
+    if (have >= want) return config
+    const sliders = Array.from({ length: want }, (_, i) => {
+        const own = config.keyboard.sliders?.[i]
+        if (own) return own
+        const d = deviceSliders[i]
+        if (!d) return { x: 0, y: 0 }
+        return {
+            x: d.x / 100,
+            y: d.y / 100,
+            ...(d.key !== undefined ? { key: d.key } : {}),
+        }
+    })
+    return { ...config, keyboard: { ...config.keyboard, sliders } }
 }
 
 /** `config` with a `keyboard.encoders` slot for every knob: the device's own

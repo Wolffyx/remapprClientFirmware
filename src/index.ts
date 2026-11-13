@@ -10,6 +10,7 @@ export type {
     DynamicEntryCounts,
     EncoderAction,
     EncoderSlot,
+    SliderSlot,
     ExportedFile,
     KeyAction,
     HoldTapLabelData,

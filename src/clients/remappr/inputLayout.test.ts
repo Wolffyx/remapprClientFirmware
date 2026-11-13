@@ -357,19 +357,11 @@ const RIG: InputLayout = {
 }
 
 describe('keyboardInputs', () => {
-    it('gives a knob its push key and draws the rest as parts', () => {
-        const { encoders, parts } = keyboardInputs(RIG)
+    it('gives a knob its push key, a slider a slot and draws the rest as parts', () => {
+        const { encoders, sliders, parts } = keyboardInputs(RIG)
         expect(encoders).toEqual([{ x: 478, y: 115, key: 15 }])
+        expect(sliders).toEqual([{ x: 650, y: 0, w: 50, h: 400 }])
         expect(parts).toEqual([
-            {
-                id: 'in:2304',
-                name: 'Slider',
-                shape: 'pill',
-                x: 650,
-                y: 0,
-                w: 50,
-                h: 400,
-            },
             {
                 id: 'in:2560',
                 name: 'Screen',
@@ -426,11 +418,12 @@ describe('withInputLayout', () => {
         keys: [{ x: 0, y: 0, w: 100, h: 100 }],
     }
 
-    it('adds knobs and parts beside the keys', () => {
+    it('adds knobs, sliders and parts beside the keys', () => {
         const l = withInputLayout(keys, RIG)
         expect(l.keys).toBe(keys.keys)
         expect(l.encoders).toHaveLength(1)
-        expect(l.parts?.map((p) => p.name)).toEqual(['Slider', 'Screen'])
+        expect(l.sliders).toHaveLength(1)
+        expect(l.parts?.map((p) => p.name)).toEqual(['Screen'])
     })
 
     it('is the key layout without an input layout or with keys only', () => {

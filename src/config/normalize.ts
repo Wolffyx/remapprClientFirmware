@@ -7,6 +7,7 @@
 
 import { parseKeyToken, resolveKeycode } from './keycodes'
 import { syncKnobs, type LegacyKnobBindings } from './knobs'
+import { syncSliders, type LegacySliderBindings } from './sliders'
 import { parseSurface, type SurfaceAction, type SurfaceKeymap } from './schema'
 import type {
     CanonAction,
@@ -446,7 +447,18 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
               )
             : undefined,
     )
-    return syncKnobs(canonKeymap(km), legacy)
+    // ...and slider meanings per key; syncSliders moves them into slots.
+    const legacySliders: LegacySliderBindings = km.layers.map((l) =>
+        l.sliderBindings
+            ? Object.fromEntries(
+                  Object.entries(l.sliderBindings).map(([k, b]) => [
+                      Number(k),
+                      normalizeSlider(b),
+                  ]),
+              )
+            : undefined,
+    )
+    return syncSliders(syncKnobs(canonKeymap(km), legacy), legacySliders)
 }
 
 function canonKeymap(km: SurfaceKeymap): ConfigKeymap {
@@ -472,6 +484,9 @@ function canonKeymap(km: SurfaceKeymap): ConfigKeymap {
             })),
             ...(km.keyboard.encoders
                 ? { encoders: km.keyboard.encoders.map((e) => ({ ...e })) }
+                : {}),
+            ...(km.keyboard.sliders
+                ? { sliders: km.keyboard.sliders.map((e) => ({ ...e })) }
                 : {}),
             ...(km.keyboard.matrix
                 ? { matrix: { ...km.keyboard.matrix } }
@@ -532,13 +547,10 @@ function canonKeymap(km: SurfaceKeymap): ConfigKeymap {
             ...(l.encoders
                 ? { encoders: l.encoders.map(normalizeEncoder) }
                 : {}),
-            ...(l.sliderBindings
+            ...(l.sliders
                 ? {
-                      sliderBindings: Object.fromEntries(
-                          Object.entries(l.sliderBindings).map(([k, s]) => [
-                              k,
-                              normalizeSlider(s),
-                          ]),
+                      sliders: l.sliders.map((s) =>
+                          s ? normalizeSlider(s) : null,
                       ),
                   }
                 : {}),

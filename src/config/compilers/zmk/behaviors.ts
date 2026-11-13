@@ -145,12 +145,10 @@ export function emitEncoderSensors(
 // analog axis, so this emits a NOT-GENERATED guidance block (the io-channels /
 // zephyr,user wiring lives in the board overlay) plus the per-layer value-map
 // remappr DID capture, so the firmware author has the intent in one place.
-// Returns [] when no position carries element:'slider'.
+// Returns [] when the keyboard has no slider slots.
 export function emitSliderInputs(config: ConfigKeymap, ctx: Ctx): string[] {
-    const sliderKeys = config.keyboard.keys
-        .map((k, i) => (k.element === 'slider' ? i : -1))
-        .filter((i) => i >= 0)
-    if (!sliderKeys.length) return []
+    const slots = config.keyboard.sliders ?? []
+    if (!slots.length) return []
 
     const mapNote: Record<SliderMap, string> = {
         volume: 'HID consumer volume (e.g. &kp C_VOL_UP/DOWN via a custom driver)',
@@ -172,19 +170,20 @@ export function emitSliderInputs(config: ConfigKeymap, ctx: Ctx): string[] {
         `     * in one place; wire the hardware side yourself.`,
         `     *`,
     ]
-    sliderKeys.forEach((ki) => {
-        const pin = config.keyboard.keys[ki]?.pin
+    slots.forEach((slot, si) => {
+        const ki = slot.key
+        const pin = ki === undefined ? undefined : config.keyboard.keys[ki]?.pin
         out.push(
-            `     *   slider @ key ${ki}${pin ? ` (ADC pin ${pin})` : ''}:`,
+            `     *   slider ${si}${ki === undefined ? '' : ` @ key ${ki}`}${pin ? ` (ADC pin ${pin})` : ''}:`,
         )
         config.layers.forEach((layer, li) => {
-            const s = layer.sliderBindings?.[ki]
+            const s = layer.sliders?.[si]
             if (!s) return
             const range =
                 s.min !== undefined || s.max !== undefined
                     ? ` [${s.min ?? '…'}..${s.max ?? '…'}]`
                     : ''
-            const path = ['layers', li, 'sliderBindings', ki]
+            const path = ['layers', li, 'sliders', si]
             const custom =
                 s.map === 'custom' && s.action
                     ? ` → ${emitBinding(s.action, ctx, [...path, 'action'])}`

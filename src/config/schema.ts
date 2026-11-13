@@ -465,6 +465,17 @@ export const EncoderBindingSchema = z.object({
     press: ActionSchema.optional(),
 })
 
+export const SliderSlotSchema = z.object({
+    x: z.number(),
+    y: z.number(),
+    key: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('The slider key this slot is.'),
+})
+
 export const SliderBindingSchema = z.object({
     map: z.enum([
         'volume',
@@ -491,6 +502,13 @@ export const LayerSchema = z.object({
     encoders: z.array(EncoderBindingSchema).optional(),
     /** Older per-key turn bindings; moved into `encoders` on load. */
     encoderBindings: z.record(z.string(), EncoderBindingSchema).optional(),
+    sliders: z
+        .array(SliderBindingSchema.nullable())
+        .optional()
+        .describe(
+            'What each slider does on this layer, index-aligned to keyboard.sliders; null = as on the base layer.',
+        ),
+    /** Older per-key slider bindings; moved into `sliders` on load. */
     sliderBindings: z.record(z.string(), SliderBindingSchema).optional(),
 })
 
@@ -1565,6 +1583,7 @@ const BaseKeymapSchema = z.object({
         name: z.string(),
         keys: z.array(GeometrySchema).min(1),
         encoders: z.array(EncoderSchema).optional(),
+        sliders: z.array(SliderSlotSchema).optional(),
         matrix: z
             .object({
                 rows: z.number().int().positive(),
@@ -1650,6 +1669,7 @@ export const KeymapSchema = BaseKeymapSchema.superRefine((km, ctx) => {
     const holdTapIds = new Set((km.holdTaps ?? []).map((h) => h.id))
     const keyCount = km.keyboard.keys.length
     const encCount = km.keyboard.encoders?.length ?? 0
+    const sliderCount = km.keyboard.sliders?.length ?? 0
 
     // Pattern check: no GoF pattern (-) — rejected — declarative cross-reference
     // checks appended to the existing superRefine; data validation, no abstraction.
@@ -1806,6 +1826,27 @@ export const KeymapSchema = BaseKeymapSchema.superRefine((km, ctx) => {
                 path: ['layers', li, 'encoders'],
             })
         }
+        if (layer.sliders && layer.sliders.length !== sliderCount) {
+            ctx.addIssue({
+                code: 'custom',
+                message: `layer "${layer.name}" has ${layer.sliders.length} slider bindings but the board has ${sliderCount} sliders`,
+                path: ['layers', li, 'sliders'],
+            })
+        }
+        layer.sliders?.forEach((s, si) => {
+            if (!s) return
+            if (s.min !== undefined && s.max !== undefined && s.min > s.max) {
+                ctx.addIssue({
+                    code: 'custom',
+                    message: `slider ${si} on layer "${layer.name}" has min ${s.min} > max ${s.max}`,
+                    path: ['layers', li, 'sliders', si, 'min'],
+                })
+            }
+            for (const slot of ['action', 'up', 'down'] as const) {
+                const a = s[slot]
+                if (a) checkAction(a, ['layers', li, 'sliders', si, slot])
+            }
+        })
         layer.bindings.forEach((b, bi) =>
             checkAction(b, ['layers', li, 'bindings', bi]),
         )

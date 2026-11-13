@@ -72,8 +72,9 @@ export interface Layer {
     name: string
     keys: KeyAction[]
     encoders?: EncoderAction[]
-    /** Slider bindings, keyed by the slider's keymap position. */
-    sliders?: Record<number, SliderAction>
+    /** Slider bindings, index-aligned to the layout's `sliders`; null = as on
+     *  the base layer (on the base layer: nothing set). */
+    sliders?: (SliderAction | null)[]
 }
 
 export interface PhysicalLayoutKey {
@@ -114,11 +115,25 @@ export interface EncoderSlot {
     key?: number
 }
 
+/** A slider's place, in centi-units / centi-degrees like PhysicalLayoutKey.
+ *  `key` = the keymap position that is the slider (drawn as that key's cap);
+ *  absent = a slider with no position of its own (a device's fader), drawn at
+ *  x / y, `w` × `h` (default 1 × 1 u). The index is the slider's slot. */
+export interface SliderSlot {
+    x: number
+    y: number
+    w?: number
+    h?: number
+    r?: number
+    key?: number
+}
+
 export interface PhysicalLayout {
     id: number
     name: string
     keys: PhysicalLayoutKey[]
     encoders?: EncoderSlot[]
+    sliders?: SliderSlot[]
     parts?: PhysicalLayoutPart[]
 }
 

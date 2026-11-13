@@ -22,6 +22,7 @@ import type {
     EncoderSlot,
     PhysicalLayout,
     PhysicalLayoutPart,
+    SliderSlot,
 } from '../../types'
 import {
     INPUT_NONE,
@@ -278,12 +279,14 @@ const PART_LOOKS: readonly (
     { shape: 'screen', name: 'Screen' },
 ]
 
-/** A keyboard's knobs and parts from its input layout. Its keys (class KEY,
- *  or any input with a binding position) come from the key layout and are left
- *  out; an encoder keeps its position as `key`, the key that is its push. */
+/** A keyboard's knobs, sliders and parts from its input layout. Its keys
+ *  (class KEY, or any input with a binding position) come from the key layout
+ *  and are left out; an encoder keeps its position as `key`, the key that is
+ *  its push. Sliders are slots in layout order, which is the order the device
+ *  counts its sliders in (the slider index its config uses). */
 export function keyboardInputs(
     layout: InputLayout,
-): Required<Pick<PhysicalLayout, 'encoders' | 'parts'>> {
+): Required<Pick<PhysicalLayout, 'encoders' | 'sliders' | 'parts'>> {
     const encoders: EncoderSlot[] = layout.entries
         .filter((e) => e.cls === InputClass.ENCODER)
         .map((e) => ({
@@ -291,10 +294,24 @@ export function keyboardInputs(
             y: e.y,
             ...(e.position !== INPUT_NONE ? { key: e.position } : {}),
         }))
+    const sliders: SliderSlot[] = layout.entries
+        .filter((e) => e.cls === InputClass.SLIDER)
+        .map((e) => {
+            const at = placement(e)
+            return {
+                x: Math.round(at.x * U),
+                y: Math.round(at.y * U),
+                w: Math.round(at.w * U),
+                h: Math.round(at.h * U),
+                ...(at.r ? { r: Math.round(at.r * U) } : {}),
+                ...(e.position !== INPUT_NONE ? { key: e.position } : {}),
+            }
+        })
     const drawn = layout.entries.filter(
         (e) =>
             e.cls !== InputClass.KEY &&
             e.cls !== InputClass.ENCODER &&
+            e.cls !== InputClass.SLIDER &&
             e.position === INPUT_NONE &&
             PART_LOOKS[e.cls] !== undefined,
     )
@@ -320,7 +337,7 @@ export function keyboardInputs(
             ...(at.r ? { r: Math.round(at.r * U) } : {}),
         }
     })
-    return { encoders, parts }
+    return { encoders, sliders, parts }
 }
 
 /** `layout` with the knobs and parts its device declares; unchanged without
@@ -330,10 +347,11 @@ export function withInputLayout(
     input: InputLayout | undefined,
 ): PhysicalLayout {
     if (!input) return layout
-    const { encoders, parts } = keyboardInputs(input)
+    const { encoders, sliders, parts } = keyboardInputs(input)
     return {
         ...layout,
         ...(encoders.length ? { encoders } : {}),
+        ...(sliders.length ? { sliders } : {}),
         ...(parts.length ? { parts } : {}),
     }
 }

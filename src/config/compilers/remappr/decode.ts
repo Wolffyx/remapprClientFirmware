@@ -94,6 +94,7 @@ import { readMouseTable } from './mouse'
 import { matrixDefaultsFromParts } from './matrix'
 import { readPartEntries } from './sensor'
 import { readDisplayTable, withDisplaySettings } from './display'
+import { readSliders } from './slider'
 
 const HID_PAGE_KEYBOARD = 7
 const HID_PAGE_CONSUMER = 12
@@ -882,6 +883,10 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     // ── ENCODER (optional, §4a) → slot-array layer.encoders[] in place ──
     const encoderT = table(TableId.Encoder)
     if (encoderT) readEncoders(bytes, encoderT, decoded, layers, diag)
+
+    // ── SLIDER (optional, slider part design §4b) → layer.sliders[] in place ──
+    const sliderT = table(TableId.Slider)
+    if (sliderT) readSliders(bytes, sliderT, decoded, layers, diag)
 
     // ── RGB (optional, id 7) → per-key colors (decode-only; preps Phase 4c emit) ──
     const rgbT = table(TableId.Rgb)

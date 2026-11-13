@@ -406,7 +406,7 @@ describe('sliders / analog input', () => {
         )
         expect(dts).toContain('SLIDER / ANALOG INPUT — NOT GENERATED')
         // captured value-map appears: key index, map + range, ADC pin
-        expect(dts).toContain('slider @ key 0 (ADC pin GP29)')
+        expect(dts).toContain('slider 0 @ key 0 (ADC pin GP29)')
         expect(dts).toMatch(/base: volume \[0\.\.100\]/)
         expect(diagnostics.some((d) => /analog|slider/i.test(d.message))).toBe(
             true,

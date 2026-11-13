@@ -254,10 +254,8 @@ function emitEncoderMap(config: ConfigKeymap, ctx: Ctx): string[] {
 // scaffold + the captured per-layer value-map as guidance. Returns [] when no
 // position carries element: 'slider'.
 function emitSliderStub(config: ConfigKeymap): string[] {
-    const sliderKeys = config.keyboard.keys
-        .map((k, i) => (k.element === 'slider' ? i : -1))
-        .filter((i) => i >= 0)
-    if (!sliderKeys.length) return []
+    const slots = config.keyboard.sliders ?? []
+    if (!slots.length) return []
 
     const out: string[] = [
         `/* ─── SLIDER / ANALOG INPUT — scaffold only, finish in C ───────────────`,
@@ -266,11 +264,14 @@ function emitSliderStub(config: ConfigKeymap): string[] {
         ` * remappr captured the value-map below:`,
         ` *`,
     ]
-    sliderKeys.forEach((ki) => {
-        const pin = config.keyboard.keys[ki]?.pin
-        out.push(` *   slider @ key ${ki}${pin ? ` (ADC pin ${pin})` : ''}:`)
+    slots.forEach((slot, si) => {
+        const ki = slot.key
+        const pin = ki === undefined ? undefined : config.keyboard.keys[ki]?.pin
+        out.push(
+            ` *   slider ${si}${ki === undefined ? '' : ` @ key ${ki}`}${pin ? ` (ADC pin ${pin})` : ''}:`,
+        )
         config.layers.forEach((layer) => {
-            const s = layer.sliderBindings?.[ki]
+            const s = layer.sliders?.[si]
             if (!s) return
             const range =
                 s.min !== undefined || s.max !== undefined

@@ -4,6 +4,7 @@
 // editor's keyboard model. Config-as-source-of-truth: device read → decode →
 // lower to a neutral editing buffer; edits mutate the buffer; commit raises →
 // compiles → seals the blob back.
+import { REMAPPR_SLIDER_MAPS } from '../../config/compilers/remappr/slider'
 import {
     activeLayoutSource,
     createIdentity,
@@ -26,6 +27,7 @@ import type {
     HostValuesApi,
     ScreensApi,
     SensorApi,
+    SliderApi,
     UnicodeApi,
 } from '../../service'
 import type {
@@ -40,6 +42,7 @@ import type {
     Layer,
     LockState,
     PhysicalLayout,
+    SliderAction,
 } from '../../types'
 import type { DeviceKind, SensorInfo } from '../../devices/types'
 import { ProtocolError } from '../../errors'
@@ -74,6 +77,7 @@ import {
     lowerConfigToNeutral,
     raiseNeutralToConfig,
     withKnobSlots,
+    withSliderSlots,
 } from './configBridge'
 import {
     actionsToMacro,
@@ -219,6 +223,9 @@ export class RemapprKeyboardService
     /** Knob turns per layer: present on a writable keyboard with a knob (its
      *  input layout, or encoder bindings already in the blob). */
     public readonly encoders?: EncoderApi
+    /** What each slider does per layer: present on a writable keyboard with a
+     *  slider (its input layout, or slider bindings already in the blob). */
+    public readonly sliders?: SliderApi
 
     private readonly rpc: RemapprRpc
     private readonly session?: RemapprSession
@@ -235,6 +242,7 @@ export class RemapprKeyboardService
     private activeLayoutId: number
     private readonly keyCount: number
     private readonly encoderCount: number
+    private readonly sliderCount: number
     private readonly maxLayers: number
     private nextLayerId = 0
     private pendingChanges = false
@@ -293,9 +301,10 @@ export class RemapprKeyboardService
         this.limits = deps.limits
         this.deviceInfo = deps.deviceInfo
         // Knob slots from the device's layout so its turns validate on export.
-        this.config = withKnobSlots(
-            deps.config,
-            deps.layouts.find((l) => l.id === deps.activeLayoutId)?.encoders,
+        const active = deps.layouts.find((l) => l.id === deps.activeLayoutId)
+        this.config = withSliderSlots(
+            withKnobSlots(deps.config, active?.encoders),
+            active?.sliders,
         )
         this.configVersion = deps.configVersion
         this.layouts = deps.layouts
@@ -305,6 +314,7 @@ export class RemapprKeyboardService
             deps.config.layers.length || 1,
         )
         this.keyCount = deps.config.layers[0]?.bindings.length ?? 0
+        this.sliderCount = this.config.keyboard.sliders?.length ?? 0
         this.encoderCount = Math.max(
             0,
             ...deps.layouts.map((l) => l.encoders?.length ?? 0),
@@ -342,6 +352,14 @@ export class RemapprKeyboardService
             this.encoders = {
                 setEncoder: async (layerId, encoderIdx, direction, action) => {
                     this.setEncoder(layerId, encoderIdx, direction, action)
+                },
+            }
+        }
+        if (!this.readOnly && this.sliderCount > 0) {
+            this.sliders = {
+                maps: REMAPPR_SLIDER_MAPS,
+                setSlider: async (layerId, slot, slider) => {
+                    this.setSlider(layerId, slot, slider)
                 },
             }
         }
@@ -560,7 +578,23 @@ export class RemapprKeyboardService
             name: l.name,
             keys: l.keys,
             ...this.encoderFiller(l.encoders),
+            ...this.sliderFiller(l.sliders),
         }))
+    }
+
+    /** `sliders` sized to the device's sliders, null (as on the base layer)
+     *  where the blob has none; nothing on a keyboard without sliders. A
+     *  runtime layer always carries it then, so a cleared slot raises as none. */
+    private sliderFiller(have: readonly (SliderAction | null)[] = []): {
+        sliders?: (SliderAction | null)[]
+    } {
+        if (this.sliderCount === 0) return {}
+        return {
+            sliders: Array.from(
+                { length: this.sliderCount },
+                (_, i) => have[i] ?? null,
+            ),
+        }
     }
 
     /** `encoders` sized to the device's knobs, unbound where the blob has
@@ -616,7 +650,44 @@ export class RemapprKeyboardService
         this.markPending(true)
     }
 
-    private layerNames(): string[] {
+    /** What slider `slot` does on one layer (null = as on the base layer).
+     *  Marks pending. */
+    private setSlider(
+        layerId: number,
+        slot: number,
+        slider: SliderAction | null,
+    ): void {
+        this.assertWritable()
+        const idx = this.layerIndexById(layerId)
+        if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
+        if (slot < 0 || slot >= this.sliderCount) {
+            throw new ProtocolError(`Slider out of range: ${slot}`)
+        }
+        const layer = this.layers[idx]
+        const sliders = this.sliderFiller(layer.sliders).sliders!
+        sliders[slot] = slider && this.builtSlider(slider)
+        this.layers[idx] = { ...layer, sliders }
+        this.markPending(true)
+    }
+
+    /** A slider's up / down built like any key action (so they raise). */
+    private builtSlider(s: SliderAction): SliderAction {
+        const build = (a: KeyAction): KeyAction =>
+            buildRemapprKeyAction(
+                a.kind,
+                a.params,
+                this.layerNames(),
+                a.label?.modifiers,
+                this.compositeName(a.kind, a.params),
+            )
+        return {
+            ...s,
+            ...(s.up ? { up: build(s.up) } : {}),
+            ...(s.down ? { down: build(s.down) } : {}),
+        }
+    }
+
+        private layerNames(): string[] {
         return this.layers.map((l) => l.name)
     }
 
@@ -694,6 +765,9 @@ export class RemapprKeyboardService
                           }),
                       }
                     : {}),
+                ...(l.sliders
+                    ? { sliders: l.sliders.map((b) => b && relabelSlider(b, names)) }
+                    : {}),
             })),
             availableLayers: Math.max(0, this.maxLayers - this.layers.length),
             activeLayoutId: this.activeLayoutId,
@@ -754,6 +828,7 @@ export class RemapprKeyboardService
             name: `Layer ${this.layers.length}`,
             keys: this.makeFiller(),
             ...this.encoderFiller(),
+            ...this.sliderFiller(),
         }
         this.layers.push(layer)
         this.markPending(true)
@@ -1176,5 +1251,18 @@ export class RemapprKeyboardService
                 .close({ abortTransport: true })
                 .catch(() => undefined)
         }
+    }
+}
+
+/** A slider's up / down relabelled against the current layer names. */
+function relabelSlider(s: SliderAction, names: string[]): SliderAction {
+    const [up, down] = relabelLayer(
+        [s.up, s.down].filter((a): a is KeyAction => !!a),
+        names,
+    )
+    return {
+        ...s,
+        ...(s.up ? { up: up! } : {}),
+        ...(s.down ? { down: (s.up ? down : up)! } : {}),
     }
 }

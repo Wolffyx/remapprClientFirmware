@@ -134,12 +134,16 @@ export interface ConnectNotice {
 }
 
 // Pattern check: Facade (Tier 1) — applied — group related optional methods into 3 cohesive feature facades for renderer single-guard reads
-/** Slider edits: one layer's binding for the slider at a keymap position
- *  (`null` clears it). Only firmware that models sliders offers it. */
+/** Slider edits: one layer's binding for slider `slot` (the layout's
+ *  `sliders` index; `null` = as on the base layer). Only firmware that models
+ *  sliders offers it. */
 export interface SliderApi {
+    /** The slider maps (config SliderMap ids) this firmware can run; absent =
+     *  every one. */
+    readonly maps?: readonly string[]
     setSlider(
         layerId: number,
-        keyIndex: number,
+        slot: number,
         slider: SliderAction | null,
     ): Promise<void>
 }

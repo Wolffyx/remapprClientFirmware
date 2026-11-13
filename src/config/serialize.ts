@@ -313,6 +313,15 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                       })),
                   }
                 : {}),
+            ...(km.keyboard.sliders
+                ? {
+                      sliders: km.keyboard.sliders.map((e) => ({
+                          x: e.x,
+                          y: e.y,
+                          ...(e.key !== undefined ? { key: e.key } : {}),
+                      })),
+                  }
+                : {}),
             ...(km.keyboard.matrix
                 ? { matrix: { ...km.keyboard.matrix } }
                 : {}),
@@ -376,13 +385,10 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
             ...(l.encoders
                 ? { encoders: l.encoders.map(denormalizeEncoder) }
                 : {}),
-            ...(l.sliderBindings && Object.keys(l.sliderBindings).length
+            ...(l.sliders?.some((s) => s)
                 ? {
-                      sliderBindings: Object.fromEntries(
-                          Object.entries(l.sliderBindings).map(([k, s]) => [
-                              k,
-                              denormalizeSlider(s),
-                          ]),
+                      sliders: l.sliders.map((s) =>
+                          s ? denormalizeSlider(s) : null,
                       ),
                   }
                 : {}),

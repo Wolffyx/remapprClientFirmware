@@ -24,7 +24,6 @@ import {
     pick,
     type Rec,
     sameValue,
-    unionKeys,
     valueText,
     type Where,
 } from './diffCore'
@@ -192,6 +191,14 @@ const KEYED_SECTIONS: readonly KeyedSection[] = [
         get: (d) => kb(d).encoders,
         key: byIndex,
         label: (key) => `Encoder ${key}`,
+        geometry: ['x', 'y'],
+    },
+    {
+        area: 'slider',
+        path: 'keyboard.sliders',
+        get: (d) => kb(d).sliders,
+        key: byIndex,
+        label: (key) => `Slider ${key}`,
         geometry: ['x', 'y'],
     },
     {
@@ -379,7 +386,7 @@ const layerAdded = (l: Rec, j: number): DocumentChange =>
 const layerRemoved = (l: Rec, i: number): DocumentChange =>
     makeChange(layerWhere(l, i), layerText(l, i), undefined)
 
-const LAYER_PARTS = ['name', 'bindings', 'encoders', 'sliderBindings']
+const LAYER_PARTS = ['name', 'bindings', 'encoders', 'sliders']
 
 function diffLayer(p: LayerPair, moved: Set<number>): DocumentChange[] {
     const where = layerWhere(p.after, p.to)
@@ -393,7 +400,7 @@ function diffLayer(p: LayerPair, moved: Set<number>): DocumentChange[] {
         ),
         ...diffBindings(where, p.before.bindings, p.after.bindings),
         ...diffEncoders(where, p.before.encoders, p.after.encoders),
-        ...diffSliders(where, p.before.sliderBindings, p.after.sliderBindings),
+        ...diffSliders(where, p.before.sliders, p.after.sliders),
     ]
 }
 
@@ -473,20 +480,23 @@ function sliderText(s: unknown): string {
     return `${valueText(r.map)}${actions.join('')}${extrasText(r, ['map', 'up', 'down', 'action'])}`
 }
 
+/** A missing slot (or no `sliders` at all) is null: as on the base layer. */
 function diffSliders(layer: Where, a: unknown, b: unknown): DocumentChange[] {
-    const before = asRecord(a)
-    const after = asRecord(b)
-    return unionKeys(before, after).flatMap((pos) => {
-        if (sameValue(before[pos], after[pos])) return []
+    const before = asArray(a)
+    const after = asArray(b)
+    const count = Math.max(before.length, after.length)
+    return Array.from({ length: count }, (_, k) => {
+        const x = before[k] ?? null
+        const y = after[k] ?? null
+        if (sameValue(x, y)) return []
         const where = {
             area: 'slider',
-            path: `${layer.path}.sliderBindings.${pos}`,
-            label: `${layer.label}, slider ${pos}`,
+            path: `${layer.path}.sliders.${k}`,
+            label: `${layer.label}, slider ${k}`,
         }
-        const text = (s: unknown) =>
-            s === undefined ? undefined : sliderText(s)
-        return [makeChange(where, text(before[pos]), text(after[pos]))]
-    })
+        const text = (s: unknown) => (s === null ? undefined : sliderText(s))
+        return [makeChange(where, text(x), text(y))]
+    }).flat()
 }
 
 /* ── the keymap ─────────────────────────────────────────────────────────── */

@@ -51,6 +51,7 @@ export const TableId = {
     Sensor: 29, // sensor settings (sensor-settings plan §4)
     Power: 30, // idle / sleep / off timeouts (sleep-wake design)
     Display: 31, // what each display shows (display part design §3)
+    Slider: 32, // what each slider does, per layer (slider part design §4b)
 } as const
 
 /** enum remappr_personality (firmware include/remappr/role.h). */
@@ -441,6 +442,20 @@ export interface EncoderRecord {
     pressIndex: number
 }
 
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_SLIDER layout
+/** One slider binding (slider part design §4b; TBL_SLIDER). `layer` gates it
+ *  (0xFF = any); up / down are behavior-table indices, 0xFFFF = none. */
+export interface SliderRecord {
+    slider: number
+    layer: number
+    kind: number
+    arg: number
+    min: number
+    max: number
+    upIndex: number
+    downIndex: number
+}
+
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_POSHOLD layout
 /** One positional hold-trigger list (§28): only an interrupting key whose
  *  position is listed counts toward the referenced tap-hold's hold decision. */
@@ -818,6 +833,26 @@ export class BlobBuilder {
             this.w.u16(e.cwIndex)
             this.w.u16(e.ccwIndex)
             this.w.u16(e.pressIndex)
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_SLIDER (id 32, slider part design §4b): u16 count, then per entry
+     *  u8 slider, u8 layer, u8 kind, u8 arg, u8 min, u8 max, u16 up, u16 down. */
+    sliderTable(sliders: readonly SliderRecord[]): this {
+        this.tableBegin(TableId.Slider, 1)
+        this.w.u16(sliders.length)
+        for (const e of sliders) {
+            this.w.u8(e.slider)
+            this.w.u8(e.layer)
+            this.w.u8(e.kind)
+            this.w.u8(e.arg)
+            this.w.u8(e.min)
+            this.w.u8(e.max)
+            this.w.u16(e.upIndex)
+            this.w.u16(e.downIndex)
         }
         this.tableEnd()
         return this
