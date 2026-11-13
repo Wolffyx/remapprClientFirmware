@@ -279,11 +279,29 @@ const PART_LOOKS: readonly (
     { shape: 'screen', name: 'Screen' },
 ]
 
+/** Entries of one class in the order the device counts them: by the ordinal
+ *  in their input id (a slider's part rank: the index its config uses) when
+ *  every one has a distinct ordinal below their count, else as listed. */
+function byOrdinal<T extends { inputId: number }>(entries: readonly T[]): T[] {
+    const ordinals = entries.map((e) =>
+        e.inputId === INPUT_NONE ? -1 : e.inputId & 0xff,
+    )
+    const distinct = new Set(ordinals)
+    const usable =
+        distinct.size === entries.length &&
+        ordinals.every((o) => o >= 0 && o < entries.length)
+    if (!usable) return [...entries]
+    return entries
+        .map((e, i) => ({ e, o: ordinals[i]! }))
+        .sort((a, b) => a.o - b.o)
+        .map(({ e }) => e)
+}
+
 /** A keyboard's knobs, sliders and parts from its input layout. Its keys
  *  (class KEY, or any input with a binding position) come from the key layout
  *  and are left out; an encoder keeps its position as `key`, the key that is
- *  its push. Sliders are slots in layout order, which is the order the device
- *  counts its sliders in (the slider index its config uses). */
+ *  its push. Sliders are slots in the order the device counts its sliders in
+ *  (the slider index its config uses): their input ids' ordinals. */
 export function keyboardInputs(
     layout: InputLayout,
 ): Required<Pick<PhysicalLayout, 'encoders' | 'sliders' | 'parts'>> {
@@ -294,9 +312,9 @@ export function keyboardInputs(
             y: e.y,
             ...(e.position !== INPUT_NONE ? { key: e.position } : {}),
         }))
-    const sliders: SliderSlot[] = layout.entries
-        .filter((e) => e.cls === InputClass.SLIDER)
-        .map((e) => {
+    const sliders: SliderSlot[] = byOrdinal(
+        layout.entries.filter((e) => e.cls === InputClass.SLIDER),
+    ).map((e) => {
             const at = placement(e)
             return {
                 x: Math.round(at.x * U),

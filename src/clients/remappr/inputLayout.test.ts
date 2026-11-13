@@ -357,6 +357,16 @@ const RIG: InputLayout = {
 }
 
 describe('keyboardInputs', () => {
+    it('puts each slider at the slot its id names (the part rank), else in list order', () => {
+        const slider = (inputId: number, x: number) =>
+            entry({ cls: InputClass.SLIDER, shape: InputShape.PILL, inputId, x, w: 50, h: 400 })
+        const named = { ...RIG, entries: [slider(0x0901, 700), slider(0x0900, 600)] }
+        expect(keyboardInputs(named).sliders.map((s) => s.x)).toEqual([600, 700])
+        // Duplicate ordinals: the device did not name its parts, keep the list order.
+        const dup = { ...RIG, entries: [slider(0x0900, 700), slider(0x0900, 600)] }
+        expect(keyboardInputs(dup).sliders.map((s) => s.x)).toEqual([700, 600])
+    })
+
     it('gives a knob its push key, a slider a slot and draws the rest as parts', () => {
         const { encoders, sliders, parts } = keyboardInputs(RIG)
         expect(encoders).toEqual([{ x: 478, y: 115, key: 15 }])
