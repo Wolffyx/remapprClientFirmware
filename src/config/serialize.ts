@@ -8,6 +8,7 @@
 
 import { friendlyName, resolveKeycode, type Modifier } from './keycodes'
 import {
+    cloneParts,
     cloneController,
     cloneFirmwareConfig,
     cloneHardware,
@@ -35,7 +36,8 @@ import type {
 // start-to-finish. External callers (e.g. the inspector) get the universal base.
 let activeDefaults: TargetDefaults = resolveDefaults(null)
 
-const FRIENDLY_MOD: Record<Modifier, string> = {
+/** The surface spelling of a modifier in a chord ("Ctrl" in "Ctrl+C"). */
+export const FRIENDLY_MOD: Record<Modifier, string> = {
     LEFT_CTRL: 'Ctrl',
     LEFT_SHIFT: 'Shift',
     LEFT_ALT: 'Alt',
@@ -229,6 +231,9 @@ const denormalizeSlider = (s: CanonSliderBinding): Record<string, unknown> => ({
     map: s.map,
     ...(s.min !== undefined ? { min: s.min } : {}),
     ...(s.max !== undefined ? { max: s.max } : {}),
+    ...(s.steps !== undefined ? { steps: s.steps } : {}),
+    ...(s.up ? { up: denormalizeAction(s.up) } : {}),
+    ...(s.down ? { down: denormalizeAction(s.down) } : {}),
     ...(s.action ? { action: denormalizeAction(s.action) } : {}),
 })
 
@@ -296,6 +301,7 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                 ...(k.variant ? { variant: k.variant } : {}),
                 ...(k.pin ? { pin: k.pin } : {}),
                 ...(k.element ? { element: k.element } : {}),
+                ...(k.motor ? { motor: structuredClone(k.motor) } : {}),
                 ...(k.option ? { option: [k.option[0], k.option[1]] } : {}),
             })),
             ...(km.keyboard.encoders
@@ -303,6 +309,16 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                       encoders: km.keyboard.encoders.map((e) => ({
                           x: e.x,
                           y: e.y,
+                          ...(e.key !== undefined ? { key: e.key } : {}),
+                      })),
+                  }
+                : {}),
+            ...(km.keyboard.sliders
+                ? {
+                      sliders: km.keyboard.sliders.map((e) => ({
+                          x: e.x,
+                          y: e.y,
+                          ...(e.key !== undefined ? { key: e.key } : {}),
                       })),
                   }
                 : {}),
@@ -339,6 +355,9 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                       ),
                   }
                 : {}),
+            ...(km.keyboard.features
+                ? { features: [...km.keyboard.features] }
+                : {}),
             ...(km.keyboard.layouts
                 ? { layouts: km.keyboard.layouts.map((l) => ({ ...l })) }
                 : {}),
@@ -353,6 +372,9 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
             ...(km.keyboard.split !== undefined
                 ? { split: km.keyboard.split }
                 : {}),
+            ...(km.keyboard.parts
+                ? { parts: cloneParts(km.keyboard.parts) }
+                : {}),
         },
         layers: km.layers.map((l) => ({
             name: l.name,
@@ -363,23 +385,10 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
             ...(l.encoders
                 ? { encoders: l.encoders.map(denormalizeEncoder) }
                 : {}),
-            ...(l.encoderBindings && Object.keys(l.encoderBindings).length
+            ...(l.sliders?.some((s) => s)
                 ? {
-                      encoderBindings: Object.fromEntries(
-                          Object.entries(l.encoderBindings).map(([k, e]) => [
-                              k,
-                              denormalizeEncoder(e),
-                          ]),
-                      ),
-                  }
-                : {}),
-            ...(l.sliderBindings && Object.keys(l.sliderBindings).length
-                ? {
-                      sliderBindings: Object.fromEntries(
-                          Object.entries(l.sliderBindings).map(([k, s]) => [
-                              k,
-                              denormalizeSlider(s),
-                          ]),
+                      sliders: l.sliders.map((s) =>
+                          s ? denormalizeSlider(s) : null,
                       ),
                   }
                 : {}),

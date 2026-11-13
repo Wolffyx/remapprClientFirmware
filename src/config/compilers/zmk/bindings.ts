@@ -21,6 +21,9 @@ export interface Ctx {
     /** Hold-tap nodes generated for tap_holds carrying custom flavor/timing,
      *  deduped by signature → id. Emitted as a behaviors block at the end. */
     genHoldTaps: Map<string, { id: string; lines: string[] }>
+    /** Config key index → `.keymap` position when the board has layout
+     *  variants (see layouts.ts); absent = the same index. */
+    positions?: Map<number, number>
 }
 
 const layerIdx = (ctx: Ctx, name: string, path: Path): number => {

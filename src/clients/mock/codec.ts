@@ -1,12 +1,7 @@
-// Pattern check: Strategy (Tier 1) — applied — MockCodec implements KeycodeCodec for demo flow; encodes/decodes (page<<16)|usage HID format with no firmware constraints.
-import { HID_USAGE_BY_CANONICAL } from '../../catalog/entries'
+// Pattern check: Strategy (Tier 1) — applied — MockCodec implements KeycodeCodec for demo flow: the neutral HID-usage codec plus the demo's macro slots.
+import { hidUsageCodec } from '../../catalog/hidUsageCodec'
 import type { CanonicalKeyId } from '../../catalog/types'
 import type { DecodedKeycode, EncodedKeycode, KeycodeCodec } from '../../codec'
-
-const BY_PACKED: Map<number, CanonicalKeyId> = new Map()
-for (const [id, usage] of HID_USAGE_BY_CANONICAL.entries()) {
-    BY_PACKED.set((usage.page << 16) | usage.usage, id)
-}
 
 // Vial macro-slot range (`macro.user.0..15`). These have no HID usage, so the
 // demo keymap picker — which filters by codec.supports — would otherwise hide
@@ -25,11 +20,7 @@ export class MockCodec implements KeycodeCodec {
             }
             return null
         }
-        const usage = HID_USAGE_BY_CANONICAL.get(id)
-        if (usage) {
-            return { value: (usage.page << 16) | usage.usage }
-        }
-        return null
+        return hidUsageCodec.encode(id)
     }
 
     decode(rawValue: number): DecodedKeycode | null {
@@ -37,12 +28,11 @@ export class MockCodec implements KeycodeCodec {
         if (code >= QK_MACRO && code <= QK_MACRO_MAX) {
             return { canonicalId: `${MACRO_PREFIX}${code - QK_MACRO}` }
         }
-        const id = BY_PACKED.get(code)
-        return id ? { canonicalId: id } : null
+        return hidUsageCodec.decode(code)
     }
 
     supports(id: CanonicalKeyId): boolean {
-        return id.startsWith(MACRO_PREFIX) || HID_USAGE_BY_CANONICAL.has(id)
+        return id.startsWith(MACRO_PREFIX) || hidUsageCodec.supports(id)
     }
 }
 

@@ -1,4 +1,5 @@
 import type { LegendPart } from './paramLabel'
+import type { ControlShape } from './devices/types'
 
 export interface KeyAction {
     kind: string
@@ -54,11 +55,26 @@ export interface EncoderAction {
     ccw: KeyAction
 }
 
+/** A slider's binding on one layer: a level (`map` volume / backlight / …,
+ *  between `min` and `max` in `steps`), or `keys` sent once per step. Map ids
+ *  are the config's SliderMap (see config/sliders.ts). */
+export interface SliderAction {
+    map: string
+    min?: number
+    max?: number
+    steps?: number
+    up?: KeyAction
+    down?: KeyAction
+}
+
 export interface Layer {
     id: number
     name: string
     keys: KeyAction[]
     encoders?: EncoderAction[]
+    /** Slider bindings, index-aligned to the layout's `sliders`; null = as on
+     *  the base layer (on the base layer: nothing set). */
+    sliders?: (SliderAction | null)[]
 }
 
 export interface PhysicalLayoutKey {
@@ -69,12 +85,47 @@ export interface PhysicalLayoutKey {
     r?: number
     rx?: number
     ry?: number
+    /** Not a keycap: a knob, slider or round button at this position. */
+    element?: 'encoder' | 'slider' | 'button'
+    /** A slider with a motor: what moves it. */
+    motor?: { follow: 'level' | 'layer' | 'app' | 'off' }
 }
 
-/** A knob's position, in centi-units (1u = 100) like PhysicalLayoutKey. */
+/** A part on the board that is not a keymap position (a screen, a stick…),
+ *  in centi-units / centi-degrees like the keys. Drawn only. */
+export interface PhysicalLayoutPart {
+    id: string
+    name: string
+    shape: ControlShape
+    x: number
+    y: number
+    w: number
+    h: number
+    r?: number
+    /** Short text on it (a screen's size). */
+    glyph?: string
+}
+
+/** A knob's position, in centi-units (1u = 100) like PhysicalLayoutKey.
+ *  `key` = the keymap position the knob sits on, whose binding is its press;
+ *  absent = a knob with no position of its own. */
 export interface EncoderSlot {
     x: number
     y: number
+    key?: number
+}
+
+/** A slider's place, in centi-units / centi-degrees like PhysicalLayoutKey.
+ *  `key` = the keymap position that is the slider (drawn as that key's cap);
+ *  absent = a slider with no position of its own (a device's fader), drawn at
+ *  x / y, `w` × `h` (default 1 × 1 u). The index is the slider's slot. */
+export interface SliderSlot {
+    x: number
+    y: number
+    w?: number
+    h?: number
+    r?: number
+    key?: number
 }
 
 export interface PhysicalLayout {
@@ -82,6 +133,8 @@ export interface PhysicalLayout {
     name: string
     keys: PhysicalLayoutKey[]
     encoders?: EncoderSlot[]
+    sliders?: SliderSlot[]
+    parts?: PhysicalLayoutPart[]
 }
 
 export interface Keymap {
@@ -133,12 +186,7 @@ export interface BehaviorRef {
 }
 
 export type ActionSlotKind =
-    | 'hid'
-    | 'modifier'
-    | 'layer'
-    | 'number'
-    | 'enum'
-    | 'action'
+    'hid' | 'modifier' | 'layer' | 'number' | 'enum' | 'action'
 
 export interface ActionSlot {
     // pattern-check: skip additive optional field on existing interface

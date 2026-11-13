@@ -1,7 +1,9 @@
 // pattern-check: skip — node-enumeration test fixtures against a fake rpc.
 import { describe, expect, it } from 'vitest'
 import {
+    changeChannels,
     clearAllBonds,
+    enterDongleBootloader,
     forgetNode,
     getErrorCounters,
     getLinkStats,
@@ -16,6 +18,7 @@ import {
     DongleVerb,
     Namespace,
     NODE_RECORD_LEN,
+    RELAY_STATS,
     Status,
     type NodeRecord,
 } from './protocol'
@@ -86,6 +89,7 @@ describe('node enumeration (DONGLE namespace)', () => {
             rssi: -40,
             deviceIdTail: '010203040506',
             battery: 85,
+            charging: false,
             master: false,
             nodeRole: 0,
         })
@@ -246,13 +250,14 @@ describe('dongle pairing control (DONGLE namespace)', () => {
     })
 
     it('getLinkStats decodes the header and per-channel records', async () => {
-        // version 1, 2 channels, gen 7, pool 6, window 64 LE, fail 25%, rsvd.
+        // version 1, 2 channels, gen 7, pool 6, window 64 LE, fail 25%, flags:
+        // a channel change rolling out.
         const reply = new Uint8Array([
-            1, 2, 7, 6, 64, 0, 25, 0,
-            // ch 2: ok 300 (0x012c), fail 5
-            2, 0, 0x2c, 0x01, 5, 0,
-            // ch 79: ok 10, fail 260 (0x0104)
-            79, 0, 10, 0, 0x04, 0x01,
+            1, 2, 7, 6, 64, 0, 25, 1,
+            // ch 2: last verdict 12 %, ok 300 (0x012c), fail 5
+            2, 12, 0x2c, 0x01, 5, 0,
+            // ch 79: no verdict yet (0xff), ok 10, fail 260 (0x0104)
+            79, 0xff, 10, 0, 0x04, 0x01,
         ])
         const rpc = fakeRpc(async (ns, verb, arg) => {
             expect(ns).toBe(Namespace.DONGLE)
@@ -265,10 +270,54 @@ describe('dongle pairing control (DONGLE namespace)', () => {
         expect(stats.poolCount).toBe(6)
         expect(stats.window).toBe(64)
         expect(stats.failPercent).toBe(25)
+        expect(stats.changeInProgress).toBe(true)
         expect(stats.channels).toEqual([
-            { channel: 2, ok: 300, fail: 5 },
-            { channel: 79, ok: 10, fail: 260 },
+            { channel: 2, ok: 300, fail: 5, lastFailPercent: 12 },
+            { channel: 79, ok: 10, fail: 260, lastFailPercent: null },
         ])
+    })
+
+    it('changeChannels sends the mode and decodes the planned map', async () => {
+        const calls: (Uint8Array | undefined)[] = []
+        const rpc = fakeRpc(async (ns, verb, arg) => {
+            expect(ns).toBe(Namespace.DONGLE)
+            expect(verb).toBe(DongleVerb.CHANGE_CHANNELS)
+            calls.push(arg)
+            // version 1, 2 planned, gen 9 when done, 8 channels
+            return {
+                status: Status.OK,
+                data: new Uint8Array([1, 2, 9, 8, 2, 62, 14, 20, 26, 50, 38, 44]),
+            }
+        })
+        const change = await changeChannels(rpc, {
+            kind: 'list',
+            channels: [62, 2, 14, 20, 26, 38, 44, 50],
+        })
+        expect(change).toEqual({
+            planned: 2,
+            mapGeneration: 9,
+            channels: [2, 62, 14, 20, 26, 50, 38, 44],
+        })
+        await changeChannels(rpc, { kind: 'bad' })
+        expect(Array.from(calls[0]!)).toEqual([1, 8, 62, 2, 14, 20, 26, 38, 44, 50])
+        expect(Array.from(calls[1]!)).toEqual([0])
+    })
+
+    it('changeChannels rejects a busy dongle or a short reply', async () => {
+        const busy = fakeRpc(async () => ({
+            status: Status.ERR_STATE,
+            data: new Uint8Array(),
+        }))
+        await expect(changeChannels(busy, { kind: 'bad' })).rejects.toThrow(
+            /CHANGE_CHANNELS → ERR_STATE/,
+        )
+        const truncated = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([1, 1, 3, 8, 2, 8]),
+        }))
+        await expect(changeChannels(truncated, { kind: 'bad' })).rejects.toThrow(
+            /truncated/,
+        )
     })
 
     it('getLinkStats rejects a truncated or unknown-version reply', async () => {
@@ -405,7 +454,39 @@ describe('error counters (COMMON.GET_ERROR_COUNTERS)', () => {
             micFail: 70000,
             txChanFail: 12,
             linkResync: 3,
+            relay: null,
         })
+    })
+
+    it('decodes the relay tail in firmware enum order', async () => {
+        const body = counters(0x03, 1, 2, 3)
+        const tail = new Uint8Array(2 * RELAY_STATS.length)
+        const tdv = new DataView(tail.buffer)
+        RELAY_STATS.forEach((_, i) => tdv.setUint16(2 * i, 0x100 + i, true))
+        const rpc = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([...body, ...tail]),
+        }))
+        const ec = await getErrorCounters(rpc)
+        expect(ec.relay?.rxOk).toBe(0x100)
+        expect(ec.relay?.rxAuth).toBe(0x103)
+        expect(ec.relay?.txAcked).toBe(0x10b)
+        expect(ec.relay?.txLinkLost).toBe(0x10f)
+        expect(Object.keys(ec.relay ?? {})).toHaveLength(16)
+    })
+
+    it('ignores a relay tail that is unflagged or cut short', async () => {
+        const tail = new Uint8Array(2 * RELAY_STATS.length).fill(1)
+        const unflagged = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([...counters(0x01, 0, 0, 0), ...tail]),
+        }))
+        expect((await getErrorCounters(unflagged)).relay).toBeNull()
+        const short = fakeRpc(async () => ({
+            status: Status.OK,
+            data: new Uint8Array([...counters(0x03, 0, 0, 0), 1, 0]),
+        }))
+        expect((await getErrorCounters(short)).relay).toBeNull()
     })
 
     it('relays with targetNode + retries and reports radio-invalid', async () => {
@@ -443,6 +524,30 @@ describe('error counters (COMMON.GET_ERROR_COUNTERS)', () => {
         }))
         await expect(getErrorCounters(noSource)).rejects.toThrow(
             /GET_ERROR_COUNTERS/,
+        )
+    })
+})
+
+describe('enter bootloader (DONGLE.ENTER_BOOTLOADER)', () => {
+    it('sends the "DFU!" confirmation on the DONGLE namespace', async () => {
+        let seen: { ns: number; verb: number; arg?: Uint8Array } | undefined
+        const rpc = fakeRpc(async (ns, verb, arg) => {
+            seen = { ns, verb, arg }
+            return { status: Status.OK, data: new Uint8Array() }
+        })
+        await enterDongleBootloader(rpc)
+        expect(seen?.ns).toBe(Namespace.DONGLE)
+        expect(seen?.verb).toBe(DongleVerb.ENTER_BOOTLOADER)
+        expect(new TextDecoder().decode(seen?.arg)).toBe('DFU!')
+    })
+
+    it('throws when the board has no way into its bootloader', async () => {
+        const rpc = fakeRpc(async () => ({
+            status: Status.ERR_CMD,
+            data: new Uint8Array(),
+        }))
+        await expect(enterDongleBootloader(rpc)).rejects.toThrow(
+            /ENTER_BOOTLOADER/,
         )
     })
 })

@@ -6,10 +6,13 @@
 // stashed on `_keySrc`/`_preset` so serialize can round-trip the user's style.
 
 import { parseKeyToken, resolveKeycode } from './keycodes'
+import { syncKnobs, type LegacyKnobBindings } from './knobs'
+import { syncSliders, type LegacySliderBindings } from './sliders'
 import { parseSurface, type SurfaceAction, type SurfaceKeymap } from './schema'
 import type {
     CanonAction,
     CanonController,
+    CanonPart,
     CanonFirmwareConfig,
     CanonVial,
     CanonEncoderBinding,
@@ -102,8 +105,18 @@ export function cloneHardware(hw: ConfigHardware): ConfigHardware {
         ...(hw.backlightPwm ? { backlightPwm: { ...hw.backlightPwm } } : {}),
         ...(hw.ws2812 ? { ws2812: { ...hw.ws2812 } } : {}),
         ...(hw.extPowerCtrl ? { extPowerCtrl: { ...hw.extPowerCtrl } } : {}),
+        ...(hw.battery ? { battery: { ...hw.battery } } : {}),
         ...(hw.studioAcm !== undefined ? { studioAcm: hw.studioAcm } : {}),
     }
+}
+
+/** Deep-clone the parts on the board (screens, sticks…). */
+export function cloneParts(parts: readonly CanonPart[]): CanonPart[] {
+    return parts.map((p) => ({
+        ...p,
+        ...(p.pins ? { pins: { ...p.pins } } : {}),
+        ...(p.display ? { display: { ...p.display } } : {}),
+    }))
 }
 
 // pattern-check: skip additive passthrough clone mirroring cloneController, no abstraction
@@ -114,7 +127,9 @@ export function cloneFirmwareConfig(
     const out: CanonFirmwareConfig = {}
     for (const k of Object.keys(fc) as (keyof CanonFirmwareConfig)[]) {
         const v = fc[k]
-        if (v !== undefined) (out as Record<string, unknown>)[k] = v
+        if (v === undefined) continue
+        ;(out as Record<string, unknown>)[k] =
+            typeof v === 'object' ? { ...v } : v
     }
     return out
 }
@@ -378,6 +393,9 @@ function normalizeSlider(
         map: s.map,
         ...(s.min !== undefined ? { min: s.min } : {}),
         ...(s.max !== undefined ? { max: s.max } : {}),
+        ...(s.steps !== undefined ? { steps: s.steps } : {}),
+        ...(s.up ? { up: normalizeAction(s.up) } : {}),
+        ...(s.down ? { down: normalizeAction(s.down) } : {}),
         ...(s.action ? { action: normalizeAction(s.action) } : {}),
     }
 }
@@ -418,6 +436,32 @@ const padBindings = (
           ]
 
 export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
+    // Older designs kept knob turns per key; syncKnobs moves them into slots.
+    const legacy: LegacyKnobBindings = km.layers.map((l) =>
+        l.encoderBindings
+            ? Object.fromEntries(
+                  Object.entries(l.encoderBindings).map(([k, e]) => [
+                      Number(k),
+                      normalizeEncoder(e),
+                  ]),
+              )
+            : undefined,
+    )
+    // ...and slider meanings per key; syncSliders moves them into slots.
+    const legacySliders: LegacySliderBindings = km.layers.map((l) =>
+        l.sliderBindings
+            ? Object.fromEntries(
+                  Object.entries(l.sliderBindings).map(([k, b]) => [
+                      Number(k),
+                      normalizeSlider(b),
+                  ]),
+              )
+            : undefined,
+    )
+    return syncSliders(syncKnobs(canonKeymap(km), legacy), legacySliders)
+}
+
+function canonKeymap(km: SurfaceKeymap): ConfigKeymap {
     const keyCount = km.keyboard.keys.length
     return {
         schemaVersion: 1,
@@ -436,9 +480,13 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
                 ...(k.option
                     ? { option: [k.option[0], k.option[1]] as [number, number] }
                     : {}),
+                ...(k.motor ? { motor: cloneJson(k.motor) } : {}),
             })),
             ...(km.keyboard.encoders
                 ? { encoders: km.keyboard.encoders.map((e) => ({ ...e })) }
+                : {}),
+            ...(km.keyboard.sliders
+                ? { sliders: km.keyboard.sliders.map((e) => ({ ...e })) }
                 : {}),
             ...(km.keyboard.matrix
                 ? { matrix: { ...km.keyboard.matrix } }
@@ -471,6 +519,9 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
                       ),
                   }
                 : {}),
+            ...(km.keyboard.features
+                ? { features: [...km.keyboard.features] }
+                : {}),
             ...(km.keyboard.layouts
                 ? { layouts: km.keyboard.layouts.map((l) => ({ ...l })) }
                 : {}),
@@ -485,6 +536,9 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
             ...(km.keyboard.split !== undefined
                 ? { split: km.keyboard.split }
                 : {}),
+            ...(km.keyboard.parts
+                ? { parts: cloneParts(km.keyboard.parts) }
+                : {}),
         },
         layers: km.layers.map((l) => ({
             name: l.name,
@@ -493,23 +547,10 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
             ...(l.encoders
                 ? { encoders: l.encoders.map(normalizeEncoder) }
                 : {}),
-            ...(l.encoderBindings
+            ...(l.sliders
                 ? {
-                      encoderBindings: Object.fromEntries(
-                          Object.entries(l.encoderBindings).map(([k, e]) => [
-                              k,
-                              normalizeEncoder(e),
-                          ]),
-                      ),
-                  }
-                : {}),
-            ...(l.sliderBindings
-                ? {
-                      sliderBindings: Object.fromEntries(
-                          Object.entries(l.sliderBindings).map(([k, s]) => [
-                              k,
-                              normalizeSlider(s),
-                          ]),
+                      sliders: l.sliders.map((s) =>
+                          s ? normalizeSlider(s) : null,
                       ),
                   }
                 : {}),

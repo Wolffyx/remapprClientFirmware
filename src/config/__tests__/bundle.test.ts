@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { buildProjectBundle, parseKeymap } from '../index'
+import {
+    buildProjectBundle,
+    parseKeymap,
+    RELEASE_CONDITION,
+    RELEASE_MARKER,
+    upgradedWorkflow,
+    WORKFLOW_PATHS,
+} from '../index'
 
 const seed = readFileSync(
     fileURLToPath(new URL('../../clients/mock/seed.keymap.json', import.meta.url)),
@@ -105,12 +112,13 @@ describe('buildProjectBundle — ZMK', () => {
         const b = buildProjectBundle(seedConfig, 'zmk')
         const id = seedConfig.keyboard.id
         const SH = id.toUpperCase()
-        const dir = `config/boards/shields/${id}`
+        const dir = `boards/shields/${id}`
         expect(paths(b)).toEqual(
             expect.arrayContaining([
-                `${dir}/${SH}.keymap`,
-                `${dir}/${SH}.conf`,
-                `${dir}/${SH}.overlay`,
+                `${dir}/${id}.keymap`,
+                `config/${id}.conf`,
+                `${dir}/${id}.overlay`,
+                'zephyr/module.yml',
                 `${dir}/Kconfig.shield`,
                 `${dir}/Kconfig.defconfig`,
                 `${dir}/${id}.zmk.yml`,
@@ -122,7 +130,17 @@ describe('buildProjectBundle — ZMK', () => {
         )
         expect(b.rootName).toBe(`${id}-zmk-config`)
         // keymap content is the real compiled devicetree
-        expect(fileText(b, `${dir}/${SH}.keymap`)).toContain(
+        // nothing is left in the deprecated config/boards location, and no
+        // .conf sits in the shield dir, where the build ignores it
+        expect(paths(b).some((p) => p.startsWith('config/boards/'))).toBe(false)
+        expect(paths(b).some((p) => p.startsWith(dir) && p.endsWith('.conf'))).toBe(false)
+        expect(fileText(b, 'zephyr/module.yml')).toContain('board_root: .')
+        // the shield is named in lower case; only the Kconfig symbol is upper
+        expect(fileText(b, 'build.yaml')).toContain(`shield: ${id}\n`)
+        expect(fileText(b, `${dir}/Kconfig.shield`)).toContain(
+            `def_bool $(shields_list_contains,${id})`,
+        )
+        expect(fileText(b, `${dir}/${id}.keymap`)).toContain(
             'compatible = "zmk,keymap"',
         )
         // Kconfig registers the shield by its uppercase name
@@ -134,17 +152,19 @@ describe('buildProjectBundle — ZMK', () => {
         )
         // workflow uses the official reusable build
         expect(fileText(b, '.github/workflows/build.yml')).toContain(
-            'zmkfirmware/zmk/.github/workflows/build-user-config.yml',
+            'zmkfirmware/zmk/.github/workflows/build-user-config.yml@v0.3',
         )
+        // pinned to a ZMK release, not the moving main
+        expect(fileText(b, 'config/west.yml')).toContain('revision: v0.3')
     })
 
     it('uses board/shield from hardware and enables matching conf flags', () => {
         const b = buildProjectBundle(parseKeymap(HW), 'zmk')
-        const dir = 'config/boards/shields/boardx'
+        const dir = 'boards/shields/boardx'
         expect(b.rootName).toBe('boardx-zmk-config')
         expect(fileText(b, 'build.yaml')).toContain('board: nice_nano_v2')
-        expect(fileText(b, 'build.yaml')).toContain('shield: BOARDX')
-        const conf = fileText(b, `${dir}/BOARDX.conf`)
+        expect(fileText(b, 'build.yaml')).toContain('shield: boardx')
+        const conf = fileText(b, 'config/boardx.conf')
         expect(conf).toContain('CONFIG_ZMK_STUDIO=y')
         expect(conf).toContain('CONFIG_ZMK_USB=y') // USB on by default
         expect(conf).toContain('# CONFIG_ZMK_BLE=y') // BLE opt-in → commented
@@ -152,15 +172,15 @@ describe('buildProjectBundle — ZMK', () => {
         expect(conf).toContain('# CONFIG_ZMK_BACKLIGHT=y') // unused → commented
         expect(conf).toContain('# CONFIG_ZMK_USB_LOGGING=y') // off → commented hint
         // the generated overlay carries the real kscan
-        expect(fileText(b, `${dir}/BOARDX.overlay`)).toContain(
+        expect(fileText(b, `${dir}/boardx.overlay`)).toContain(
             'zmk,kscan-gpio-matrix',
         )
     })
 
     it('emits full-parity peripheral overlay nodes + chosen + conf flags', () => {
         const b = buildProjectBundle(parseKeymap(HW_FULL), 'zmk')
-        const dir = 'config/boards/shields/boardy'
-        const overlay = fileText(b, `${dir}/BOARDY.overlay`)
+        const dir = 'boards/shields/boardy'
+        const overlay = fileText(b, `${dir}/boardy.overlay`)
         // chosen wires every generated peripheral
         expect(overlay).toContain('zmk,backlight = <&backlight_pwm>')
         expect(overlay).toContain('zmk,underglow = <&led_strip>')
@@ -183,7 +203,7 @@ describe('buildProjectBundle — ZMK', () => {
         expect(overlay).toContain('&pinctrl {')
         expect(overlay).toContain('#include <zephyr/dt-bindings/led/led.h>')
         // conf flags follow the hardware + studio CDC
-        const conf = fileText(b, `${dir}/BOARDY.conf`)
+        const conf = fileText(b, 'config/boardy.conf')
         expect(conf).toContain('CONFIG_ZMK_BACKLIGHT=y')
         expect(conf).toContain('CONFIG_PWM=y')
         expect(conf).toContain('CONFIG_ZMK_RGB_UNDERGLOW=y')
@@ -192,11 +212,28 @@ describe('buildProjectBundle — ZMK', () => {
         expect(conf).toContain('CONFIG_ZMK_STUDIO_TRANSPORT_UART=y')
     })
 
+    it('muxes header-labelled peripheral pins to their nRF pins', () => {
+        const doc = JSON.parse(HW_FULL)
+        doc.keyboard.controller.board = 'nice_nano_v2'
+        Object.assign(doc.keyboard.hardware, {
+            backlightPwm: { instance: 'pwm0', channel: 0, pin: 'D6' },
+            ws2812: { spi: 'spi3', dataPin: 'D15', chainLength: 10 },
+            extPowerCtrl: { controlGpio: 'D14' },
+        })
+        const b = buildProjectBundle(parseKeymap(JSON.stringify(doc)), 'zmk')
+        const overlay = fileText(b, 'boards/shields/boardy/boardy.overlay')
+        // nice!nano connector: D6 = P1.00, D15 = P1.13
+        expect(overlay).toContain('NRF_PSEL(PWM_OUT0, 1, 0)')
+        expect(overlay).toContain('NRF_PSEL(SPIM_MOSI, 1, 13)')
+        expect(overlay).toContain('control-gpios = <&pro_micro 14 GPIO_ACTIVE_HIGH>')
+        expect(overlay).not.toContain('FIXME')
+    })
+
     it('scaffolds peripheral pinctrl (not drops it) on a non-nRF board', () => {
         const b = buildProjectBundle(parseKeymap(HW_RP2040), 'zmk')
         const overlay = fileText(
             b,
-            'config/boards/shields/boardz/BOARDZ.overlay',
+            'boards/shields/boardz/boardz.overlay',
         )
         // backlight &pwm block is still emitted (was previously dropped)
         expect(overlay).toContain('&pwm0 {')
@@ -214,13 +251,13 @@ describe('buildProjectBundle — ZMK', () => {
 
     it('emits a real split shield (shared dtsi + two half overlays)', () => {
         const b = buildProjectBundle(parseKeymap(SPLIT), 'zmk')
-        const dir = 'config/boards/shields/mysplit'
+        const dir = 'boards/shields/mysplit'
         expect(b.rootName).toBe('mysplit-zmk-config')
         // one shield dir, shared base files + both half overlays
         expect(paths(b)).toEqual(
             expect.arrayContaining([
                 `${dir}/mysplit.keymap`,
-                `${dir}/mysplit.conf`,
+                'config/mysplit.conf',
                 `${dir}/mysplit.dtsi`,
                 `${dir}/mysplit_left.overlay`,
                 `${dir}/mysplit_right.overlay`,
@@ -239,7 +276,8 @@ describe('buildProjectBundle — ZMK', () => {
         const kshield = fileText(b, `${dir}/Kconfig.shield`)
         expect(kshield).toContain('config SHIELD_MYSPLIT_LEFT')
         expect(kshield).toContain('config SHIELD_MYSPLIT_RIGHT')
-        expect(kshield).toContain('$(shields_list_contains, mysplit_left)')
+        expect(kshield).toContain('def_bool $(shields_list_contains,mysplit_left)')
+        expect(kshield).toContain('def_bool $(shields_list_contains,mysplit_right)')
         const kdef = fileText(b, `${dir}/Kconfig.defconfig`)
         expect(kdef).toContain('ZMK_SPLIT_ROLE_CENTRAL') // left = central
         expect(kdef).toContain('config ZMK_SPLIT')
@@ -309,6 +347,8 @@ describe('buildProjectBundle — QMK', () => {
         const json = JSON.parse(fileText(b, 'keyboards/plank/keyboard.json'))
         expect(json.keyboard_name).toBe('Plank')
         expect(json.maintainer).toBe('me')
+        // QMK needs it for the USB manufacturer string.
+        expect(json.manufacturer).toBe('me')
         expect(json.usb).toEqual({
             vid: '0x1234',
             pid: '0x5678',
@@ -462,5 +502,126 @@ describe('buildProjectBundle — Remappr shield', () => {
         const alias = buildProjectBundle(seedConfig, 'remappr')
         expect(paths(alias)).toEqual(paths(board))
         expect(alias.rootName).toBe(board.rootName)
+    })
+})
+
+describe('release workflows', () => {
+    const zmkV1 = [
+        'name: Build ZMK firmware',
+        'on: [push, pull_request, workflow_dispatch]',
+        'jobs:',
+        '  build:',
+        '    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@v0.3',
+        '',
+    ].join('\n')
+
+    it('attaches the firmware to the release of a release tag (ZMK and QMK)', () => {
+        for (const [target, path] of [
+            ['zmk', '.github/workflows/build.yml'],
+            ['qmk', '.github/workflows/build_binaries.yml'],
+        ] as const) {
+            const text = fileText(buildProjectBundle(seedConfig, target), path)
+            expect(text).toContain(RELEASE_MARKER)
+            expect(text).toContain(`    if: ${RELEASE_CONDITION}\n`)
+            expect(text).toContain('gh release upload "$GITHUB_REF_NAME"')
+            expect(text).toContain('GH_TOKEN: ${{ github.token }}')
+        }
+    })
+
+    it('upgrades a workflow Remappr wrote before, and nothing else', () => {
+        const path = '.github/workflows/build.yml'
+        const current = fileText(buildProjectBundle(seedConfig, 'zmk'), path)
+        expect(upgradedWorkflow(path, zmkV1)).toBe(current)
+        expect(upgradedWorkflow(path, current)).toBeNull()
+        expect(upgradedWorkflow(path, `${zmkV1}# mine\n`)).toBeNull()
+        expect(upgradedWorkflow('.github/workflows/other.yml', zmkV1)).toBeNull()
+        expect(WORKFLOW_PATHS).toContain(path)
+    })
+
+    it('upgrades a workflow that released plain v* tags only', () => {
+        const path = '.github/workflows/build.yml'
+        const current = fileText(buildProjectBundle(seedConfig, 'zmk'), path)
+        expect(upgradedWorkflow(path, plainTagsOnly(current))).toBe(current)
+    })
+
+    it('runs on per-item tags and on plain v* tags, not on branches', () => {
+        // Actions' own semantics, for the tags Remappr makes.
+        const runs = (ref: string): boolean => {
+            const name = ref.replace(/^refs\/(tags|heads)\//, '')
+            return (
+                ref.startsWith('refs/tags/v') ||
+                (ref.startsWith('refs/tags/') && name.includes('-v'))
+            )
+        }
+        expect(RELEASE_CONDITION).toBe(
+            "startsWith(github.ref, 'refs/tags/v') || (startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-v'))",
+        )
+        expect(runs('refs/tags/v1.0.0')).toBe(true)
+        expect(runs('refs/tags/remappr-qmk-test-v0.4.0')).toBe(true)
+        expect(runs('refs/heads/main')).toBe(false)
+        expect(runs('refs/heads/my-vial')).toBe(false)
+    })
+})
+
+/** A current workflow as it was when releases ran on plain v* tags only. */
+const plainTagsOnly = (text: string): string =>
+    text
+        .replace('Release of a release tag.', 'Release of a v* tag.')
+        .replace(
+            `    if: ${RELEASE_CONDITION}\n`,
+            "    if: startsWith(github.ref, 'refs/tags/v')\n",
+        )
+
+describe('QMK workflow source', () => {
+    const withFirmware = (firmware: string[]) =>
+        buildProjectBundle(
+            { ...seedConfig, keyboard: { ...seedConfig.keyboard, firmware } },
+            'qmk',
+        )
+    const wf = '.github/workflows/build_binaries.yml'
+
+    it('builds a Vial keymap against vial-qmk', () => {
+        const text = fileText(withFirmware(['vial']), wf)
+        expect(text).toContain('qmk_repo: vial-kb/vial-qmk')
+        expect(text).toContain('qmk_ref: vial')
+        expect(text).toContain(RELEASE_MARKER)
+    })
+
+    it('builds QMK and VIA against upstream QMK', () => {
+        for (const fw of [['qmk'], ['via']])
+            expect(fileText(withFirmware(fw), wf)).toContain(
+                'qmk_repo: qmk/qmk_firmware',
+            )
+    })
+
+    it('leaves a Vial workflow alone (it is current, not an old one)', () => {
+        expect(upgradedWorkflow(wf, fileText(withFirmware(['vial']), wf))).toBeNull()
+    })
+
+    it('calls the reusable workflow at its real path, granting what it asks', () => {
+        const text = fileText(withFirmware(['qmk']), wf)
+        expect(text).toContain(
+            'uses: qmk/.github/.github/workflows/qmk_userspace_build.yml@main',
+        )
+        expect(text).toMatch(/ {2}build:\n {4}uses: .*\n {4}permissions:\n {6}contents: write\n/)
+        // A userspace keyboard is copied into QMK's tree before the build.
+        expect(text).toContain(
+            'preparation_command: cp -r keyboards/. qmk_firmware/keyboards/',
+        )
+    })
+
+    it('upgrades the earlier release workflows of each source to its own', () => {
+        for (const fw of [['qmk'], ['vial']]) {
+            const current = fileText(withFirmware(fw), wf)
+            const built = plainTagsOnly(current)
+            expect(built).not.toBe(current)
+            expect(upgradedWorkflow(wf, built)).toBe(current)
+            const old = built
+                .replace('qmk/.github/.github/workflows/', 'qmk/.github/workflows/')
+                .replace('    permissions:\n      contents: write\n    with:', '    with:')
+                .replace(/\n {6}preparation_command: .*/, '')
+            expect(old).not.toBe(built)
+            expect(upgradedWorkflow(wf, old)).toBe(current)
+        }
     })
 })

@@ -1,6 +1,7 @@
 // pattern-check: skip — MOUSE namespace verb fixtures against a fake rpc.
 import { describe, expect, it } from 'vitest'
 import {
+    buildMouseMotionApi,
     getMotionConfig,
     setAccelProfile,
     setDpi,
@@ -110,5 +111,43 @@ describe('mouse motion control (MOUSE namespace)', () => {
             data: new Uint8Array(),
         }))
         await expect(setDpi(outOfRange, 99999)).rejects.toThrow(/SET_DPI/)
+    })
+})
+
+describe('buildMouseMotionApi', () => {
+    it('relays every verb to the node it was built for', async () => {
+        const seen: Array<[number, number | undefined]> = []
+        const rpc = fakeRpc(async (_ns, verb, _arg, o) => {
+            seen.push([verb, o?.targetNode])
+            return verb === MouseVerb.GET_MOTION_CONFIG
+                ? { status: Status.OK, data: cfg(100, 3200, 100, 800, 1, 0) }
+                : { status: Status.OK, data: new Uint8Array() }
+        })
+        const api = buildMouseMotionApi(rpc, { targetNode: 2, writable: true })
+        expect((await api.getConfig()).dpi).toBe(800)
+        await api.setDpi(1600)
+        await api.setAccelProfile(0)
+        await api.setScrollMode(1)
+        expect(seen).toEqual([
+            [MouseVerb.GET_MOTION_CONFIG, 2],
+            [MouseVerb.SET_DPI, 2],
+            [MouseVerb.SET_ACCEL_PROFILE, 2],
+            [MouseVerb.SET_SCROLL_MODE, 2],
+        ])
+    })
+
+    it('reads but refuses live changes when read-only', async () => {
+        const verbs: number[] = []
+        const rpc = fakeRpc(async (_ns, verb) => {
+            verbs.push(verb)
+            return { status: Status.OK, data: cfg(100, 3200, 100, 800, 1, 0) }
+        })
+        const api = buildMouseMotionApi(rpc, { targetNode: 2, writable: false })
+        expect(api.writable).toBe(false)
+        await api.getConfig()
+        await expect(api.setDpi(1600)).rejects.toThrow(/Read-only/)
+        await expect(api.setAccelProfile(0)).rejects.toThrow(/Read-only/)
+        await expect(api.setScrollMode(1)).rejects.toThrow(/Read-only/)
+        expect(verbs).toEqual([MouseVerb.GET_MOTION_CONFIG])
     })
 })

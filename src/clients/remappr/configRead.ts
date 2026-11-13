@@ -3,17 +3,16 @@
 // it's the same linear protocol read, parameterized by `targetNode` (0 = the
 // unchanged direct probe; ≠0 rides the §6.2 COMMON relay to a behind-dongle node).
 import type { ConfigKeymap } from '../../config'
-import { decodeRemapprBlob, DecodeCode } from '../../config/compilers/remappr/decode'
+import {
+    decodeRemapprBlob,
+    DecodeCode,
+} from '../../config/compilers/remappr/decode'
 import type { PhysicalLayout } from '../../types'
 
 import type { DiscoveryResult } from './discovery'
 import { fetchPhysicalLayouts } from './geometry'
-import {
-    buildReadChunkArg,
-    Cmd,
-    Namespace,
-    Status,
-} from './protocol'
+import { readInputLayout, withInputLayout } from './inputLayout'
+import { buildReadChunkArg, Cmd, Namespace, Status } from './protocol'
 import { type RemapprRpc, RELAY_READ_RETRIES } from './rpc'
 
 // Direct legacy frame: 64 − 6-byte response header = 58 blob bytes per reply.
@@ -30,31 +29,36 @@ const READ_CHUNK_WANT_RELAY = 48
  * Read the full active blob over the plaintext READ_CONFIG_CHUNK loop. With
  * `targetNode` unset (or 0) it uses the direct legacy frame; with a node short-id
  * the verb rides the universal COMMON relay (legacy verbs keep their number under
- * COMMON, §6.2) so the same loop reads a behind-dongle node.
+ * COMMON, §6.2) so the same loop reads a behind-dongle node. `universal` sends
+ * universal frames to the device itself as well (a dongle drops legacy ones);
+ * chunks then stay as small as the relay's so every reply is one frame.
  */
+// pattern-check: skip — one optional flag on the existing read loop
 export async function readConfigBlob(
     rpc: RemapprRpc,
     hasActive: boolean,
-    opts: { targetNode?: number } = {},
+    opts: { targetNode?: number; universal?: boolean } = {},
 ): Promise<Uint8Array> {
     if (!hasActive) return new Uint8Array()
     const target = opts.targetNode ?? 0
+    const legacy = target === 0 && !opts.universal
     const chunks: Uint8Array[] = []
     let offset = 0
     let total = 0
-    const want = target === 0 ? READ_CHUNK_WANT_DIRECT : READ_CHUNK_WANT_RELAY
+    const want = legacy ? READ_CHUNK_WANT_DIRECT : READ_CHUNK_WANT_RELAY
     let guard = 0
     while (guard++ < 8192) {
         const arg = buildReadChunkArg(offset, want)
-        const r =
-            target === 0
-                ? await rpc.callPlain(Cmd.READ_CONFIG_CHUNK, arg)
-                : await rpc.callUniversalPlain(
-                      Namespace.COMMON,
-                      Cmd.READ_CONFIG_CHUNK,
-                      arg,
-                      { targetNode: target, retries: RELAY_READ_RETRIES },
-                  )
+        const r = legacy
+            ? await rpc.callPlain(Cmd.READ_CONFIG_CHUNK, arg)
+            : await rpc.callUniversalPlain(
+                  Namespace.COMMON,
+                  Cmd.READ_CONFIG_CHUNK,
+                  arg,
+                  target === 0
+                      ? undefined
+                      : { targetNode: target, retries: RELAY_READ_RETRIES },
+              )
         if (r.status !== Status.OK || r.data.length === 0) break // EOF
         chunks.push(r.data)
         offset += r.data.length
@@ -84,6 +88,21 @@ export function defaultConfig(keyCount: number): ConfigKeymap {
                 })),
             },
         ],
+    }
+}
+
+// pattern-check: skip — config literal helper beside defaultConfig
+/** An empty keymap for a device with no keys (dongle, mouse): its config is a
+ *  device document (`service.device`), and the renderer lands on the node roster
+ *  or the mouse page rather than the editor. */
+export function makeKeylessConfig(name: string): ConfigKeymap {
+    const id = name.toLowerCase().replace(/\s+/g, '-')
+    return {
+        schemaVersion: 1,
+        kind: 'remappr.keymap',
+        meta: { name, target: null },
+        keyboard: { id, name, keys: [] },
+        layers: [],
     }
 }
 
@@ -117,7 +136,11 @@ export async function loadDeviceConfig(
 
     let config: ConfigKeymap | null = null
     let configVersion = discovery.deviceInfo.configVersion
-    if (decoded.code === DecodeCode.OK && 'config' in decoded && decoded.config) {
+    if (
+        decoded.code === DecodeCode.OK &&
+        'config' in decoded &&
+        decoded.config
+    ) {
         config = decoded.config
         configVersion = decoded.configVersion ?? configVersion
     }
@@ -129,6 +152,14 @@ export async function loadDeviceConfig(
         targetNode: target,
     })
 
+    // Knobs and parts (a screen, a fader) the device declares beside its keys.
+    const inputs = await readInputLayout(
+        rpc,
+        discovery.personality?.namespaces,
+        target,
+    )
+    const layouts = geometry.layouts.map((l) => withInputLayout(l, inputs))
+
     if (!config) config = defaultConfig(geometry.layouts[0]?.keys.length ?? 0)
 
     const maxLayers = discovery.personality
@@ -138,7 +169,7 @@ export async function loadDeviceConfig(
     return {
         config,
         configVersion,
-        layouts: geometry.layouts,
+        layouts,
         activeLayoutId: geometry.activeLayoutId,
         maxLayers,
     }

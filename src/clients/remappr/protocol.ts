@@ -125,7 +125,58 @@ export const Cap = {
     PAIRING: 1 << 7,
     CLUSTER_DIAG: 1 << 12, // GET_CLUSTER_DIAG source wired (§N4b-3)
     UNICODE: 1 << 14, // unicode input-method ops wired (§5.2-E)
+    JOYSTICK: 1 << 15, // JOYSTICK-namespace ops wired (input-layout plan §4)
+    SENSOR: 1 << 16, // SENSOR-namespace ops wired (sensor-settings plan §3)
 } as const
+
+/** enum remappr_capability (include/remappr/capabilities.h) — the hardware
+ *  bits GET_PERSONALITY_MAP's trailing u32 `hw_caps` carries. Every image fills
+ *  it from its devicetree and build (input-layout plan §1); older firmware sends
+ *  0 there, so 0 means "not reported", not "nothing". */
+export const HwCap = {
+    USB: 1 << 0,
+    USB_HID: 1 << 1,
+    RADIO_2G4: 1 << 2,
+    BLE: 1 << 3,
+    BUTTONS: 1 << 4,
+    MATRIX: 1 << 5,
+    ENCODERS: 1 << 6,
+    SLIDERS: 1 << 7,
+    TOUCH: 1 << 8,
+    POINTER: 1 << 9,
+    IMU: 1 << 10,
+    RGB: 1 << 11,
+    LEDS: 1 << 12,
+    DISPLAY: 1 << 13,
+    HAPTIC: 1 << 14,
+    BATTERY: 1 << 15,
+    FLASH_STORAGE: 1 << 16,
+    ANALOG_AXES: 1 << 17,
+    POWER_OFF: 1 << 18,
+    HID_GAMEPAD: 1 << 24,
+} as const
+
+/** Whether `hwCaps` reports `cap`; undefined when the device reported none
+ *  (0 or absent), so a caller keeps its default. */
+export function reportsHwCap(
+    hwCaps: number | undefined,
+    cap: number,
+): boolean | undefined {
+    if (!hwCaps) return undefined
+    return (hwCaps & cap) !== 0
+}
+
+/** The device's power hardware from its hw caps (battery, power off with an
+ *  input wake), or undefined when it reported none. */
+export function powerCapability(
+    hwCaps: number | undefined,
+): { battery: boolean; powerOff: boolean } | undefined {
+    if (!hwCaps) return undefined
+    return {
+        battery: (hwCaps & HwCap.BATTERY) !== 0,
+        powerOff: (hwCaps & HwCap.POWER_OFF) !== 0,
+    }
+}
 
 /* ── universal (proto-v2) ───────────────────────────────────────────────── */
 
@@ -144,6 +195,16 @@ export const Namespace = {
     PROFILES: 0x06,
     DONGLE: 0x07,
     RADIO: 0x08,
+    /** Personality-neutral input verbs: the layout of any device (input-layout
+     *  plan §2). Listed in the personality map once the firmware serves it. */
+    INPUT: 0x09,
+    /** Personality-neutral sensor settings, procedures and readings
+     *  (sensor-settings plan §3). Provisional (ns_version 0): served only when
+     *  the personality map lists it. */
+    SENSOR: 0x0a,
+    /** Values the host pushes for the device's screens (display part design
+     *  §4); listed in the personality map when the firmware serves it. */
+    HOST: 0x0b,
 } as const
 
 export const UchFlag = {
@@ -208,6 +269,176 @@ export const MouseVerb = {
     SET_SCROLL_MODE: 0x04,
 } as const
 
+/** JOYSTICK-namespace verbs (input-layout plan §4) — namespace-scoped,
+ *  0xE2-only, PROVISIONAL (the manifest lists the namespace at ns_version 0).
+ *  `axis` in an argument is the analog input index (0..5), not the report
+ *  axis it maps to. Each verb is manifest-gated on its wired op; wiring any
+ *  raises CAP_JOYSTICK (1<<15). */
+export const JoystickVerb = {
+    /** No arg → see parseAxisState. Plaintext-open read. */
+    GET_AXIS_STATE: 0x01,
+    /** Arg: u8 axis | u8 out_axis (0..5, 0xFF off) | u8 flags (JoyAxisFlag).
+     *  Sealed, mutating; live until the next COMMIT, never stored. */
+    SET_AXIS_MAP: 0x02,
+    /** Arg: u8 axis | u8 inner_pct | u8 outer_pct. Sealed, mutating; live
+     *  until the next COMMIT. */
+    SET_DEADZONE: 0x03,
+    /** Arg: u8 axis (0xFF = every input) | u8 step (JoyCalStep). Sealed,
+     *  mutating. ERR_STATE for a step out of turn, too narrow a sweep or
+     *  nothing to undo.
+     *  FINISH replies the deadzones the capture suggests (parseCalSuggestion);
+     *  the other steps, and older firmware, reply nothing. */
+    CALIBRATE: 0x04,
+    /** No arg → see parseAxisConfig. Plaintext-open read. */
+    GET_AXIS_CONFIG: 0x05,
+} as const
+
+/** CALIBRATE steps. UNDO swaps back the calibration the last FINISH, RESET
+ *  or UNDO replaced (kept until the joystick restarts). */
+export const JoyCalStep = {
+    BEGIN: 0,
+    CENTRE: 1,
+    FINISH: 2,
+    CANCEL: 3,
+    RESET: 4,
+    UNDO: 5,
+} as const
+
+/** SET_AXIS_MAP / TBL_JOYSTICK / GET_AXIS_CONFIG axis flags. RADIAL: with its
+ *  partner input (input ^ 1) one round stick, deadzones and curve on the
+ *  stick's distance from centre (both must carry it). */
+export const JoyAxisFlag = {
+    INVERT: 1 << 0,
+    RADIAL: 1 << 1,
+} as const
+
+/** CALIBRATE axis byte: every input at once. */
+export const JOY_CAL_ALL = 0xff
+
+/** INPUT-namespace verbs (input-layout plan §2) — namespace-scoped, 0xE2-only. */
+export const InputVerb = {
+    /** Arg: u16 start (absent = 0). Reply: one page, see parseInputLayoutPage.
+     *  Plaintext-open read; re-issue with start += count until start >= total. */
+    GET_INPUT_LAYOUT: 0x01,
+} as const
+
+/** What an input is (enum remappr_input_class) — a wire enum, append-only. */
+export const InputClass = {
+    KEY: 0,
+    BUTTON: 1,
+    ENCODER: 2,
+    WHEEL: 3,
+    SENSOR: 4,
+    STICK: 5,
+    TRIGGER: 6,
+    HAT: 7,
+    AXIS: 8,
+    SLIDER: 9,
+    /** A screen: drawn where it sits, never bound. */
+    DISPLAY: 10,
+} as const
+
+/** Draw hint (enum remappr_input_shape); 0 = the class default. Append-only.
+ *  Same order as the app's ControlShape. */
+export const InputShape = {
+    AUTO: 0,
+    KEY: 1,
+    ROUND: 2,
+    PILL: 3,
+    STICK: 4,
+    DPAD: 5,
+    HAT: 6,
+    TRIGGER: 7,
+    TRIGGER_SIDE: 8,
+    WHEEL: 9,
+    RING: 10,
+    KNOB: 11,
+    SENSOR: 12,
+    MOUSE_LEFT: 13,
+    MOUSE_RIGHT: 14,
+    SCREEN: 15,
+} as const
+
+/** Device form (enum remappr_input_form); 0 = derive it from the personality. */
+export const InputForm = {
+    PERSONALITY: 0,
+    KEYBOARD: 1,
+    MACROPAD: 2,
+    MOUSE: 3,
+    GAMEPAD: 4,
+    FLIGHTSTICK: 5,
+} as const
+
+/** `position` of an input that is not bound by position; also the `inputId`
+ *  of one past the 256th of its class. */
+export const INPUT_NONE = 0xffff
+
+/** One input from GET_INPUT_LAYOUT. Geometry in 1/100 key-unit, top-left;
+ *  `rot` in signed 1/100 degree, clockwise, about (`rotx`, `roty`). */
+export interface InputLayoutEntry {
+    cls: number
+    shape: number
+    inputId: number
+    position: number
+    x: number
+    y: number
+    w: number
+    h: number
+    rot: number
+    rotx: number
+    roty: number
+}
+
+export interface InputLayoutPage {
+    version: number
+    form: number
+    total: number
+    start: number
+    entries: InputLayoutEntry[]
+}
+
+const INPUT_LAYOUT_HDR = 7
+const INPUT_LAYOUT_ENTRY = 20
+
+/** Decode one GET_INPUT_LAYOUT page: `u8 version | u8 form | u16 total |
+ *  u16 start | u8 count` + count × 20-B entries. Throws on a truncated page (a
+ *  relayed FRAG chain that lost a fragment) so the caller re-reads it. */
+export function parseInputLayoutPage(d: Uint8Array): InputLayoutPage {
+    if (d.length < INPUT_LAYOUT_HDR)
+        throw new Error(`input layout page too short (${d.length} B)`)
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const count = d[6]
+    if (d.length < INPUT_LAYOUT_HDR + count * INPUT_LAYOUT_ENTRY) {
+        throw new Error(
+            `input layout page truncated: ${d.length - INPUT_LAYOUT_HDR} B for ${count} entries`,
+        )
+    }
+    const entries: InputLayoutEntry[] = []
+    for (let i = 0; i < count; i++) {
+        const o = INPUT_LAYOUT_HDR + i * INPUT_LAYOUT_ENTRY
+        entries.push({
+            cls: d[o],
+            shape: d[o + 1],
+            inputId: dv.getUint16(o + 2, true),
+            position: dv.getUint16(o + 4, true),
+            x: dv.getUint16(o + 6, true),
+            y: dv.getUint16(o + 8, true),
+            w: dv.getUint16(o + 10, true),
+            h: dv.getUint16(o + 12, true),
+            rot: dv.getInt16(o + 14, true),
+            rotx: dv.getUint16(o + 16, true),
+            roty: dv.getUint16(o + 18, true),
+        })
+    }
+    return {
+        version: d[0],
+        form: d[1],
+        total: dv.getUint16(2, true),
+        start: dv.getUint16(4, true),
+        entries,
+    }
+}
+
 /** KEYBOARD-namespace verbs (proto-v2, chunked). */
 export const KeyboardVerb = {
     GET_KEYMAP_BOUNDS: 0x42,
@@ -235,9 +466,11 @@ export const DongleVerb = {
     SET_NKRO: 0x07,
     /** §16 radio observability, no arg: the live hop map + per-channel PER
      *  window. Reply: 8-byte header {u8 version(=1), u8 map_count, u8 map_gen,
-     *  u8 pool_count, u16 window, u8 fail_pct, u8 rsvd} then map_count 6-byte
-     *  records {u8 channel, u8 rsvd, u16 ok, u16 fail}. map_gen bumps on every
-     *  adaptive channel swap; ok/fail reset after each verdict window. */
+     *  u8 pool_count, u16 window, u8 fail_pct, u8 flags} then map_count 6-byte
+     *  records {u8 channel, u8 last_fail_pct, u16 ok, u16 fail}. flags bit0 = a
+     *  CHANGE_CHANNELS roll-out is running; last_fail_pct 0xFF = no full window
+     *  yet (both bytes read 0 on older firmware). map_gen bumps once per changed
+     *  slot; ok/fail reset after each verdict window. */
     GET_LINK_STATS: 0x08,
     /** Raw radio pipe table, no arg: every pipe 1..7 bonded or not, plus the
      *  pair-window state — the diagnosis view behind LIST_NODES (incomplete
@@ -246,7 +479,25 @@ export const DongleVerb = {
      *  count 8-byte records {u8 pipe, u8 flags, u16 short_id, u8 device_type,
      *  u8 node_role, u8 ctrl_owner, u8 hops}. */
     GET_PIPE_TABLE: 0x09,
+    /** Reboot into the board's own bootloader so new firmware can be loaded,
+     *  arg = ENTER_BOOTLOADER_ARG. Replies OK, reboots ~200 ms later; the
+     *  dongle relays nothing until reflashed or replugged. Only on a board
+     *  that declares a bootloader entry (listed in its DONGLE verb mask);
+     *  elsewhere ERR_CMD. */
+    ENTER_BOOTLOADER: 0x0a,
+    /** Move every node to new channels (the map never changes on its own; nodes
+     *  remember it). arg {u8 mode}: 0 = replace the channels whose last window
+     *  failed; 1 = {u8 mode, u8 n, n channels}, an explicit map (n = map size,
+     *  each a map or pool channel). Reply {u8 version(=1), u8 planned,
+     *  u8 map_gen when done, u8 map_count, map_count channels}; rolled out one
+     *  slot every few hop cycles. ERR_STATE while a roll-out runs, ERR_ARG on a
+     *  refused list. */
+    CHANGE_CHANNELS: 0x0b,
 } as const
+
+/** DONGLE.ENTER_BOOTLOADER's confirmation argument, ASCII "DFU!" — anything
+ *  else is refused (ERR_ARG), so a stray frame cannot reboot the dongle. */
+export const ENTER_BOOTLOADER_ARG = new Uint8Array([0x44, 0x46, 0x55, 0x21])
 
 /** Device role (enum remappr_role, firmware include/remappr/role.h) — reported as
  *  byte 0 of GET_PERSONALITY_MAP. A dongle self-identifies as DONGLE so the host
@@ -286,7 +537,11 @@ export interface ControlResponse {
 }
 
 /** Build a legacy request frame `[cmd][seq][arg_len u16][arg]` (no padding). */
-export function buildRequest(cmd: number, seq: number, arg: Uint8Array): Uint8Array {
+export function buildRequest(
+    cmd: number,
+    seq: number,
+    arg: Uint8Array,
+): Uint8Array {
     const out = new Uint8Array(4 + arg.length)
     const dv = new DataView(out.buffer)
     out[0] = cmd
@@ -548,7 +803,9 @@ export function parseLinkLimits(d: Uint8Array): LinkLimitKnob[] {
     const count = d[0]
     const need = 1 + count * 8
     if (d.byteLength < need)
-        throw new Error(`link-limits reply too short (${d.byteLength} B, need ${need})`)
+        throw new Error(
+            `link-limits reply too short (${d.byteLength} B, need ${need})`,
+        )
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
     const out: LinkLimitKnob[] = []
     for (let i = 0; i < count; i++) {
@@ -712,6 +969,8 @@ export interface NodeRecord {
     /** Battery state-of-charge 0..100, or null when the node has not reported
      *  one (firmware sends 0xFF = unknown). */
     battery: number | null
+    /** Its last battery report said charging (flags NODE_F_CHARGING). */
+    charging: boolean
     /** The node holds a §5 MAIN election bit, so the dongle treats it as the
      *  master. A v2/legacy node carries no role and always reads false. */
     master: boolean
@@ -728,6 +987,9 @@ export const NODE_RECORD_LEN = 15
 /** Flags-byte bit that marks the §5 master node (mirrors firmware
  *  REMAPPR_DONGLE_NODE_F_MASTER). */
 const NODE_F_MASTER = 0x08
+/** Flags-byte bit: the node's last battery report said charging (firmware
+ *  REMAPPR_DONGLE_NODE_F_CHARGING; an older dongle never sets it). */
+const NODE_F_CHARGING = 0x10
 
 export function parseNodeRecord(d: Uint8Array, off = 0): NodeRecord {
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
@@ -747,6 +1009,7 @@ export function parseNodeRecord(d: Uint8Array, off = 0): NodeRecord {
         rssi: (d[off + 6] << 24) >> 24, // sign-extend i8
         deviceIdTail: tail,
         battery: batt === 0xff ? null : batt,
+        charging: (flags & NODE_F_CHARGING) !== 0,
         master: (flags & NODE_F_MASTER) !== 0,
         nodeRole: d[off + 14],
     }
@@ -769,24 +1032,30 @@ export interface ChannelStat {
     channel: number
     ok: number
     fail: number
+    /** Failure % of the channel's last full window, or null before its first
+     *  verdict (older firmware always reads 0). */
+    lastFailPercent: number | null
 }
 
 /** DONGLE.GET_LINK_STATS reply: the live §16 channel map + PER window. */
 export interface LinkStats {
-    /** Active hop-map generation — bumps (mod 256) on every adaptive swap, so
-     *  polling it observes channel-map churn. */
+    /** Active hop-map generation — bumps (mod 256) once per changed slot. */
     mapGeneration: number
     /** Replacement candidates outside the active map. */
     poolCount: number
-    /** Samples per channel before a keep/swap verdict. */
+    /** Samples per channel before a verdict. */
     window: number
-    /** Failure percentage that triggers an adaptive swap. */
+    /** Failure percentage over which a channel counts as bad. */
     failPercent: number
+    /** A CHANGE_CHANNELS roll-out is still moving slots. */
+    changeInProgress: boolean
     channels: ChannelStat[]
 }
 
 const LINK_STATS_HDR = 8
 const CHAN_REC = 6
+const NO_VERDICT = 0xff
+const LINK_F_PLAN = 0x01
 
 export function parseLinkStats(d: Uint8Array): LinkStats {
     if (d.length < LINK_STATS_HDR) throw new Error('link-stats reply too short')
@@ -802,6 +1071,7 @@ export function parseLinkStats(d: Uint8Array): LinkStats {
             channel: d[off],
             ok: dv.getUint16(off + 2, true),
             fail: dv.getUint16(off + 4, true),
+            lastFailPercent: d[off + 1] === NO_VERDICT ? null : d[off + 1],
         })
     }
     return {
@@ -809,7 +1079,40 @@ export function parseLinkStats(d: Uint8Array): LinkStats {
         poolCount: d[3],
         window: dv.getUint16(4, true),
         failPercent: d[6],
+        changeInProgress: (d[7] & LINK_F_PLAN) !== 0,
         channels,
+    }
+}
+
+/** What DONGLE.CHANGE_CHANNELS is asked for: the failing channels replaced, or
+ *  an explicit map. */
+export type ChannelChangeRequest = { kind: 'bad' } | { kind: 'list'; channels: number[] }
+
+/** DONGLE.CHANGE_CHANNELS reply: the map being rolled out. */
+export interface ChannelChange {
+    /** Slots that will change (0 = nothing to change, no roll-out). */
+    planned: number
+    /** Map generation once every slot moved. */
+    mapGeneration: number
+    channels: number[]
+}
+
+const CHCH_HDR = 4
+
+export function buildChangeChannelsArg(req: ChannelChangeRequest): Uint8Array {
+    if (req.kind === 'bad') return Uint8Array.of(0)
+    return Uint8Array.of(1, req.channels.length, ...req.channels)
+}
+
+export function parseChannelChange(d: Uint8Array): ChannelChange {
+    if (d.length < CHCH_HDR) throw new Error('change-channels reply too short')
+    if (d[0] !== 1) throw new Error(`unknown change-channels version ${d[0]}`)
+    const count = d[3]
+    if (d.length < CHCH_HDR + count) throw new Error('change-channels reply truncated')
+    return {
+        planned: d[1],
+        mapGeneration: d[2],
+        channels: Array.from(d.subarray(CHCH_HDR, CHCH_HDR + count)),
     }
 }
 
@@ -881,6 +1184,30 @@ export function parsePipeTable(d: Uint8Array): PipeTable {
     }
 }
 
+/** The relay outcomes a node counts (GET_ERROR_COUNTERS relay tail): what
+ *  became of each control frame the dongle relayed to it, and of each reply.
+ *  Wire order = the firmware's include/remappr/relay_stats.h enum. */
+export const RELAY_STATS = [
+    'rxOk', // opened, handed to the device
+    'rxNotLinked', // arrived with no live session
+    'rxReplay', // counter equals the last one (duplicate)
+    'rxAuth', // failed its MIC
+    'rxBad', // malformed
+    'rxAbuse', // MIC failures hit the §17 limit: session torn down
+    'rxEvtFull', // radio event queue full: a received frame dropped
+    'rxQueueFull', // request queue full
+    'txQueueFull', // reply never reached the radio thread
+    'txStageFail', // link refused to stage a reply frame
+    'txStaged', // reply frame sealed and staged
+    'txAcked', // staged frame HW-ACKed by the dongle
+    'txRetry', // unACKed frame sent again
+    'txGaveUp', // retries spent: reply dropped
+    'txSuperseded', // unACKed reply dropped by a newer request
+    'txLinkLost', // unACKed reply dropped on leaving LINKED
+] as const
+
+export type RelayStats = Record<(typeof RELAY_STATS)[number], number>
+
 /** COMMON.GET_ERROR_COUNTERS reply (§20): free-running error counters since
  *  boot. `radioValid` is false when the radio counters are unreadable on the
  *  build (no radio, or a split tier where they live on the coprocessor) —
@@ -893,9 +1220,24 @@ export interface ErrorCounters {
     txChanFail: number
     /** LINKED sessions torn back to SEARCHING. */
     linkResync: number
+    /** Relay outcomes, or null when the node does not send them (older
+     *  firmware, a split tier, or a sealed reply with no room). */
+    relay: RelayStats | null
 }
 
 const ERR_COUNTERS_LEN = 10
+const ERR_F_RELAY_VALID = 0x02
+
+function parseRelayStats(d: Uint8Array): RelayStats | null {
+    if ((d[1] & ERR_F_RELAY_VALID) === 0) return null
+    if (d.length < ERR_COUNTERS_LEN + 2 * RELAY_STATS.length) return null
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const stats = {} as RelayStats
+    RELAY_STATS.forEach((name, i) => {
+        stats[name] = dv.getUint16(ERR_COUNTERS_LEN + 2 * i, true)
+    })
+    return stats
+}
 
 export function parseErrorCounters(d: Uint8Array): ErrorCounters {
     if (d.length < ERR_COUNTERS_LEN)
@@ -907,6 +1249,7 @@ export function parseErrorCounters(d: Uint8Array): ErrorCounters {
         micFail: dv.getUint32(2, true),
         txChanFail: dv.getUint16(6, true),
         linkResync: dv.getUint16(8, true),
+        relay: parseRelayStats(d),
     }
 }
 
@@ -1010,6 +1353,524 @@ export function buildDpiArg(dpi: number): Uint8Array {
     const out = new Uint8Array(2)
     new DataView(out.buffer).setUint16(0, dpi, true)
     return out
+}
+
+/** A joystick's live state (JOYSTICK.GET_AXIS_STATE): per analog input its
+ *  raw ADC count and the value it puts on its report axis (-32767..32767),
+ *  the report's buttons (bit i = button i + 1) and its hat (0..7 from up,
+ *  clockwise; 8 centred). */
+export interface AxisState {
+    inputs: Array<{ raw: number; value: number }>
+    buttons: number
+    hat: number
+}
+
+export function parseAxisState(d: Uint8Array): AxisState {
+    if (d.length < 2) throw new Error('axis-state reply too short')
+    if (d[0] !== 1) throw new Error(`unknown axis-state version ${d[0]}`)
+    const n = d[1]
+    if (d.length < 2 + 4 * n + 5) throw new Error('axis-state reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const inputs = Array.from({ length: n }, (_, i) => ({
+        raw: dv.getInt16(2 + 4 * i, true),
+        value: dv.getInt16(4 + 4 * i, true),
+    }))
+    return {
+        inputs,
+        buttons: dv.getUint32(2 + 4 * n, true),
+        hat: d[6 + 4 * n],
+    }
+}
+
+/** One analog input's config and the unit's calibration of it
+ *  (JOYSTICK.GET_AXIS_CONFIG). `out` 0..5 = X Y Z Rx Ry Rz, 0xFF off;
+ *  `flags` JoyAxisFlag; `curve` 0 linear, 1 aggressive, 2 relaxed, 3
+ *  precise. `fuzz` (the noise filter, raw counts) and `canUndo` come from
+ *  firmware that has them, else they are absent. */
+export interface AxisConfigEntry {
+    out: number
+    flags: number
+    curve: number
+    inner: number
+    outer: number
+    min: number
+    centre: number
+    max: number
+    fuzz?: number
+    canUndo?: boolean
+}
+
+export interface AxisConfig {
+    hatWays: number
+    axes: AxisConfigEntry[]
+}
+
+const AXIS_CONFIG_ENTRY_LEN = 11
+/** The per-input tail after the entries: u8 fuzz | u8 cal_flags. */
+const AXIS_CONFIG_CAL_LEN = 2
+const CAL_FLAG_UNDO = 1 << 0
+
+/** GET_AXIS_CONFIG reply: u8 version(=1) | u8 hat_ways | u8 n | n × 11-B
+ *  entries, then (newer firmware) n × {u8 fuzz | u8 cal_flags}. */
+export function parseAxisConfig(d: Uint8Array): AxisConfig {
+    if (d.length < 3) throw new Error('axis-config reply too short')
+    if (d[0] !== 1) throw new Error(`unknown axis-config version ${d[0]}`)
+    const n = d[2]
+    const tail = 3 + AXIS_CONFIG_ENTRY_LEN * n
+    if (d.length < tail) throw new Error('axis-config reply too short')
+    const hasCal = d.length >= tail + AXIS_CONFIG_CAL_LEN * n
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const axes = Array.from({ length: n }, (_, i): AxisConfigEntry => {
+        const o = 3 + AXIS_CONFIG_ENTRY_LEN * i
+        const c = tail + AXIS_CONFIG_CAL_LEN * i
+        return {
+            out: d[o],
+            flags: d[o + 1],
+            curve: d[o + 2],
+            inner: d[o + 3],
+            outer: d[o + 4],
+            min: dv.getInt16(o + 5, true),
+            centre: dv.getInt16(o + 7, true),
+            max: dv.getInt16(o + 9, true),
+            ...(hasCal
+                ? { fuzz: d[c], canUndo: (d[c + 1] & CAL_FLAG_UNDO) !== 0 }
+                : {}),
+        }
+    })
+    return { hatWays: d[1], axes }
+}
+
+/** What a finished calibration measured for one analog input, in the
+ *  firmware's units: inner = centre deadzone %, outer = edge band that reads
+ *  as full %. null = nothing measured for it. */
+export interface CalSuggestion {
+    inner: number | null
+    outer: number | null
+}
+
+/** "Nothing measured" on the wire. */
+const CAL_SUGGEST_NONE = 0xff
+
+/** CALIBRATE FINISH reply: u8 version(=1) | u8 n | n × {u8 inner_pct, u8
+ *  outer_pct} (0xFF = none). Empty (other steps, older firmware) → []. */
+export function parseCalSuggestion(d: Uint8Array): CalSuggestion[] {
+    if (d.length === 0) return []
+    if (d.length < 2) throw new Error('calibrate reply too short')
+    if (d[0] !== 1) throw new Error(`unknown calibrate reply version ${d[0]}`)
+    const n = d[1]
+    if (d.length < 2 + 2 * n) throw new Error('calibrate reply too short')
+    const pct = (v: number): number | null =>
+        v === CAL_SUGGEST_NONE ? null : v
+    return Array.from({ length: n }, (_, i) => ({
+        inner: pct(d[2 + 2 * i]),
+        outer: pct(d[3 + 2 * i]),
+    }))
+}
+
+/* ── PART namespace (0x0A, was SENSOR; firmware docs/part-wire-v1.md) ───── */
+
+/** PART-namespace verbs — namespace-scoped, 0xE2-only. FROZEN at ns_version 1
+ *  (ns_version 0 = the provisional SENSOR layouts, still read: every reply
+ *  carries its own version byte, and the args a v0 device takes are built by
+ *  `nsVersion`). Every verb names the part by its index and, where it matters,
+ *  the channel (0 for a single-unit part); reads are plaintext-open,
+ *  SET_SETTING and RUN_PROCEDURE are sealed and mutating. */
+export const SensorVerb = {
+    /** Arg: u8 first. Reply: see parseSensorsPage; ask again from first + n. */
+    GET_SENSORS: 0x01,
+    /** Arg: u8 part | u8 position [| u8 ch]. See parseSensorSetting. */
+    GET_SETTING: 0x02,
+    /** Arg: u8 part | u8 id | u8 ch | i32 value (v0: no ch). Reply: i32
+     *  applied (snapped to what the hardware holds). Live until the next
+     *  COMMIT, never stored. */
+    SET_SETTING: 0x03,
+    /** Arg: u8 part | u8 position. See parseSensorProcedure. */
+    GET_PROCEDURE: 0x04,
+    /** Arg: u8 part | u8 id | u8 step (SensorStep) | u8 ch (v0: no ch; 0xFF
+     *  every channel). Reply: the status. */
+    RUN_PROCEDURE: 0x05,
+    /** Arg: u8 part | u8 id [| u8 ch]. See parseSensorStatus. */
+    GET_PROCEDURE_STATUS: 0x06,
+    /** Arg: u8 part [| u8 ch]. See parseSensorMetrics. ERR_STATE while a
+     *  procedure holds the part. */
+    GET_METRICS: 0x07,
+    /** Arg: u8 part [| u8 first]. See parseSensorIoPage. ns_version 1. */
+    GET_IO: 0x08,
+    /** Arg: u8 part | u8 id | u8 ch. See parseSensorSuggestions. ns_version 1. */
+    GET_PROCEDURE_RESULT: 0x09,
+} as const
+
+/** Channel argument meaning every channel (RUN_PROCEDURE). */
+export const SENSOR_CH_ALL = 0xff
+
+/** Setting types (enum remappr_part_type). */
+export const SensorTypeCode = {
+    BOOL: 1,
+    INT: 2,
+    ENUM: 3,
+} as const
+
+/** Setting flags (REMAPPR_PART_FLAG_*). PERSONALITY: set by the
+ *  personality's own feature (DPI, report rate), not as a part setting.
+ *  PER_CHANNEL: one value per channel. */
+export const SensorFlag = {
+    ADVANCED: 1 << 0,
+    NEEDS_PROCEDURE: 1 << 1,
+    PERSONALITY: 1 << 2,
+    PER_CHANNEL: 1 << 3,
+} as const
+
+/** Procedure flags. HAS_RESULT: a finished run leaves a result the unit
+ *  keeps (in its own storage, never in a config). PER_CHANNEL: it runs on one
+ *  channel, or every one. */
+export const SensorProcFlag = {
+    HAS_RESULT: 1 << 0,
+    PER_CHANNEL: 1 << 1,
+} as const
+
+/** RUN_PROCEDURE steps. UNDO: back to the result before the last finish,
+ *  RESET or UNDO (ns_version 1). */
+export const SensorStep = {
+    BEGIN: 0,
+    NEXT: 1,
+    CANCEL: 2,
+    RESET: 3,
+    UNDO: 4,
+} as const
+
+/** Procedure states (GET_PROCEDURE_STATUS). */
+export const SensorState = {
+    IDLE: 0,
+    RUNNING: 1,
+    DONE: 2,
+    FAILED: 3,
+} as const
+
+/** Procedure results, once DONE or FAILED. */
+export const SensorResult = {
+    OK: 0,
+    FAILED: 1,
+} as const
+
+/** Status flags (the status reply's 9th byte). HAS_RESULT: the procedure's
+ *  result is stored now, so the options it gates are accepted. */
+export const SensorStatusFlag = {
+    HAS_RESULT: 1 << 0,
+} as const
+
+/** One part from GET_PARTS: its class, how many channels it carries and how
+ *  many settings, procedures, metrics and IO runs it lists. */
+export interface SensorRecord {
+    index: number
+    cls: number
+    modelId: number
+    channels: number
+    settings: number
+    procedures: number
+    metrics: number
+    io: number
+    name: string
+}
+
+export interface SensorsPage {
+    total: number
+    sensors: SensorRecord[]
+}
+
+const ascii = (d: Uint8Array, o: number, n: number): string =>
+    String.fromCharCode(...d.subarray(o, o + n))
+
+/** A length-prefixed name at `o`, or throws when the reply cuts it short. */
+function sensorName(d: Uint8Array, o: number, what: string): string {
+    if (d.length < o + 1 || d.length < o + 1 + d[o])
+        throw new Error(`${what} reply too short`)
+    return ascii(d, o + 1, d[o])
+}
+
+/** The reply's version byte, one of `known`, or throws. */
+function sensorReplyVersion(
+    d: Uint8Array,
+    min: number,
+    what: string,
+    known: readonly number[] = [1],
+): number {
+    if (d.length < min) throw new Error(`${what} reply too short`)
+    if (!known.includes(d[0]))
+        throw new Error(`unknown ${what} version ${d[0]}`)
+    return d[0]
+}
+
+/** Record bytes before the name: v1 (ns_version 0) and v2 (channels, io). */
+const SENSOR_REC_LEN: Readonly<Record<number, number>> = { 1: 8, 2: 10 }
+
+/** GET_PARTS reply: u8 ver | u8 total | u8 n | n × {u8 index | u8 class |
+ *  u16 model_id | [v2: u8 channels] | u8 settings | u8 procedures | u8 metrics
+ *  | [v2: u8 io] | u8 name_len | name}. */
+export function parseSensorsPage(d: Uint8Array): SensorsPage {
+    const ver = sensorReplyVersion(d, 3, 'sensors', [1, 2])
+    const len = SENSOR_REC_LEN[ver]
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const sensors: SensorRecord[] = []
+    let o = 3
+    for (let i = 0; i < d[2]; i++) {
+        if (d.length < o + len) throw new Error('sensors reply too short')
+        const c = ver === 2 ? 1 : 0 // the channel byte shifts the counts
+        const name = sensorName(d, o + len - 1, 'sensors')
+        sensors.push({
+            index: d[o],
+            cls: d[o + 1],
+            modelId: dv.getUint16(o + 2, true),
+            channels: ver === 2 ? Math.max(1, d[o + 4]) : 1,
+            settings: d[o + 4 + c],
+            procedures: d[o + 5 + c],
+            metrics: d[o + 6 + c],
+            io: ver === 2 ? d[o + 8] : 0,
+            name,
+        })
+        o += len + name.length
+    }
+    return { total: d[1], sensors }
+}
+
+/** One setting from GET_SETTING, as the device describes it, on channel
+ *  `ch`. `value` is the one in force, `dflt` what a reset goes back to (the
+ *  board's default). INT carries min / max / step; ENUM its option codes,
+ *  which of them (bit i = options[i]) need `procedure`'s stored result first. */
+export interface SensorSettingRecord {
+    id: number
+    type: number
+    flags: number
+    unit: number
+    ch: number
+    value: number
+    dflt: number
+    min?: number
+    max?: number
+    step?: number
+    options?: number[]
+    gatedMask?: number
+    procedure?: number
+    name: string
+}
+
+/** Header bytes: v1 (ns_version 0) and v2 (a channel after unit). */
+const SETTING_HDR_LEN: Readonly<Record<number, number>> = { 1: 13, 2: 14 }
+const SETTING_INT_LEN = 12
+
+/** GET_SETTING reply: u8 ver | u8 id | u8 type | u8 flags | u8 unit | [v2: u8
+ *  ch] | i32 value | i32 default, then INT: i32 min | i32 max | i32 step; ENUM:
+ *  u8 n | n × u8 code | u8 gated_mask | u8 procedure; then u8 name_len | name. */
+export function parseSensorSetting(d: Uint8Array): SensorSettingRecord {
+    const ver = sensorReplyVersion(d, 13, 'sensor setting', [1, 2])
+    const hdr = SETTING_HDR_LEN[ver]
+    if (d.length < hdr) throw new Error('sensor setting reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const at = hdr - 8 // value, then default
+    const rec: SensorSettingRecord = {
+        id: d[1],
+        type: d[2],
+        flags: d[3],
+        unit: d[4],
+        ch: ver === 2 ? d[5] : 0,
+        value: dv.getInt32(at, true),
+        dflt: dv.getInt32(at + 4, true),
+        name: '',
+    }
+    let o = hdr
+    if (rec.type === SensorTypeCode.INT) {
+        if (d.length < o + SETTING_INT_LEN)
+            throw new Error('sensor setting reply too short')
+        rec.min = dv.getInt32(o, true)
+        rec.max = dv.getInt32(o + 4, true)
+        rec.step = dv.getInt32(o + 8, true)
+        o += SETTING_INT_LEN
+    } else if (rec.type === SensorTypeCode.ENUM) {
+        const n = d[o] ?? 0
+        if (d.length < o + 3 + n)
+            throw new Error('sensor setting reply too short')
+        rec.options = Array.from(d.subarray(o + 1, o + 1 + n))
+        rec.gatedMask = d[o + 1 + n]
+        rec.procedure = d[o + 2 + n]
+        o += 3 + n
+    }
+    rec.name = sensorName(d, o, 'sensor setting')
+    return rec
+}
+
+/** One procedure from GET_PROCEDURE. */
+export interface SensorProcedureRecord {
+    id: number
+    phases: number
+    flags: number
+    name: string
+}
+
+/** GET_PROCEDURE reply: u8 ver | u8 id | u8 phases | u8 flags | u8 name_len |
+ *  name. */
+export function parseSensorProcedure(d: Uint8Array): SensorProcedureRecord {
+    sensorReplyVersion(d, 4, 'sensor procedure')
+    return {
+        id: d[1],
+        phases: d[2],
+        flags: d[3],
+        name: sensorName(d, 4, 'sensor procedure'),
+    }
+}
+
+/** A procedure's progress: SensorState, the phase (1.. while running),
+ *  progress / total of a phase that counts (0 / 0 when it does not),
+ *  SensorResult once DONE or FAILED, and SensorStatusFlag bits (absent from
+ *  firmware that sends no flags byte). */
+export interface SensorStatusRecord {
+    state: number
+    phase: number
+    progress: number
+    total: number
+    result: number
+    flags?: number
+}
+
+const STATUS_LEN = 8
+
+/** RUN_PROCEDURE / GET_PROCEDURE_STATUS reply: u8 ver | u8 state | u8 phase |
+ *  u16 progress | u16 total | u8 result, then u8 flags on newer firmware. */
+export function parseSensorStatus(d: Uint8Array): SensorStatusRecord {
+    sensorReplyVersion(d, STATUS_LEN, 'sensor status')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    return {
+        state: d[1],
+        phase: d[2],
+        progress: dv.getUint16(3, true),
+        total: dv.getUint16(5, true),
+        result: d[7],
+        ...(d.length > STATUS_LEN ? { flags: d[STATUS_LEN] } : {}),
+    }
+}
+
+/** One live reading and the most it reads (for a meter). */
+export interface SensorMetricRecord {
+    id: number
+    value: number
+    max: number
+}
+
+const METRIC_REC_LEN = 9
+
+/** GET_METRICS reply: u8 ver | u8 n | n × {u8 id | i32 value | i32 max}. */
+export function parseSensorMetrics(d: Uint8Array): SensorMetricRecord[] {
+    sensorReplyVersion(d, 2, 'sensor metrics')
+    const n = d[1]
+    if (d.length < 2 + n * METRIC_REC_LEN)
+        throw new Error('sensor metrics reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    return Array.from({ length: n }, (_, i) => {
+        const o = 2 + i * METRIC_REC_LEN
+        return {
+            id: d[o],
+            value: dv.getInt32(o + 1, true),
+            max: dv.getInt32(o + 5, true),
+        }
+    })
+}
+
+/** One run of channels a part emits (kind bit 7 clear) or accepts (set):
+ *  `a` / `b` are kind-specific (a display's width / height, say). */
+export interface SensorIoRecord {
+    kind: number
+    firstCh: number
+    count: number
+    flags: number
+    a: number
+    b: number
+}
+
+export interface SensorIoPage {
+    total: number
+    io: SensorIoRecord[]
+}
+
+const IO_REC_LEN = 8
+
+/** GET_IO reply: u8 ver | u8 total | u8 n | n × {u8 kind | u8 first_ch |
+ *  u8 count | u8 flags | u16 a | u16 b}. */
+export function parseSensorIoPage(d: Uint8Array): SensorIoPage {
+    sensorReplyVersion(d, 3, 'sensor io')
+    const n = d[2]
+    if (d.length < 3 + n * IO_REC_LEN)
+        throw new Error('sensor io reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const io = Array.from({ length: n }, (_, i) => {
+        const o = 3 + i * IO_REC_LEN
+        return {
+            kind: d[o],
+            firstCh: d[o + 1],
+            count: d[o + 2],
+            flags: d[o + 3],
+            a: dv.getUint16(o + 4, true),
+            b: dv.getUint16(o + 6, true),
+        }
+    })
+    return { total: d[1], io }
+}
+
+/** One setting value a finished procedure suggests. */
+export interface SensorSuggestionRecord {
+    id: number
+    value: number
+}
+
+const SUGGEST_REC_LEN = 5
+
+/** GET_PROCEDURE_RESULT reply: u8 ver | u8 n | n × {u8 setting_id | i32 value}. */
+export function parseSensorSuggestions(
+    d: Uint8Array,
+): SensorSuggestionRecord[] {
+    sensorReplyVersion(d, 2, 'sensor result')
+    const n = d[1]
+    if (d.length < 2 + n * SUGGEST_REC_LEN)
+        throw new Error('sensor result reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    return Array.from({ length: n }, (_, i) => ({
+        id: d[2 + i * SUGGEST_REC_LEN],
+        value: dv.getInt32(3 + i * SUGGEST_REC_LEN, true),
+    }))
+}
+
+/** SET_SETTING reply: i32 applied (no version byte). */
+export function parseSensorApplied(d: Uint8Array): number {
+    if (d.length < 4) throw new Error('sensor set reply too short')
+    return new DataView(d.buffer, d.byteOffset, d.byteLength).getInt32(0, true)
+}
+
+/** SET_SETTING arg: u8 part | u8 id | u8 ch | i32 value; a device at
+ *  ns_version 0 takes no channel (and only channel 0 exists there). */
+export function buildSensorSetArg(
+    sensor: number,
+    id: number,
+    value: number,
+    ch = 0,
+    nsVersion = 1,
+): Uint8Array {
+    const withCh = nsVersion >= 1
+    const out = new Uint8Array(withCh ? 7 : 6)
+    out[0] = sensor
+    out[1] = id
+    if (withCh) out[2] = ch
+    new DataView(out.buffer).setInt32(withCh ? 3 : 2, value, true)
+    return out
+}
+
+/** RUN_PROCEDURE arg: u8 part | u8 id | u8 step | u8 ch (ns_version 0: no ch). */
+export function buildSensorRunArg(
+    sensor: number,
+    procedure: number,
+    step: number,
+    ch = 0,
+    nsVersion = 1,
+): Uint8Array {
+    return nsVersion >= 1
+        ? new Uint8Array([sensor, procedure, step, ch])
+        : new Uint8Array([sensor, procedure, step])
 }
 
 /** Standard HID report-rate steps (Hz), ascending — mirrors the firmware's

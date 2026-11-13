@@ -4,10 +4,17 @@ import { describe, expect, it } from 'vitest'
 
 import {
     EVT_ROLE,
+    HwCap,
     parseClusterDiag,
+    InputClass,
+    InputForm,
+    InputShape,
+    INPUT_NONE,
+    parseInputLayoutPage,
     parseKeyLayoutChunk,
     parseRoleEvent,
     parseUchEvent,
+    reportsHwCap,
 } from './protocol'
 
 /** Build a GET_KEY_LAYOUT chunk: [total u16][start u16][count u8][entries×16].
@@ -114,5 +121,69 @@ describe('parseUchEvent + parseRoleEvent (§N4b-3)', () => {
         const role = parseRoleEvent(evt.payload)
         expect(role.coordinator).toBe(true)
         expect(role.term).toBe(5)
+    })
+})
+
+describe('HwCap', () => {
+    it('matches the firmware capability bits', () => {
+        // include/remappr/capabilities.h — a wire ABI, append-only.
+        expect(HwCap.FLASH_STORAGE).toBe(1 << 16)
+        expect(HwCap.ANALOG_AXES).toBe(1 << 17)
+        expect(HwCap.HID_GAMEPAD).toBe(1 << 24)
+    })
+
+    it('treats 0 as not reported', () => {
+        expect(reportsHwCap(0, HwCap.POINTER)).toBeUndefined()
+        expect(reportsHwCap(undefined, HwCap.POINTER)).toBeUndefined()
+        expect(reportsHwCap(HwCap.POINTER, HwCap.POINTER)).toBe(true)
+        expect(reportsHwCap(HwCap.USB, HwCap.POINTER)).toBe(false)
+    })
+})
+
+describe('parseInputLayoutPage (input-layout plan §2)', () => {
+    // The firmware golden (tests/input_layout lmb_wire): a mouse's left button,
+    // rotated -15° about (0.75, 1.5).
+    const LMB = [
+        0x01, 0x0d, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x96, 0x00,
+        0x2c, 0x01, 0x24, 0xfa, 0x4b, 0x00, 0x96, 0x00,
+    ]
+    const page = (count: number, entries: number[]) =>
+        Uint8Array.from([1, InputForm.MOUSE, 4, 0, 1, 0, count, ...entries])
+
+    it('decodes the firmware golden entry', () => {
+        const p = parseInputLayoutPage(page(1, LMB))
+        expect(p).toMatchObject({ version: 1, form: 3, total: 4, start: 1 })
+        expect(p.entries).toEqual([
+            {
+                cls: InputClass.BUTTON,
+                shape: InputShape.MOUSE_LEFT,
+                inputId: 0x0100,
+                position: 0,
+                x: 0,
+                y: 0,
+                w: 150,
+                h: 300,
+                rot: -1500,
+                rotx: 75,
+                roty: 150,
+            },
+        ])
+    })
+
+    it('reads an unbound position as INPUT_NONE', () => {
+        const wheel = [...LMB]
+        wheel[0] = InputClass.WHEEL
+        wheel[4] = 0xff
+        wheel[5] = 0xff
+        expect(parseInputLayoutPage(page(1, wheel)).entries[0]!.position).toBe(
+            INPUT_NONE,
+        )
+    })
+
+    it('rejects a page shorter than its count', () => {
+        expect(() => parseInputLayoutPage(page(2, LMB))).toThrow(/truncated/)
+        expect(() => parseInputLayoutPage(Uint8Array.of(1, 0, 0))).toThrow(
+            /too short/,
+        )
     })
 })

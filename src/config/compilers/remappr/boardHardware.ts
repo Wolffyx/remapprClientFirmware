@@ -11,9 +11,18 @@
 //   • encoders — stock `gpio-qdec` rotation nodes from board.encoders. Rotation →
 //            behavior-engine binding is firmware-side + HIL-deferred, so this
 //            declares the hardware only (warned).
+//   • sensor — a motion sensor on SPI from board.sensor, carrying the product's
+//            defaults from node.sensor.defaults as the generic
+//            `remappr,setting-defaults` (sensor-settings plan §4b). Its driver
+//            enables itself from devicetree.
+import {
+    registrySetting,
+    sensorSettingId,
+    sensorWireValue,
+} from '../../../clients/remappr/sensorRegistry'
 import type { DiagnosticBag } from '../../diagnostics'
-import { gpioSpec, resolveZmkPin } from '../../pinmaps'
-import type { CanonWs2812, ConfigKeymap } from '../../types'
+import { gpioSpec, resolveStPin, resolveZmkPin } from '../../pinmaps'
+import type { CanonWs2812, ConfigKeymap, ConfigSensorValue } from '../../types'
 import { emitWs2812 } from '../zmk/hardware'
 
 /** A peripheral's contribution to the shield: header `#include`s, top-level DT
@@ -235,5 +244,99 @@ export function emitEncoders(
             `config INPUT_GPIO_QDEC`,
             `\tdefault y`,
         ],
+    }
+}
+
+/** A sensor pin as a devicetree spec: a raw `&`-spec verbatim, a friendly
+ *  label (a known controller board's, or an ST port pin) with `flags`, else
+ *  verbatim with a diagnostic. */
+function resolveSensorPin(
+    raw: string,
+    board: string | undefined,
+    flags: string,
+    diag: DiagnosticBag,
+    path: (string | number)[],
+): string {
+    const s = raw.trim()
+    if (s.startsWith('&')) return s
+    const core = resolveZmkPin(board, s) ?? resolveStPin(s)
+    if (core) return `${core} ${flags}`
+    diag.warn(
+        `unresolved sensor GPIO "${raw}" — emitting verbatim; set ` +
+            `board.controller to a known board or give a raw "&gpioN pin FLAGS" spec`,
+        path,
+    )
+    return s
+}
+
+/** A setting value as a devicetree cell (negative ones in parentheses). */
+const cell = (v: number): string => (v < 0 ? `(${v})` : String(v))
+
+/** `remappr,setting-defaults` pairs from node.sensor.defaults, by registry
+ *  macro (the hex id for one the registry has no name for). */
+function settingDefaults(
+    defaults: Readonly<Record<string, ConfigSensorValue>>,
+    diag: DiagnosticBag,
+): string[] {
+    const pairs: string[] = []
+    for (const [key, raw] of Object.entries(defaults)) {
+        const id = sensorSettingId(key)
+        const value = sensorWireValue(key, raw)
+        if (id === undefined || value === undefined) {
+            diag.warn(`sensor default "${key}" is not a setting or option`, [
+                'node',
+                'sensor',
+                'defaults',
+                key,
+            ])
+            continue
+        }
+        const macro = registrySetting(id)?.macro
+        const name = macro ? `REMAPPR_SENSOR_${macro}` : `0x${id.toString(16)}`
+        pairs.push(`\t\t\t${name} ${cell(value)}`)
+    }
+    return pairs
+}
+
+/** The motion sensor from `board.sensor`: its node on the SPI bus, with the
+ *  product's defaults (node.sensor.defaults) as `remappr,setting-defaults`.
+ *  No sensor → empty fragment. */
+export function emitSensor(
+    config: ConfigKeymap,
+    board: string | undefined,
+    diag: DiagnosticBag,
+): PeripheralFragment {
+    const sensor = config.board?.sensor
+    if (!sensor) return EMPTY
+    const path = (k: string): (string | number)[] => ['board', 'sensor', k]
+    const pin = (k: 'cs' | 'motion' | 'reset', flags: string): string =>
+        resolveSensorPin(sensor[k] ?? '', board, flags, diag, path(k))
+    const defaults = settingDefaults(config.node?.sensor?.defaults ?? {}, diag)
+    const unit = sensor.part.split(',').pop() || 'sensor'
+    const nodes = [
+        `&${sensor.bus} {`,
+        `\tstatus = "okay";`,
+        ...(sensor.cs ? [`\tcs-gpios = <${pin('cs', 'GPIO_ACTIVE_LOW')}>;`] : []),
+        ``,
+        `\tremappr_sensor: ${unit}@0 {`,
+        `\t\tcompatible = "${sensor.part}";`,
+        `\t\treg = <0>;`,
+        `\t\tspi-max-frequency = <${sensor.spiMaxHz ?? 8000000}>;`,
+        `\t\tmotion-gpios = <${pin('motion', '(GPIO_ACTIVE_LOW | GPIO_PULL_UP)')}>;`,
+        ...(sensor.reset
+            ? [`\t\treset-gpios = <${pin('reset', 'GPIO_ACTIVE_LOW')}>;`]
+            : []),
+        `\t\tzephyr,axis-x = <INPUT_REL_X>;`,
+        `\t\tzephyr,axis-y = <INPUT_REL_Y>;`,
+        ...(defaults.length
+            ? [`\t\tremappr,setting-defaults = <`, ...defaults, `\t\t>;`]
+            : []),
+        `\t};`,
+        `};`,
+    ]
+    return {
+        includes: [`#include <dt-bindings/remappr/sensor.h>`],
+        nodes,
+        kconfig: [],
     }
 }

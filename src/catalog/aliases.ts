@@ -28,11 +28,10 @@ export const CANONICAL_ALIASES: Record<CanonicalKeyId, CanonicalKeyId> = {
     'key.keyboard_right_gui': 'mod.rgui',
 
     // HID consumer (page 12) media keys → static MEDIA_TRANSPORT_ENTRIES
+    // Play (0xB0), Pause (0xB1) and Stop/Eject (0xCC) are usages of their
+    // own (HID Usage Tables 1.7 15.7), not Play/Pause (0xCD) or Stop (0xB7).
     'media.play_pause': 'media.transport.play_pause',
-    'media.pause': 'media.transport.play_pause',
-    'media.play': 'media.transport.play_pause',
     'media.stop': 'media.transport.stop',
-    'media.stop_eject': 'media.transport.stop',
     'media.fast_forward': 'media.transport.fast_forward',
     'media.rewind': 'media.transport.rewind',
     'media.scan_next_track': 'media.transport.next',

@@ -148,4 +148,33 @@ describe('checkCompleteness', () => {
         const r = checkCompleteness(make({}))
         expect(r.map((x) => x.firmware)).toEqual(['zmk'])
     })
+
+    it('checks Remappr as a Zephyr shield, not a QMK build', () => {
+        const remappr = by(
+            checkCompleteness(
+                make({
+                    firmware: ['remappr'],
+                    controller: { board: 'nice_nano_v2' },
+                    pins: { rows: ['D4'], cols: ['D5'] },
+                }),
+            ),
+            'remappr',
+        )
+        expect(remappr.ready).toBe(true)
+        expect(remappr.issues).toEqual([])
+    })
+
+    it('flags a Remappr design without a board, and features without pins', () => {
+        const remappr = by(
+            checkCompleteness(
+                make({ firmware: ['remappr'], features: ['lighting'] }),
+            ),
+            'remappr',
+        )
+        const text = remappr.issues.map((i) => i.message).join(' ')
+        expect(remappr.ready).toBe(false)
+        expect(text).toContain('controller board')
+        expect(text).toContain('LED data pin')
+        expect(text).not.toContain('QMK')
+    })
 })

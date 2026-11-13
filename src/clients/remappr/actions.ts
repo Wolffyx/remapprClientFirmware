@@ -19,6 +19,8 @@ export const REMAPPR_KIND_LAYER_TAP = 'remappr:lt'
 export const REMAPPR_KIND_MACRO = 'remappr:macro'
 export const REMAPPR_KIND_TAP_DANCE = 'remappr:td'
 export const REMAPPR_KIND_MOD_MORPH = 'remappr:mm'
+// &battery (system action 11): no params; the device shows its charge.
+export const REMAPPR_KIND_BATTERY_SHOW = 'remappr:battery'
 
 // Renderer (`HidUsageLabel`, `KeycodePickerGrid`) consumes ZMK-style encoded
 // usages: (page << 16) | id. Keep the adapter on the same encoding so the picker
@@ -149,6 +151,12 @@ export function buildRemapprActionTypes(maxLayers: number): ActionType[] {
             id: REMAPPR_KIND_MOD_MORPH,
             displayName: 'Mod Morph',
             description: 'Morphs under held modifiers (read-only)',
+            slots: [],
+        },
+        {
+            id: REMAPPR_KIND_BATTERY_SHOW,
+            displayName: 'Show Battery',
+            description: "Show the battery's charge on the device's lights or display",
             slots: [],
         },
     ]
@@ -287,6 +295,15 @@ function labelFor(
             secondary: name,
             bindingPrefix: prefix,
             description: `${primary}: ${name}`,
+        }
+    }
+    if (kind === REMAPPR_KIND_BATTERY_SHOW) {
+        return {
+            primary: 'Show Battery',
+            bindingPrefix: 'battery',
+            paramText: 'Batt',
+            paramParts: [{ icon: 'battery', text: 'Batt' }],
+            description: "Show the battery's charge",
         }
     }
     return { primary: '?' }

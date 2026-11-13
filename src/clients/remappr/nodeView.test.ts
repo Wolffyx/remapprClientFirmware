@@ -1,7 +1,7 @@
 // pattern-check: skip — test wiring: a fake RemapprRpc routes the relayed
 // discovery + config reads (§6.2 COMMON relay) to a real buildRemapprBlob fixture,
 // so the node-view path is exercised end-to-end (roster → relayed read → decode →
-// read-only service) without hardware. No GoF abstraction.
+// service) without hardware. No GoF abstraction.
 import { describe, expect, it } from 'vitest'
 
 import { parseKeymap } from '../../config'
@@ -10,6 +10,7 @@ import { buildRemapprBlob } from '../../config/compilers/remappr'
 import { buildNodesApi } from './nodeView'
 import {
     Cmd,
+    CommonVerb,
     DongleVerb,
     Namespace,
     NODE_RECORD_LEN,
@@ -65,6 +66,7 @@ function nodeRecordBytes(
     rssi: number,
     tail: number[],
     role = 0,
+    battery = 0xff,
 ): Uint8Array {
     const d = new Uint8Array(NODE_RECORD_LEN)
     const dv = new DataView(d.buffer)
@@ -75,7 +77,7 @@ function nodeRecordBytes(
     d[5] = hop
     d[6] = rssi & 0xff // i8
     for (let i = 0; i < 6; i++) d[7 + i] = tail[i] ?? 0
-    d[13] = 0xff // battery_soc: unknown
+    d[13] = battery // battery_soc, 0xff = unknown
     d[14] = role // §5 election-role low byte
     return d
 }
@@ -83,7 +85,7 @@ function nodeRecordBytes(
 const ROSTER = new Uint8Array([
     // flags 0x0b = online+bonded+master, role 0x01 = STANDALONE_MAIN
     ...nodeRecordBytes(0x0007, 2, 0x0b, 0, -40, [1, 2, 3, 4, 5, 6], 0x01),
-    ...nodeRecordBytes(0x0009, 4, 0x01, 1, -72, [9, 9, 9, 9, 9, 9]),
+    ...nodeRecordBytes(0x0009, 5, 0x01, 1, -72, [9, 9, 9, 9, 9, 9]),
 ])
 
 /* ── a fake RPC that answers the relayed reads ──────────────────────────── */
@@ -95,7 +97,26 @@ interface FakeRpc {
     closeCalls: number
 }
 
-function makeRpc(opts: { roster?: Uint8Array } = {}): FakeRpc {
+/** A 16-byte GET_LIMITS record with a config store (max_config_bytes 4096). */
+function limitsBytes(): Uint8Array {
+    const d = new Uint8Array(16)
+    const dv = new DataView(d.buffer)
+    dv.setUint16(0, 48, true) // max unsealed chunk
+    dv.setUint16(4, 64, true) // transport frame cap
+    dv.setUint16(6, 16, true) // blob align
+    dv.setUint16(8, 4096, true) // max config bytes
+    return d
+}
+
+function makeRpc(
+    opts: {
+        roster?: Uint8Array
+        personality?: number
+        namespaces?: number[]
+        /** The node reports a config store (GET_LIMITS). */
+        configStore?: boolean
+    } = {},
+): FakeRpc {
     const state: FakeRpc = {
         targets: [],
         closed: false,
@@ -123,6 +144,35 @@ function makeRpc(opts: { roster?: Uint8Array } = {}): FakeRpc {
             state.targets.push(target)
             if (namespace === Namespace.COMMON && verb === Cmd.GET_DEVICE_INFO) {
                 return ok(deviceInfoBytes())
+            }
+            if (
+                namespace === Namespace.COMMON &&
+                verb === CommonVerb.GET_PERSONALITY_MAP &&
+                opts.personality !== undefined
+            ) {
+                // role NODE, personality, proto 2, the namespaces (all verbs),
+                // hw caps 0.
+                const ns = opts.namespaces ?? []
+                return ok(
+                    new Uint8Array([
+                        0,
+                        opts.personality,
+                        2,
+                        ns.length,
+                        ...ns.flatMap((n) => [n, 0xff, 0xff]),
+                        0,
+                        0,
+                        0,
+                        0,
+                    ]),
+                )
+            }
+            if (
+                namespace === Namespace.COMMON &&
+                verb === CommonVerb.GET_LIMITS &&
+                opts.configStore
+            ) {
+                return ok(limitsBytes())
             }
             if (namespace === Namespace.COMMON && verb === Cmd.READ_CONFIG_CHUNK) {
                 const dv = new DataView(arg.buffer, arg.byteOffset, arg.byteLength)
@@ -168,8 +218,9 @@ describe('buildNodesApi.list', () => {
         expect(nodes).toHaveLength(2)
         expect(nodes[0]).toEqual({
             id: 0x0007,
-            label: 'Node 0x0007',
+            label: 'Mouse 0x0007',
             personality: 2,
+            kind: 'mouse',
             online: true,
             bonded: true,
             rssi: -40,
@@ -179,7 +230,8 @@ describe('buildNodesApi.list', () => {
         })
         expect(nodes[1]).toMatchObject({
             id: 0x0009,
-            label: 'Node 0x0009',
+            label: 'Joystick 0x0009',
+            kind: 'joystick', // personality 5
             online: true,
             bonded: false,
             rssi: -72,
@@ -187,6 +239,37 @@ describe('buildNodesApi.list', () => {
             isMaster: false,
             nodeRole: 0,
         })
+    })
+
+    it('carries the reported charge and the charging bit', async () => {
+        const roster = new Uint8Array([
+            ...nodeRecordBytes(0x0002, 2, 0x13, 0, -50, [], 0, 73), // +charging 0x10
+            ...nodeRecordBytes(0x0003, 2, 0x03, 0, -50, [], 0, 0),
+            ...nodeRecordBytes(0x0004, 2, 0x13, 0, -50, []), // unknown soc
+        ])
+        const { rpc } = makeRpc({ roster })
+        const nodes = await buildNodesApi(rpc).list()
+
+        expect(nodes.map((n) => n.battery)).toEqual([
+            { level: 73, charging: true },
+            { level: 0, charging: false },
+            undefined,
+        ])
+    })
+
+    it('names no kind for a personality that is never a node', async () => {
+        const roster = new Uint8Array([
+            ...nodeRecordBytes(0x0003, 0, 0x01, 0, 0, []), // config tool
+            ...nodeRecordBytes(0x0004, 4, 0x01, 0, 0, []), // dongle
+        ])
+        const { rpc } = makeRpc({ roster })
+        const nodes = await buildNodesApi(rpc).list()
+
+        expect(nodes.map((n) => n.kind)).toEqual([undefined, undefined])
+        expect(nodes.map((n) => n.label)).toEqual([
+            'Node 0x0003',
+            'Node 0x0004',
+        ])
     })
 
     it('returns [] for a directly-attached (non-dongle) device', async () => {
@@ -238,6 +321,13 @@ describe('buildNodesApi.open (read-only node view)', () => {
         await expect(svc.commit()).rejects.toThrow(/read-only/i)
     })
 
+    it('names a node a keyboard only when it says it is one', async () => {
+        const { rpc } = makeRpc({ roster: ROSTER, personality: 1 })
+        const svc = await buildNodesApi(rpc).open(0x0007)
+
+        expect(svc.deviceInfo.name).toBe('Remappr Keyboard 0x0007')
+    })
+
     it('disconnect leaves the shared dongle RPC intact', async () => {
         const fake = makeRpc({ roster: ROSTER })
         const svc = await buildNodesApi(fake.rpc).open(0x0007)
@@ -245,5 +335,52 @@ describe('buildNodesApi.open (read-only node view)', () => {
         await svc.disconnect()
         expect(fake.closeCalls).toBe(0) // never tears down the shared transport
         expect(fake.closed).toBe(false)
+    })
+})
+
+describe('buildNodesApi.open (mouse node)', () => {
+    it('opens a mouse as the mouse service, editable through the relay', async () => {
+        const fake = makeRpc({ roster: ROSTER, personality: 2, configStore: true })
+        const svc = await buildNodesApi(fake.rpc).open(0x0007)
+
+        expect(svc.kind).toBe('mouse')
+        expect(svc.deviceInfo.name).toBe('Remappr Mouse 0x0007')
+        expect(svc.capabilities.readOnly).toBeUndefined()
+        expect(svc.device?.personality).toBe('mouse')
+        expect(svc.device?.writable).toBe(true)
+        expect(svc.motion?.writable).toBe(true)
+        expect(svc.controls?.setBinding).toBeDefined()
+        expect(svc.device?.draft).toBeDefined()
+        // A change goes out (the fake answers ERR_CMD), addressed to the node.
+        await expect(svc.motion?.setDpi(800)).rejects.toThrow(/SET_DPI/)
+        expect(fake.targets.every((t) => t === 0x0007)).toBe(true)
+        await svc.disconnect()
+        expect(fake.closeCalls).toBe(0)
+    })
+})
+
+describe('buildNodesApi.open (joystick node)', () => {
+    it('opens a joystick as the joystick service, editable through the relay', async () => {
+        const fake = makeRpc({
+            roster: ROSTER,
+            personality: 5,
+            namespaces: [Namespace.JOYSTICK],
+            configStore: true,
+        })
+        const svc = await buildNodesApi(fake.rpc).open(0x0009)
+
+        expect(svc.kind).toBe('joystick')
+        expect(svc.deviceInfo.name).toBe('Remappr Joystick 0x0009')
+        expect(svc.capabilities.readOnly).toBeUndefined()
+        expect(svc.device?.personality).toBe('joystick')
+        expect(svc.device?.writable).toBe(true)
+        expect(svc.controls?.setBinding).toBeDefined()
+        expect(svc.device?.draft).toBeDefined()
+        expect(svc.joystick?.writable).toBe(true)
+        await expect(svc.joystick?.calibrate('begin')).rejects.toThrow(/CALIBRATE/)
+        await expect(svc.joystick?.getState()).rejects.toThrow(/GET_AXIS_STATE/)
+        expect(fake.targets.every((t) => t === 0x0009)).toBe(true)
+        await svc.disconnect()
+        expect(fake.closeCalls).toBe(0)
     })
 })

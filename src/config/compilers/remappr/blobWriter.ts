@@ -44,7 +44,89 @@ export const TableId = {
     ClusterSec: 22, // cluster PSK for §6 election/roster MAC (N5b)
     LinkProfile: 23, // latency/link profile + knob overrides (§8, N6)
     Autocorrect: 24, // on-device autocorrect dictionary (§5.2-E)
+    Dongle: 25, // 2.4 GHz dongle settings (device-config plan)
+    Radio: 26, // a node's own 2.4 GHz link settings (device-config plan)
+    // 27 is promised to TBL_UPDATE.
+    Joystick: 28, // joystick axes + hat (input-layout plan §4)
+    Sensor: 29, // sensor settings (sensor-settings plan §4)
+    Power: 30, // idle / sleep / off timeouts (sleep-wake design)
+    Display: 31, // what each display shows (display part design §3)
+    Slider: 32, // what each slider does, per layer (slider part design §4b)
 } as const
+
+/** enum remappr_personality (firmware include/remappr/role.h). */
+export const Personality = {
+    unknown: 0,
+    keyboard: 1,
+    mouse: 2,
+    recovery: 3,
+    dongle: 4,
+    joystick: 5,
+} as const
+
+/** TBL_DONGLE `set` bits (config_blob.h REMAPPR_DONGLE_SET_*): which fields the
+ *  config sets; a clear bit keeps the dongle's image default. */
+export const DongleSet = {
+    nkro: 1 << 0,
+    pairWindow: 1 << 1,
+    pairDoneReplay: 1 << 2,
+    failsafe: 1 << 3,
+    rosterLive: 1 << 4,
+    hidSubmit: 1 << 5,
+} as const
+export const DONGLE_FLAG_NKRO = 0x01
+export const DONGLE_TBL_LEN = 16
+
+/** One TBL_DONGLE payload. A field is only meaningful when its DongleSet bit
+ *  is in `set`; the builder writes 0 for the others. */
+export interface DongleTableRecord {
+    set: number
+    nkro: boolean
+    hidSubmitTimeoutMs: number
+    pairWindowMs: number
+    pairDoneReplayMs: number
+    failsafeMs: number
+    rosterLiveMs: number
+}
+
+/** TBL_RADIO `set` bits (radio_settings.h REMAPPR_RADIO_SET_*): which fields
+ *  the config sets; a clear bit keeps the node's build default. */
+export const RadioSet = {
+    autoPair: 1 << 0,
+    keepalive: 1 << 1,
+    inputRepeats: 1 << 2,
+    beaconLoss: 1 << 3,
+} as const
+export const RADIO_FLAG_AUTO_PAIR = 0x01
+export const RADIO_TBL_LEN = 8
+
+/** One TBL_RADIO payload. A field is only meaningful when its RadioSet bit is
+ *  in `set`; the builder writes 0 for the others. */
+export interface RadioTableRecord {
+    set: number
+    autoPair: boolean
+    inputRepeats: number
+    keepaliveMs: number
+    beaconLossMs: number
+}
+
+/** TBL_POWER `set` bits (power.h REMAPPR_POWER_SET_*): which timeouts the
+ *  config sets; a clear bit keeps the device's build default. */
+export const PowerSet = {
+    idle: 1 << 0,
+    sleep: 1 << 1,
+    off: 1 << 2,
+} as const
+export const POWER_TBL_LEN = 16
+
+/** One TBL_POWER payload. A timeout is only meaningful when its PowerSet bit
+ *  is in `set`; 0 = never. */
+export interface PowerTableRecord {
+    set: number
+    idleMs: number
+    sleepMs: number
+    offMs: number
+}
 
 /** TBL_PERSONALITY byte 1 role_flags (config_blob.h REMAPPR_CFG_ROLE_*). */
 export const CFG_ROLE_VALID = 0x01
@@ -177,10 +259,13 @@ export const SystemAction = {
     debug_toggle: 5,
     nkro_toggle: 6,
     swap_keys: 7,
-    // 8 = REMAPPR_SYS_UNPAIR (a P1 radio control verb, never a keymap behavior —
-    // the compiler does not emit it), so the absolute ext-power codes resume at 9.
+    // &unpair: forget the bonded dongle and pair afresh. Not a keymap behavior
+    // (the keymap compiler does not emit it); a mouse or joystick button may
+    // bind it (TBL_ACTION_BINDING SYSTEM).
+    unpair: 8,
     ext_power_on: 9,
     ext_power_off: 10,
+    battery_show: 11, // &battery: show the charge on the device's LEDs / display
 } as const
 
 // enum remappr_mouse_op (behavior_table.h) — carried in BH_MOUSE `tap`.
@@ -357,6 +442,20 @@ export interface EncoderRecord {
     pressIndex: number
 }
 
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_SLIDER layout
+/** One slider binding (slider part design §4b; TBL_SLIDER). `layer` gates it
+ *  (0xFF = any); up / down are behavior-table indices, 0xFFFF = none. */
+export interface SliderRecord {
+    slider: number
+    layer: number
+    kind: number
+    arg: number
+    min: number
+    max: number
+    upIndex: number
+    downIndex: number
+}
+
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_POSHOLD layout
 /** One positional hold-trigger list (§28): only an interrupting key whose
  *  position is listed counts toward the referenced tap-hold's hold decision. */
@@ -423,7 +522,89 @@ export interface MouseTable {
     autoLayerTimeoutMs: number
     flags: number
     accel: Array<{ speedIn: number; multX100: number }>
+    /** Version-2 tail (scroll divisor + button map); absent = a v1 table. */
+    v2?: { scrollDivisor: number; buttonMap: number[] }
+    /** Version-3 tail (DPI stages; needs v2); absent = no stages. */
+    v3?: { stages: number[]; stage: number }
 }
+
+/** TBL_MOUSE v2 flag bits (firmware mouse.h REMAPPR_MOUSE_FLAG_*). */
+export const MouseFlag = {
+    invertX: 1 << 0,
+    invertY: 1 << 1,
+    invertWheel: 1 << 2,
+    invertHwheel: 1 << 3,
+    swapXY: 1 << 4,
+} as const
+/** Button-map entry that drops the button. */
+export const MOUSE_BUTTON_OFF = 0xff
+export const MOUSE_TBL_HDR_LEN = 6
+export const MOUSE_TBL_V2_TAIL_LEN = 10
+export const MOUSE_TBL_V3_TAIL_LEN = 12
+export const MOUSE_DPI_STAGES_MAX = 5
+
+/** Action kind DEVICE and its codes (firmware action.h enum
+ *  remappr_device_action). */
+export const ACT_DEVICE = 7
+export const DeviceAction = {
+    dpiCycle: 1,
+    dpiUp: 2,
+    dpiDown: 3,
+    dpiSet: 4,
+    sniper: 5,
+} as const
+
+/** Action kind SYSTEM (firmware action.h): a system verb, `code` = enum
+ *  remappr_system_action (SystemAction). A mouse or joystick node does only
+ *  battery_show (remappr_personality_can_system). */
+export const ACT_SYSTEM = 4
+
+/** Gamepad action kinds (firmware action.h): a button 1..32, a hat direction
+ *  0..7, an axis 0..5 held at an i16 value (arg0). */
+export const ACT_NONE = 0
+export const ACT_GAMEPAD_BUTTON = 16
+export const ACT_GAMEPAD_HAT = 17
+export const ACT_GAMEPAD_AXIS = 18
+
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_JOYSTICK layout
+/** TBL_JOYSTICK (id 28): the hat ways (0 = 8) and one entry per analog input
+ *  it configures. v1 (8-byte entries) carries each input's report axis and
+ *  shaping; v2 (2-byte entries) the report axis only, the shaping then being
+ *  the AXES part's settings in TBL_PART (firmware docs/part-wire-v1.md §4). */
+export interface JoystickTable {
+    /** 1 when absent. */
+    version?: 1 | 2
+    hatWays: number
+    axes: Array<{
+        input: number
+        /** Report axis 0..5, or JOY_AXIS_OFF. */
+        out: number
+        flags: number
+        curve: number
+        inner: number
+        outer: number
+    }>
+}
+export const JOY_AXIS_OFF = 0xff
+export const JOY_FLAG_INVERT = 1 << 0
+/** TBL_JOYSTICK flags: with its partner input, one round stick. */
+export const JOY_FLAG_RADIAL = 1 << 1
+export const JOYSTICK_TBL_HDR_LEN = 2
+export const JOYSTICK_TBL_AXIS_LEN = 8
+export const JOYSTICK_TBL_AXIS_LEN_V2 = 2
+
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_PART layout
+/** One TBL_PART (id 29, was TBL_SENSOR) entry: a setting's value for one of
+ *  the device's parts, on channel `ch` (0 unless the setting is per channel).
+ *  `id` is the registry id (sensorRegistry.ts). */
+export interface SensorTableEntry {
+    sensor: number
+    id: number
+    ch?: number
+    value: number
+}
+export const SENSOR_TBL_HDR_LEN = 2
+export const SENSOR_TBL_ENTRY_LEN = 8
 
 /** One action-binding record (10 bytes): an additive per-position action that
  *  sits alongside the keymap binding. `kind`/`code`/`arg0`/`arg1` are passed
@@ -658,18 +839,93 @@ export class BlobBuilder {
     }
 
     // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_SLIDER (id 32, slider part design §4b): u16 count, then per entry
+     *  u8 slider, u8 layer, u8 kind, u8 arg, u8 min, u8 max, u16 up, u16 down. */
+    sliderTable(sliders: readonly SliderRecord[]): this {
+        this.tableBegin(TableId.Slider, 1)
+        this.w.u16(sliders.length)
+        for (const e of sliders) {
+            this.w.u8(e.slider)
+            this.w.u8(e.layer)
+            this.w.u8(e.kind)
+            this.w.u8(e.arg)
+            this.w.u8(e.min)
+            this.w.u8(e.max)
+            this.w.u16(e.upIndex)
+            this.w.u16(e.downIndex)
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
     /** TBL_MOUSE (id 8, §4b): u16 cpi, u16 auto_layer_timeout_ms,
-     *  u8 accel_point_count, u8 flags, then N × { u16 speed_in, u16 mult_x100 }
-     *  — matching firmware decode_mouse.c. */
+     *  u8 accel_point_count, u8 flags, then N × { u16 speed_in, u16 mult_x100 };
+     *  version 2 appends u8 scroll_divisor, u8 reserved, u8 button_map[8];
+     *  version 3 then u8 stage_count, u8 stage, u16 stages[5] — matching
+     *  firmware decode_mouse.c. Flags are written from version 2 (version 1
+     *  reserves the byte). */
     mouseTable(m: MouseTable): this {
-        this.tableBegin(TableId.Mouse, 1)
+        this.tableBegin(TableId.Mouse, m.v3 ? 3 : m.v2 ? 2 : 1)
         this.w.u16(m.cpi)
         this.w.u16(m.autoLayerTimeoutMs)
         this.w.u8(m.accel.length)
-        this.w.u8(m.flags)
+        this.w.u8(m.v2 ? m.flags : 0)
         for (const p of m.accel) {
             this.w.u16(p.speedIn)
             this.w.u16(p.multX100)
+        }
+        if (m.v2) {
+            this.w.u8(m.v2.scrollDivisor)
+            this.w.u8(0) // reserved
+            for (const to of m.v2.buttonMap) this.w.u8(to)
+        }
+        if (m.v2 && m.v3) {
+            this.w.u8(m.v3.stages.length)
+            this.w.u8(m.v3.stage)
+            for (let i = 0; i < MOUSE_DPI_STAGES_MAX; i++) {
+                this.w.u16(m.v3.stages[i] ?? 0)
+            }
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_JOYSTICK (id 28): u8 hat_ways, u8 axis_count, then per entry
+     *  u8 input, u8 out_axis and (v1 only) u8 flags, u8 curve, u8 inner_pct,
+     *  u8 outer_pct, u16 reserved — matching firmware decode_joystick.c. */
+    joystickTable(j: JoystickTable): this {
+        const version = j.version ?? 1
+        this.tableBegin(TableId.Joystick, version)
+        this.w.u8(j.hatWays)
+        this.w.u8(j.axes.length)
+        for (const a of j.axes) {
+            this.w.u8(a.input)
+            this.w.u8(a.out)
+            if (version === 2) continue
+            for (const v of [a.flags, a.curve, a.inner, a.outer]) this.w.u8(v)
+            this.w.u16(0) // reserved
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_PART (id 29): u16 count, then per entry u8 part, u8 id, u8 ch,
+     *  u8 reserved, i32 value — matching firmware decode_sensor.c. Version 1
+     *  while every channel is 0 (the same bytes firmware before the PART
+     *  namespace reads), else 2 (that firmware then keeps its defaults). */
+    sensorTable(entries: readonly SensorTableEntry[]): this {
+        const channels = entries.some((e) => (e.ch ?? 0) !== 0)
+        this.tableBegin(TableId.Sensor, channels ? 2 : 1)
+        this.w.u16(entries.length)
+        for (const e of entries) {
+            this.w.u8(e.sensor)
+            this.w.u8(e.id)
+            this.w.u8(e.ch ?? 0)
+            this.w.u8(0) // reserved
+            this.w.u32(e.value)
         }
         this.tableEnd()
         return this
@@ -900,6 +1156,69 @@ export class BlobBuilder {
             this.w.u8(o.knob)
             this.w.u32(o.value >>> 0)
         }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_DONGLE (id 25), 16 bytes: u16 set, u8 flags (bit0 NKRO), u8
+     *  hid_submit_timeout_ms, u32 pair_window_ms, u16 pair_done_replay_ms, u16
+     *  failsafe_ms, u16 roster_live_ms, u16 reserved. Mirrors the firmware
+     *  decoder lib/config_blob/decode_dongle.c. */
+    dongleTable(d: DongleTableRecord): this {
+        const on = (bit: number): boolean => (d.set & bit) !== 0
+        this.tableBegin(TableId.Dongle, 1)
+        this.w.u16(d.set)
+        this.w.u8(on(DongleSet.nkro) && d.nkro ? DONGLE_FLAG_NKRO : 0)
+        this.w.u8(on(DongleSet.hidSubmit) ? d.hidSubmitTimeoutMs : 0)
+        this.w.u32(on(DongleSet.pairWindow) ? d.pairWindowMs >>> 0 : 0)
+        this.w.u16(on(DongleSet.pairDoneReplay) ? d.pairDoneReplayMs : 0)
+        this.w.u16(on(DongleSet.failsafe) ? d.failsafeMs : 0)
+        this.w.u16(on(DongleSet.rosterLive) ? d.rosterLiveMs : 0)
+        this.w.u16(0) // reserved
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_RADIO (id 26), 8 bytes: u16 set, u8 flags (bit0 auto-pair), u8
+     *  input_repeats, u16 keepalive_ms, u16 beacon_loss_ms. The same 8 bytes the
+     *  main MCU forwards to a radio coprocessor. Mirrors the firmware
+     *  include/remappr/radio_settings.h. */
+    radioTable(r: RadioTableRecord): this {
+        const on = (bit: number): boolean => (r.set & bit) !== 0
+        this.tableBegin(TableId.Radio, 1)
+        this.w.u16(r.set)
+        this.w.u8(on(RadioSet.autoPair) && r.autoPair ? RADIO_FLAG_AUTO_PAIR : 0)
+        this.w.u8(on(RadioSet.inputRepeats) ? r.inputRepeats : 0)
+        this.w.u16(on(RadioSet.keepalive) ? r.keepaliveMs : 0)
+        this.w.u16(on(RadioSet.beaconLoss) ? r.beaconLossMs : 0)
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_POWER (id 30), 16 bytes: u16 set, u8 flags (0), u8 reserved, u32
+     *  idle_ms, u32 sleep_ms, u32 off_ms (0 = never). Mirrors the firmware
+     *  include/remappr/power.h. */
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_DISPLAY (id 31): a payload built by compilers/remappr/display.ts. */
+    displayTable(payload: Uint8Array): this {
+        this.tableBegin(TableId.Display, 1)
+        for (const b of payload) this.w.u8(b)
+        this.tableEnd()
+        return this
+    }
+
+    powerTable(r: PowerTableRecord): this {
+        const on = (bit: number): boolean => (r.set & bit) !== 0
+        this.tableBegin(TableId.Power, 1)
+        this.w.u16(r.set)
+        this.w.u8(0)
+        this.w.u8(0)
+        this.w.u32(on(PowerSet.idle) ? r.idleMs : 0)
+        this.w.u32(on(PowerSet.sleep) ? r.sleepMs : 0)
+        this.w.u32(on(PowerSet.off) ? r.offMs : 0)
         this.tableEnd()
         return this
     }

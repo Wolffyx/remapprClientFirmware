@@ -4,6 +4,11 @@ import {
     resolveQmkPin,
     gpioSpec,
     hasZmkPinMap,
+    boardPinLabels,
+    boardPinForms,
+    samePin,
+    boardFootprint,
+    nrfPinOf,
 } from '../pinmaps'
 import { getCompiler } from '../compiler'
 import { buildProjectBundle } from '../bundle'
@@ -31,6 +36,15 @@ describe('pin resolver', () => {
         expect(resolveZmkPin(undefined, 'GP1')).toBeNull()
     })
 
+    it('finds the nRF pin under a header label (board connector maps)', () => {
+        expect(nrfPinOf('nice_nano_v2', 'D15')).toEqual({ port: 1, pin: 13 })
+        expect(nrfPinOf('nice_nano_v2', 'P6')).toEqual({ port: 1, pin: 0 })
+        expect(nrfPinOf('seeeduino_xiao_ble', 'D2')).toEqual({ port: 0, pin: 28 })
+        expect(nrfPinOf('nrf52840dk_nrf52840', 'P0.13')).toEqual({ port: 0, pin: 13 })
+        expect(nrfPinOf('sparkfun_pro_micro_rp2040', 'D15')).toBeNull()
+        expect(nrfPinOf(undefined, 'D15')).toBeNull()
+    })
+
     it('composes role-specific GPIO flags', () => {
         expect(gpioSpec('&gpio0 4', 'input')).toBe(
             '&gpio0 4 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)',
@@ -51,6 +65,45 @@ describe('pin resolver', () => {
         expect(hasZmkPinMap('nice_nano_v2')).toBe(true)
         expect(hasZmkPinMap('mystery_board')).toBe(false)
         expect(hasZmkPinMap(undefined)).toBe(false)
+    })
+})
+
+describe('board pin lists', () => {
+    it('refuses Pro Micro pins the header does not break out', () => {
+        expect(resolveZmkPin('nice_nano_v2', 'D10')).toBe('&pro_micro 10')
+        expect(resolveZmkPin('nice_nano_v2', 'D11')).toBeNull()
+        expect(resolveZmkPin('nice_nano_v2', '17')).toBeNull()
+    })
+
+    it('draws known headers with real pins and named power pads', () => {
+        const fp = boardFootprint('nice_nano_v2')!
+        expect(fp.left).toHaveLength(12)
+        const pins = [...fp.left, ...fp.right].filter((p) =>
+            resolveZmkPin('nice_nano_v2', p),
+        )
+        expect(pins).toHaveLength(18) // every header pin, once
+        expect(boardFootprint('rpi_pico')!.left).toHaveLength(20)
+        expect(boardFootprint('rp2040')).toBeNull()
+    })
+
+    it('lists each pin once, lettered spelling first', () => {
+        const pins = boardPinLabels('nice_nano_v2')!
+        expect(pins).toHaveLength(18) // the header has no 11, 12, 13, 17
+        expect(pins[0]).toBe('P0')
+        expect(boardPinLabels('rp2040')![29]).toBe('GP29')
+        expect(boardPinLabels('mystery')).toBeNull()
+    })
+
+    it('describes the accepted spellings as ranges', () => {
+        expect(boardPinForms('nice_nano_v2')).toBe('P0–P21, D0–D21 or 0–21')
+        expect(boardPinForms('rp2040')).toBe('GP0–GP29 or 0–29')
+        expect(boardPinForms(undefined)).toBeNull()
+    })
+
+    it('knows two spellings of one pin', () => {
+        expect(samePin('nice_nano_v2', 'D4', 'p4')).toBe(true)
+        expect(samePin('nice_nano_v2', 'D4', 'D5')).toBe(false)
+        expect(samePin('mystery', 'D4', 'D4')).toBe(false)
     })
 })
 
@@ -94,6 +147,34 @@ describe('ZMK synth kscan from pins', () => {
         expect(out).toContain('&gpio0 6 GPIO_ACTIVE_HIGH')
         expect(out).toContain('&gpio0 7 GPIO_ACTIVE_HIGH')
         expect(out).toContain('diode-direction = "col2row"')
+    })
+
+    // #198: the builder's Matrix section writes keyboard.matrix.
+    const withMatrix = (matrix: object, extraKeys = ''): string => {
+        const cfg = JSON.parse(matrixConfig('rp2040'))
+        cfg.keyboard.matrix = { rows: 1, cols: 2, ...matrix }
+        if (extraKeys) cfg.keyboard.keys = JSON.parse(extraKeys)
+        return JSON.stringify(cfg)
+    }
+
+    it('follows the diode direction picked in the builder', () => {
+        const out = overlayText(withMatrix({ diodeDirection: 'row2col' }))
+        expect(out).toContain('diode-direction = "row2col"')
+        // row2col flips the pin roles: rows drive, columns are read
+        expect(out).toContain('&gpio0 5 GPIO_ACTIVE_HIGH')
+        expect(out).toContain('&gpio0 6 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)')
+        expect(out).not.toContain('assumed')
+    })
+
+    it('emits a direct kscan when the builder picks direct scan mode', () => {
+        const out = overlayText(
+            withMatrix(
+                { mode: 'direct' },
+                '[{"x":0,"y":0,"pin":"GP2"},{"x":1,"y":0,"pin":"GP3"}]',
+            ),
+        )
+        expect(out).toContain('zmk,kscan-gpio-direct')
+        expect(out).not.toContain('zmk,kscan-gpio-matrix')
     })
 
     it('comments unresolved labels and warns instead of breaking devicetree', () => {

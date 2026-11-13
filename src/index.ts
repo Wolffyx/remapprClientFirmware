@@ -10,6 +10,7 @@ export type {
     DynamicEntryCounts,
     EncoderAction,
     EncoderSlot,
+    SliderSlot,
     ExportedFile,
     KeyAction,
     HoldTapLabelData,
@@ -32,22 +33,37 @@ export type {
 
 export { isUnlocked } from './types'
 
+// Device-controls vocabulary (mice, gamepads, flight sticks, generic HID): the
+// model a ControlsApi serves. Also importable as `@firmware/devices`.
+export type * from './devices/types'
+
 export type {
     Capabilities,
     ClusterApi,
     ClusterDiag,
     ClusterPeer,
+    DeviceConfigApi,
+    DeviceConfigDraft,
+    DeviceConfigSnapshot,
     DynamicEntriesApi,
     ConnectNotice,
+    ControlsApi,
+    ControlsLayoutApi,
     EncoderApi,
     HsvColor,
     IndicatorConfig,
     KeyboardService,
     MacroApi,
+    MotionConfig,
+    MouseMotionApi,
     NodesApi,
     NodeView,
     RgbApi,
     RoleEvent,
+    SensorApi,
+    SensorProcedureStatus,
+    SensorProcedureStep,
+    SensorReading,
     WirelessApi,
     WirelessLpm,
     WirelessStatus,
@@ -121,3 +137,24 @@ export {
     MOCK_TRANSPORT_LABEL,
 } from './clients/mock/adapter'
 export type { MockServiceOptions } from './clients/mock/service'
+// Try Demo's device list (keyboards, macro pad, mouse, gamepad, flight stick,
+// generic gamepad): the app lists these and connects by id.
+export {
+    connectDemoDevice,
+    connectMockDeviceWithModel,
+    DEMO_DEVICES,
+    demoDeviceModel,
+    demoDevicePreview,
+    type DemoDevice,
+    type DemoDeviceId,
+    type DemoDevicePreview,
+} from './clients/mock/devices/demoDevices'
+export {
+    type IdentityApi,
+    type IdentitySource,
+    activeLayoutSource,
+    createIdentity,
+    layoutIdentifier,
+    nameIdentifier,
+    usbIdentifier,
+} from './identity'

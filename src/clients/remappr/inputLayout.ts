@@ -1,0 +1,375 @@
+// Pattern check: Dispatch Map (Tier 0) — applied — class/shape/form → control kind, shape, name and shell are tables keyed by the wire enum, not branches.
+//
+// GET_INPUT_LAYOUT (INPUT namespace, firmware docs/input-layout-joystick-plan.md
+// §2): where every input of a Remappr device sits, read from the device and
+// turned into the neutral DeviceModel, so the device editor draws it as built
+// instead of a generic arrangement.
+import { FORM_KIND } from '../../devices/defaultLayout'
+import {
+    STOCK_FLIGHTSTICK,
+    STOCK_GAMEPAD,
+    STOCK_MOUSE,
+} from '../../devices/stockLayouts'
+import type {
+    ControlKind,
+    ControlShape,
+    DeviceControl,
+    DeviceForm,
+    DeviceModel,
+    DeviceShell,
+} from '../../devices/types'
+import type {
+    EncoderSlot,
+    PhysicalLayout,
+    PhysicalLayoutPart,
+    SliderSlot,
+} from '../../types'
+import {
+    INPUT_NONE,
+    InputClass,
+    InputVerb,
+    Namespace,
+    parseInputLayoutPage,
+    Status,
+    statusName,
+    type InputLayoutEntry,
+    type InputLayoutPage,
+} from './protocol'
+import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
+
+/** A device's whole input layout, every page read. */
+export interface InputLayout {
+    /** enum remappr_input_form; 0 = from the personality. */
+    readonly form: number
+    readonly entries: readonly InputLayoutEntry[]
+}
+
+/** The device serves GET_INPUT_LAYOUT: its personality map lists INPUT. Older
+ *  firmware never does, so there is no "absent list = served" fallback. */
+export function servesInputLayout(
+    namespaces: readonly { namespace: number }[] | undefined,
+): boolean {
+    return !!namespaces?.some((n) => n.namespace === Namespace.INPUT)
+}
+
+const u16le = (v: number): Uint8Array =>
+    Uint8Array.of(v & 0xff, (v >> 8) & 0xff)
+
+/** One page; a relayed page that lost a fragment is re-read (idempotent). */
+async function readPage(
+    rpc: RemapprRpc,
+    start: number,
+    targetNode: number,
+): Promise<InputLayoutPage> {
+    const attempts = targetNode ? RELAY_READ_RETRIES + 1 : 1
+    let lastError: unknown
+    for (let i = 0; i < attempts; i++) {
+        const reply = await rpc.callUniversalPlain(
+            Namespace.INPUT,
+            InputVerb.GET_INPUT_LAYOUT,
+            u16le(start),
+            { targetNode, retries: targetNode ? RELAY_READ_RETRIES : 0 },
+        )
+        if (reply.status !== Status.OK)
+            throw new Error(`GET_INPUT_LAYOUT → ${statusName(reply.status)}`)
+        try {
+            return parseInputLayoutPage(reply.data)
+        } catch (err) {
+            lastError = err // truncated: a fragment was lost on the relay
+        }
+    }
+    throw lastError
+}
+
+/** The device's layout when it serves one; undefined when it does not, or when
+ *  the read fails — the caller then draws its generic layout. A missing layout
+ *  is not a reason to refuse the connection. */
+export async function readInputLayout(
+    rpc: RemapprRpc,
+    namespaces: readonly { namespace: number }[] | undefined,
+    targetNode = 0,
+): Promise<InputLayout | undefined> {
+    if (!servesInputLayout(namespaces)) return undefined
+    try {
+        return await fetchInputLayout(rpc, targetNode)
+    } catch {
+        return undefined // drawn generic; the device still connects
+    }
+}
+
+/** Read every page of the device's input layout. `targetNode` addresses a
+ *  node behind the dongle. Throws when the device does not serve it. */
+export async function fetchInputLayout(
+    rpc: RemapprRpc,
+    targetNode = 0,
+): Promise<InputLayout> {
+    const entries: InputLayoutEntry[] = []
+    let form = 0
+    let start = 0
+    for (let guard = 0; guard < 512; guard++) {
+        const page = await readPage(rpc, start, targetNode)
+        form = page.form
+        entries.push(...page.entries)
+        start = page.start + page.entries.length
+        if (page.entries.length === 0 || start >= page.total) break
+    }
+    return { form, entries }
+}
+
+// ---------------------------------------------------------------------------
+// Layout → DeviceModel
+// ---------------------------------------------------------------------------
+
+/** Per class (enum remappr_input_class, by value): the control kind, the shape
+ *  when the device leaves it to the class, and the generic name. */
+const CLASSES: readonly {
+    kind: ControlKind
+    shape: ControlShape
+    name: string
+}[] = [
+    { kind: 'button', shape: 'key', name: 'Key' },
+    { kind: 'button', shape: 'round', name: 'Button' },
+    { kind: 'encoder', shape: 'knob', name: 'Encoder' },
+    { kind: 'wheel', shape: 'wheel', name: 'Wheel' },
+    { kind: 'sensor', shape: 'sensor', name: 'Sensor' },
+    { kind: 'stick', shape: 'stick', name: 'Stick' },
+    { kind: 'trigger', shape: 'trigger', name: 'Trigger' },
+    { kind: 'hat', shape: 'hat', name: 'Hat' },
+    { kind: 'axis', shape: 'ring', name: 'Axis' },
+    { kind: 'axis', shape: 'pill', name: 'Slider' },
+]
+
+/** enum remappr_input_shape by value; 0 (auto) = the class default. */
+const SHAPES: readonly (ControlShape | null)[] = [
+    null,
+    'key',
+    'round',
+    'pill',
+    'stick',
+    'dpad',
+    'hat',
+    'trigger',
+    'triggerSide',
+    'wheel',
+    'ring',
+    'knob',
+    'sensor',
+    'mouseL',
+    'mouseR',
+    'screen',
+]
+
+/** enum remappr_input_form by value; 0 = from the personality. */
+const FORMS: readonly (DeviceForm | null)[] = [
+    null,
+    'keyboard',
+    'macropad',
+    'mouse',
+    'gamepad',
+    'flightstick',
+]
+
+const PLATE: DeviceShell = { type: 'plate', pad: 0.3 }
+const SHELLS: Readonly<Record<DeviceForm, DeviceShell>> = {
+    keyboard: PLATE,
+    macropad: PLATE,
+    mouse: STOCK_MOUSE.shell,
+    gamepad: STOCK_GAMEPAD.shell,
+    flightstick: STOCK_FLIGHTSTICK.shell,
+}
+
+/** A personality's own id and name for an input, so controls keep the ids its
+ *  bindings already use. */
+export interface InputNaming {
+    readonly id: string
+    readonly name: string
+    readonly glyph?: string
+}
+
+export interface InputModelOptions {
+    readonly name: string
+    /** The form when the device leaves it to the personality (form 0). */
+    readonly fallbackForm: DeviceForm
+    /** Ids/names for inputs the personality knows; undefined = generic. */
+    readonly naming?: (entry: InputLayoutEntry) => InputNaming | undefined
+}
+
+const U = 100 // centi-units per key unit
+const round = (v: number): number => Math.round(v * 1e4) / 1e4
+
+/** Key-unit geometry. The device rotates about a pivot; a control rotates
+ *  about its own centre, so the centre moves to where the pivot turn puts it. */
+function placement(
+    e: InputLayoutEntry,
+): Pick<DeviceControl, 'x' | 'y' | 'w' | 'h' | 'r'> {
+    const w = (e.w || U) / U
+    const h = (e.h || U) / U
+    if (e.rot === 0) return { x: e.x / U, y: e.y / U, w, h }
+    const deg = e.rot / 100
+    const a = (deg * Math.PI) / 180
+    const px = e.rotx / U
+    const py = e.roty / U
+    const dx = e.x / U + w / 2 - px
+    const dy = e.y / U + h / 2 - py
+    // Clockwise on a y-down canvas.
+    const cx = px + dx * Math.cos(a) - dy * Math.sin(a)
+    const cy = py + dx * Math.sin(a) + dy * Math.cos(a)
+    return { x: round(cx - w / 2), y: round(cy - h / 2), w, h, r: deg }
+}
+
+/** The generic id: the device's stable input id, else its position. */
+function genericId(e: InputLayoutEntry, index: number): string {
+    if (e.inputId !== INPUT_NONE) return `in:${e.inputId}`
+    if (e.position !== INPUT_NONE) return `pos:${e.position}`
+    return `idx:${index}`
+}
+
+/** The device's input layout as a DeviceModel (not defaulted). Inputs of a
+ *  class this client does not know are left out. */
+export function inputLayoutModel(
+    layout: InputLayout,
+    opts: InputModelOptions,
+): DeviceModel {
+    const form = FORMS[layout.form] ?? opts.fallbackForm
+    const known = layout.entries.filter((e) => CLASSES[e.cls])
+    const perClass = new Map<number, number>()
+    for (const e of known) perClass.set(e.cls, (perClass.get(e.cls) ?? 0) + 1)
+
+    const seen = new Map<number, number>()
+    const ids = new Set<string>()
+    const controls = known.map((e, i): DeviceControl => {
+        const cls = CLASSES[e.cls]!
+        const ordinal = seen.get(e.cls) ?? 0
+        seen.set(e.cls, ordinal + 1)
+        const own = opts.naming?.(e)
+        const named = own && !ids.has(own.id) ? own : undefined
+        const id = named?.id ?? genericId(e, i)
+        ids.add(id)
+        const single = (perClass.get(e.cls) ?? 0) === 1
+        return {
+            id,
+            name:
+                named?.name ??
+                (single ? cls.name : `${cls.name} ${ordinal + 1}`),
+            kind: cls.kind,
+            shape: SHAPES[e.shape] ?? cls.shape,
+            ...placement(e),
+            ...(named?.glyph ? { glyph: named.glyph } : {}),
+        }
+    })
+    return {
+        kind: FORM_KIND[form],
+        form,
+        name: opts.name,
+        shell: SHELLS[form],
+        controls,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Layout → a keyboard's knobs and parts
+// ---------------------------------------------------------------------------
+
+/** How a keyboard draws an input that is not one of its keys, by class: the
+ *  device classes' shape and name, plus a screen (drawn, never bound). */
+const PART_LOOKS: readonly (
+    { shape: ControlShape; name: string } | undefined
+)[] = [
+    ...CLASSES.map(({ shape, name }) => ({ shape, name })),
+    { shape: 'screen', name: 'Screen' },
+]
+
+/** Entries of one class in the order the device counts them: by the ordinal
+ *  in their input id (a slider's part rank: the index its config uses) when
+ *  every one has a distinct ordinal below their count, else as listed. */
+function byOrdinal<T extends { inputId: number }>(entries: readonly T[]): T[] {
+    const ordinals = entries.map((e) =>
+        e.inputId === INPUT_NONE ? -1 : e.inputId & 0xff,
+    )
+    const distinct = new Set(ordinals)
+    const usable =
+        distinct.size === entries.length &&
+        ordinals.every((o) => o >= 0 && o < entries.length)
+    if (!usable) return [...entries]
+    return entries
+        .map((e, i) => ({ e, o: ordinals[i]! }))
+        .sort((a, b) => a.o - b.o)
+        .map(({ e }) => e)
+}
+
+/** A keyboard's knobs, sliders and parts from its input layout. Its keys
+ *  (class KEY, or any input with a binding position) come from the key layout
+ *  and are left out; an encoder keeps its position as `key`, the key that is
+ *  its push. Sliders are slots in the order the device counts its sliders in
+ *  (the slider index its config uses): their input ids' ordinals. */
+export function keyboardInputs(
+    layout: InputLayout,
+): Required<Pick<PhysicalLayout, 'encoders' | 'sliders' | 'parts'>> {
+    const encoders: EncoderSlot[] = layout.entries
+        .filter((e) => e.cls === InputClass.ENCODER)
+        .map((e) => ({
+            x: e.x,
+            y: e.y,
+            ...(e.position !== INPUT_NONE ? { key: e.position } : {}),
+        }))
+    const sliders: SliderSlot[] = byOrdinal(
+        layout.entries.filter((e) => e.cls === InputClass.SLIDER),
+    ).map((e) => {
+            const at = placement(e)
+            return {
+                x: Math.round(at.x * U),
+                y: Math.round(at.y * U),
+                w: Math.round(at.w * U),
+                h: Math.round(at.h * U),
+                ...(at.r ? { r: Math.round(at.r * U) } : {}),
+                ...(e.position !== INPUT_NONE ? { key: e.position } : {}),
+            }
+        })
+    const drawn = layout.entries.filter(
+        (e) =>
+            e.cls !== InputClass.KEY &&
+            e.cls !== InputClass.ENCODER &&
+            e.cls !== InputClass.SLIDER &&
+            e.position === INPUT_NONE &&
+            PART_LOOKS[e.cls] !== undefined,
+    )
+    const perClass = new Map<number, number>()
+    for (const e of drawn) perClass.set(e.cls, (perClass.get(e.cls) ?? 0) + 1)
+    const seen = new Map<number, number>()
+    const parts = drawn.map((e, i): PhysicalLayoutPart => {
+        const look = PART_LOOKS[e.cls]!
+        const ordinal = seen.get(e.cls) ?? 0
+        seen.set(e.cls, ordinal + 1)
+        const at = placement(e)
+        return {
+            id: genericId(e, i),
+            name:
+                (perClass.get(e.cls) ?? 0) === 1
+                    ? look.name
+                    : `${look.name} ${ordinal + 1}`,
+            shape: SHAPES[e.shape] ?? look.shape,
+            x: Math.round(at.x * U),
+            y: Math.round(at.y * U),
+            w: Math.round(at.w * U),
+            h: Math.round(at.h * U),
+            ...(at.r ? { r: Math.round(at.r * U) } : {}),
+        }
+    })
+    return { encoders, sliders, parts }
+}
+
+/** `layout` with the knobs and parts its device declares; unchanged without
+ *  an input layout, or when the device declares none. */
+export function withInputLayout(
+    layout: PhysicalLayout,
+    input: InputLayout | undefined,
+): PhysicalLayout {
+    if (!input) return layout
+    const { encoders, sliders, parts } = keyboardInputs(input)
+    return {
+        ...layout,
+        ...(encoders.length ? { encoders } : {}),
+        ...(sliders.length ? { sliders } : {}),
+        ...(parts.length ? { parts } : {}),
+    }
+}

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { CanonConditionalLayer } from '../types'
 import type { CanonHoldTapDef, CanonModMorph } from '../types'
 import { LimitsFeature } from '../../clients/remappr/protocol'
+import type { SensorInfo } from '../../devices/types'
 
 import {
     ALL_MODIFIERS,
@@ -21,6 +22,8 @@ import {
     featureSupported,
     fieldSupported,
     groupedTimingFields,
+    partTimingFields,
+    timingFieldsFor,
     holdTapPatch,
     modMorphPatch,
     modifierLabel,
@@ -75,7 +78,7 @@ describe('timing defaults metadata', () => {
         // enforces coverage, so a count check is enough at runtime.
         expect(TIMING_FIELDS).toHaveLength(12)
         const groups = groupedTimingFields().map(([g]) => g)
-        expect(groups).toContain('Engine timing (§7.4.1)')
+        expect(groups).toContain('Engine timing')
     })
 
     it('fieldSupported: core field always; featured follows the bitmask', () => {
@@ -337,7 +340,7 @@ describe('link/latency profile helpers (§8 N6)', () => {
     it('rejects an out-of-range override (static table)', () => {
         expect(
             linkProfileError({ profile: 'balanced', overrides: [{ knob: 0, value: 50 }] }),
-        ).toMatch(/USART baud/)
+        ).toMatch(/Wire speed/)
     })
 
     it('rejects a value outside the live GET_LINK_LIMITS range', () => {
@@ -347,18 +350,18 @@ describe('link/latency profile helpers (§8 N6)', () => {
                 { profile: 'balanced', overrides: [{ knob: 0, value: 1000000 }] },
                 [{ knob: 0, min: 200000, max: 900000 }],
             ),
-        ).toMatch(/USART baud/)
+        ).toMatch(/Wire speed/)
     })
 
     it('enforces the two cross-knob dependency rules', () => {
         // candidacy (40) < heartbeat (100) → depend error.
         expect(
             linkProfileError({ profile: 'balanced', overrides: [{ knob: 4, value: 40 }] }),
-        ).toMatch(/Candidacy/)
+        ).toMatch(/Settle time/)
         // handover (500) < demotion (1000) → depend error.
         expect(
             linkProfileError({ profile: 'balanced', overrides: [{ knob: 6, value: 500 }] }),
-        ).toMatch(/Handover/)
+        ).toMatch(/between handovers/)
     })
 })
 
@@ -408,5 +411,57 @@ describe('autocorrect dictionary editor helpers', () => {
         expect(once.length).toBeGreaterThan(mine.length)
         expect(twice).toEqual(once)
         expect(autocorrectError(once)).toBeNull()
+    })
+})
+
+describe('timing fields a part holds', () => {
+    const matrix = (personality = false): SensorInfo => ({
+        index: 1,
+        cls: 'matrix',
+        model: 'Key matrix',
+        channels: 1,
+        io: [],
+        settings: [
+            {
+                name: 'debouncePressMs',
+                label: 'Press debounce',
+                type: 'int',
+                unit: 'ms',
+                min: 1,
+                max: 65535,
+                step: 1,
+                advanced: true,
+                default: 5,
+                value: 5,
+                personality,
+                help: 'How long a key must read pressed.',
+            },
+        ],
+        procedures: [],
+        metrics: [],
+    })
+
+    it('describes a part-held field from the part, after the plain ones', () => {
+        const held = partTimingFields([matrix()])
+        expect([...held.keys()]).toEqual(['matrixPressDebounceMs'])
+        const f = held.get('matrixPressDebounceMs')!
+        expect(f).toMatchObject({
+            label: 'Press debounce',
+            group: 'Key matrix',
+            min: 0,
+            max: 65535,
+            advanced: true,
+        })
+        expect(f.description).toContain('0 keeps')
+        const all = timingFieldsFor(held)
+        expect(all).toHaveLength(TIMING_FIELDS.length)
+        expect(all[all.length - 1]).toBe(f)
+        const groups = groupedTimingFields(all).map(([g]) => g)
+        expect(groups[groups.length - 1]).toBe('Key matrix')
+    })
+
+    it('leaves a field the personality drives to the plain field', () => {
+        expect(partTimingFields([matrix(true)]).size).toBe(0)
+        expect(timingFieldsFor(new Map())).toEqual([...TIMING_FIELDS])
     })
 })

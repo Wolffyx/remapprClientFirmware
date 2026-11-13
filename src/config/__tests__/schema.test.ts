@@ -342,6 +342,7 @@ describe('builder metadata fields', () => {
                     colorOrder: 'GRB',
                 },
                 extPowerCtrl: { controlGpio: 'P0.14', activeLow: true },
+                battery: { pin: 'D21' },
                 studioAcm: true,
             },
             layouts: [{ id: 'left', name: 'Left' }],
@@ -381,13 +382,19 @@ describe('builder metadata fields', () => {
         })
         expect(km.keyboard.hardware?.ws2812?.chainLength).toBe(10)
         expect(km.keyboard.hardware?.extPowerCtrl?.controlGpio).toBe('P0.14')
+        expect(km.keyboard.hardware?.battery).toEqual({ pin: 'D21' })
         expect(km.keyboard.hardware?.studioAcm).toBe(true)
+        // The older per-key turns move into a slot linked to the knob key;
+        // the press becomes the key's own binding.
         const base = km.layers[0]
-        expect(base.encoderBindings?.[0]).toMatchObject({
-            cw: { type: 'key_press' },
-            ccw: { type: 'key_press' },
-            press: { type: 'key_press' },
+        expect(km.keyboard.encoders).toEqual([
+            { x: km.keyboard.keys[0].x, y: km.keyboard.keys[0].y, key: 0 },
+        ])
+        expect(base.encoders?.[0]).toEqual({
+            cw: expect.objectContaining({ type: 'key_press' }),
+            ccw: expect.objectContaining({ type: 'key_press' }),
         })
+        expect(base.bindings[0]).toMatchObject({ type: 'key_press' })
     })
 
     it('round-trips the builder fields losslessly', () => {
@@ -413,7 +420,7 @@ describe('builder metadata fields', () => {
             false,
         )
         expect(km.keyboard.keys.some((k) => k.pin !== undefined)).toBe(false)
-        expect(km.layers.some((l) => l.encoderBindings !== undefined)).toBe(
+        expect(km.keyboard.encoders?.some((e) => e.key !== undefined)).toBe(
             false,
         )
     })
@@ -448,7 +455,8 @@ describe('slider value-maps', () => {
                 0: { map: 'volume', min: 0, max: 100 },
             }),
         )
-        expect(km.layers[0].sliderBindings?.[0]).toMatchObject({
+        expect(km.keyboard.sliders).toEqual([{ x: 0, y: 0, key: 0 }])
+        expect(km.layers[0].sliders?.[0]).toMatchObject({
             map: 'volume',
             min: 0,
             max: 100,
@@ -463,7 +471,7 @@ describe('slider value-maps', () => {
         const twice = parseKeymap(text)
         expect(stripHints(twice)).toEqual(stripHints(once))
         expect(serializeKeymap(twice)).toEqual(text)
-        expect(twice.layers[0].sliderBindings?.[0].action).toMatchObject({
+        expect(twice.layers[0].sliders?.[0]?.action).toMatchObject({
             type: 'key_press',
         })
     })
@@ -480,11 +488,26 @@ describe('slider value-maps', () => {
         expect(res.success).toBe(false)
     })
 
-    it('omits sliderBindings when absent', () => {
+    it('omits sliders when absent', () => {
         const km = parseKeymap(serializeKeymap(parseKeymap(seed)))
-        expect(km.layers.some((l) => l.sliderBindings !== undefined)).toBe(
-            false,
+        expect(km.layers.some((l) => l.sliders !== undefined)).toBe(false)
+        expect(km.keyboard.sliders).toBeUndefined()
+    })
+
+    it('rejects a layer with more slider bindings than slots', () => {
+        const res = safeParseSurface(
+            JSON.stringify({
+                ...JSON.parse(sliderConfig({})),
+                layers: [
+                    {
+                        name: 'base',
+                        bindings: ['Q', 'W'],
+                        sliders: [{ map: 'volume' }],
+                    },
+                ],
+            }),
         )
+        expect(res.success).toBe(false)
     })
 })
 

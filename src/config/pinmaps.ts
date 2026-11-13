@@ -15,13 +15,13 @@
 
 import type { GpioSpec } from './types'
 
-/** Build "P0".."Pn", "D0".."Dn" and bare "0".."n" aliases for a nexus phandle.
+/** Build "Pn", "Dn" and bare "n" aliases for each of a nexus phandle's pins.
  *  Pro-Micro-footprint and Xiao boards expose a GPIO nexus whose index IS the
  *  silkscreen pin number, so the mapping is an honest index passthrough — the
- *  value of the table is knowing the right phandle + validating the range. */
-function nexusTable(phandle: string, count: number): Record<string, string> {
+ *  value of the table is knowing the right phandle + validating the pins. */
+function nexusTable(phandle: string, pins: number[]): Record<string, string> {
     const out: Record<string, string> = {}
-    for (let i = 0; i < count; i++) {
+    for (const i of pins) {
         const ref = `${phandle} ${i}`
         out[`P${i}`] = ref
         out[`D${i}`] = ref
@@ -29,6 +29,12 @@ function nexusTable(phandle: string, count: number): Record<string, string> {
     }
     return out
 }
+
+const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i)
+
+/** The Pro Micro header's pin numbers: 0–21 without 11, 12, 13 and 17, which
+ *  the footprint does not break out (nor does the &pro_micro nexus map them). */
+const PRO_MICRO_PINS = [...range(11), 14, 15, 16, 18, 19, 20, 21]
 
 /** Build "GP0".."GPn" → "&gpio0 0".."&gpio0 n" for a direct-GPIO SoC (RP2040). */
 function rp2040Table(count: number): Record<string, string> {
@@ -47,12 +53,12 @@ function rp2040Table(count: number): Record<string, string> {
 export const ZMK_PIN_MAPS: Record<string, Record<string, string>> = {
     // Pro-Micro-footprint controllers expose the `&pro_micro` nexus; index = the
     // Pro Micro pin number (0–21).
-    nice_nano_v2: nexusTable('&pro_micro', 22),
-    pro_micro: nexusTable('&pro_micro', 22),
-    sparkfun_pro_micro_rp2040: nexusTable('&pro_micro', 22),
+    nice_nano_v2: nexusTable('&pro_micro', PRO_MICRO_PINS),
+    pro_micro: nexusTable('&pro_micro', PRO_MICRO_PINS),
+    sparkfun_pro_micro_rp2040: nexusTable('&pro_micro', PRO_MICRO_PINS),
     // Seeed Xiao footprint → `&xiao_d` nexus (D0–D10).
-    seeeduino_xiao_ble: nexusTable('&xiao_d', 11),
-    seeeduino_xiao_rp2040: nexusTable('&xiao_d', 11),
+    seeeduino_xiao_ble: nexusTable('&xiao_d', range(11)),
+    seeeduino_xiao_rp2040: nexusTable('&xiao_d', range(11)),
     // Generic RP2040 (Pico-class) — bare GPIO bank.
     rp2040: rp2040Table(30),
     rpi_pico: rp2040Table(30),
@@ -161,6 +167,127 @@ export function resolveStPin(label: string): string | null {
     const pin = Number(m[2])
     if (pin > 15) return null
     return `&gpio${m[1].toLowerCase()} ${pin}`
+}
+
+// pattern-check: skip — board-file pin facts as a table plus one pure lookup
+/** nRF controllers: header pin number → SoC [port, pin], from each board's
+ *  connector gpio-map (ZMK app/boards/arm/nice_nano/arduino_pro_micro_pins.dtsi;
+ *  Zephyr boards/seeed/xiao_ble/seeed_xiao_connector.dtsi). A GPIO property
+ *  can name the connector pin, but pin multiplexing (an SPI or PWM output)
+ *  needs the SoC pin. */
+const NRF_HEADER_PINS: Readonly<Record<string, Readonly<Record<number, [number, number]>>>> = {
+    nice_nano_v2: {
+        0: [0, 8], 1: [0, 6], 2: [0, 17], 3: [0, 20], 4: [0, 22], 5: [0, 24],
+        6: [1, 0], 7: [0, 11], 8: [1, 4], 9: [1, 6], 10: [0, 9], 14: [1, 11],
+        15: [1, 13], 16: [0, 10], 18: [1, 15], 19: [0, 2], 20: [0, 29], 21: [0, 31],
+    },
+    seeeduino_xiao_ble: {
+        0: [0, 2], 1: [0, 3], 2: [0, 28], 3: [0, 29], 4: [0, 4], 5: [0, 5],
+        6: [1, 11], 7: [1, 12], 8: [1, 13], 9: [1, 14], 10: [1, 15],
+    },
+}
+
+/** An nRF pin as port + pin: "P1.13" as written, or a header label on a board
+ *  above ("D15" on a nice!nano is P1.13); null otherwise. */
+export function nrfPinOf(
+    board: string | undefined,
+    label: string,
+): { port: number; pin: number } | null {
+    const m = /^P(\d)\.(\d{1,2})$/i.exec(label.trim())
+    if (m) return { port: Number(m[1]), pin: Number(m[2]) }
+    const ref = resolveZmkPin(board, label)
+    const header = board ? NRF_HEADER_PINS[board] : undefined
+    const at = ref && header ? header[Number(ref.split(' ')[1])] : undefined
+    return at ? { port: at[0], pin: at[1] } : null
+}
+
+// pattern-check: skip — two pure lookups over the existing pin tables
+/** The board's pins, one label each (its table's first spelling), or null
+ *  when remappr has no pin table for it. */
+export function boardPinLabels(board: string | undefined): string[] | null {
+    const table = board ? ZMK_PIN_MAPS[board] : undefined
+    if (!table) return null
+    // A lettered spelling ("P4") reads better than the bare number; object
+    // order puts integer-like keys first, so pick per pin, not by order.
+    const byRef = new Map<string, string>()
+    for (const [label, ref] of Object.entries(table)) {
+        const had = byRef.get(ref)
+        if (!had || (/^\d/.test(had) && !/^\d/.test(label)))
+            byRef.set(ref, label)
+    }
+    return [...byRef.values()]
+}
+
+/** The spellings a board accepts, as ranges ("P0–P21, D0–D21 or 0–21"), or
+ *  null when remappr has no pin table for it. */
+export function boardPinForms(board: string | undefined): string | null {
+    const table = board ? ZMK_PIN_MAPS[board] : undefined
+    if (!table) return null
+    const ranges = new Map<string, [number, number]>()
+    for (const label of Object.keys(table)) {
+        const m = /^([A-Za-z]*)(\d+)$/.exec(label)
+        if (!m) continue
+        const n = Number(m[2])
+        const r = ranges.get(m[1])
+        ranges.set(m[1], r ? [Math.min(r[0], n), Math.max(r[1], n)] : [n, n])
+    }
+    // Bare numbers last (object order would put them first).
+    const parts = [...ranges]
+        .sort(([a], [b]) => Number(a === '') - Number(b === ''))
+        .map(([p, [lo, hi]]) => `${p}${lo}–${p}${hi}`)
+    if (parts.length < 2) return parts.join('')
+    return `${parts.slice(0, -1).join(', ')} or ${parts[parts.length - 1]}`
+}
+
+/** True when two labels name the same pin on @p board (D4 and P4 do). */
+export function samePin(board: string | undefined, a: string, b: string): boolean {
+    const ra = resolveZmkPin(board, a)
+    return ra !== null && ra === resolveZmkPin(board, b)
+}
+
+// pattern-check: skip — board footprint data beside the pin tables, one lookup
+/** A controller's header, top view with USB at the top: each side's pads from
+ *  top to bottom. A pad is a pin label from the board's table, or a power /
+ *  control pad's name (GND, RAW, RST, …). */
+export interface BoardFootprint {
+    name: string
+    left: string[]
+    right: string[]
+}
+
+const PRO_MICRO_FOOTPRINT = {
+    left: ['D1', 'D0', 'GND', 'GND', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9'],
+    right: ['RAW', 'GND', 'RST', 'VCC', 'D21', 'D20', 'D19', 'D18', 'D15', 'D14', 'D16', 'D10'],
+}
+
+const BOARD_FOOTPRINTS: Record<string, BoardFootprint> = {
+    nice_nano_v2: { name: 'nice!nano v2', ...PRO_MICRO_FOOTPRINT },
+    pro_micro: { name: 'Pro Micro', ...PRO_MICRO_FOOTPRINT },
+    sparkfun_pro_micro_rp2040: {
+        name: 'Pro Micro RP2040',
+        ...PRO_MICRO_FOOTPRINT,
+    },
+    seeeduino_xiao_ble: {
+        name: 'Xiao BLE',
+        left: ['D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6'],
+        right: ['5V', 'GND', '3V3', 'D10', 'D9', 'D8', 'D7'],
+    },
+    seeeduino_xiao_rp2040: {
+        name: 'Xiao RP2040',
+        left: ['D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6'],
+        right: ['5V', 'GND', '3V3', 'D10', 'D9', 'D8', 'D7'],
+    },
+    rpi_pico: {
+        name: 'Raspberry Pi Pico',
+        left: ['GP0', 'GP1', 'GND', 'GP2', 'GP3', 'GP4', 'GP5', 'GND', 'GP6', 'GP7', 'GP8', 'GP9', 'GND', 'GP10', 'GP11', 'GP12', 'GP13', 'GND', 'GP14', 'GP15'],
+        right: ['VBUS', 'VSYS', 'GND', '3V3_EN', '3V3', 'ADC_VREF', 'GP28', 'GND', 'GP27', 'GP26', 'RUN', 'GP22', 'GND', 'GP21', 'GP20', 'GP19', 'GP18', 'GND', 'GP17', 'GP16'],
+    },
+}
+
+/** The board's header as drawn on the board, or null when remappr has no
+ *  drawing of it (its pins can still be listed with boardPinLabels). */
+export function boardFootprint(board: string | undefined): BoardFootprint | null {
+    return (board && BOARD_FOOTPRINTS[board]) || null
 }
 
 /** True when remappr has a ZMK pin table for this board. */

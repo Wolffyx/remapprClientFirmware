@@ -1,5 +1,12 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 // Pattern check: Adapter (Tier 1) — extended — extends src/firmware/qmk/service.ts QmkKeyboardService; HidClient-backed Vial implementation of KeyboardService with on-device matrix, encoder, and lock support.
+import {
+    activeLayoutSource,
+    createIdentity,
+    nameIdentifier,
+    usbIdentifier,
+    type IdentityApi,
+} from '@firmware/identity'
 import { filterCatalogByCodec } from '@firmware/catalog/filter'
 import type { KeyCatalog } from '@firmware/catalog/types'
 import { LockedError, ProtocolError, UnsupportedError } from '@firmware/errors'
@@ -241,6 +248,13 @@ async function loadDeviceProfile(
 export class VialKeyboardService implements KeyboardService {
     public capabilities: Capabilities
     public readonly deviceInfo: DeviceInfo
+    /** The Vial keyboard uid, USB ids, the product name and the layout's hash. */
+    public readonly identity: IdentityApi = createIdentity([
+        () => `vial_uid:${this.keyboardId.toString(16).padStart(16, '0')}`,
+        () => usbIdentifier(this.deviceInfo),
+        () => nameIdentifier('via_name', this.deviceInfo.name),
+        activeLayoutSource(() => this.getPhysicalLayouts()),
+    ])
     public readonly encoders: EncoderApi
     public readonly dynamic?: DynamicEntriesApi
     public readonly macros?: MacroApi

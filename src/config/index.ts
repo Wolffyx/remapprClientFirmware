@@ -8,7 +8,9 @@ export type {
     CanonAction,
     CanonEncoderBinding,
     CanonEncoderSlot,
+    CanonSliderSlot,
     CanonSliderBinding,
+    CanonSliderMotor,
     SliderMap,
     CanonGeometry,
     CanonHoldTarget,
@@ -40,18 +42,29 @@ export type {
     CanonBacklightPwm,
     CanonWs2812,
     CanonExtPowerCtrl,
+    CanonBattery,
+    CanonDisplay,
+    CanonPart,
+    DisplayBus,
+    PartKind,
     CanonLayout,
+    DesignFeature,
     CanonLayoutOption,
     ConfigHardware,
     ConfigKeymap,
     ConfigKeyboard,
     ConfigPins,
+    BoardEncoder,
+    BoardSensor,
     ConfigDefaults,
     ConfigMeta,
     ConfigNode,
     ConfigClusterNode,
     ConfigLinkProfile,
     ConfigLinkProfileOverride,
+    ConfigMouse,
+    ConfigPowerSettings,
+    ConfigRadioSettings,
     DiodeDirection,
     GpioSpec,
     LayerMode,
@@ -83,11 +96,27 @@ export {
     type SurfaceAction,
 } from './schema'
 
-export { buildConfigJsonSchema } from './jsonSchema'
+export { buildConfigJsonSchema, buildDeviceJsonSchema } from './jsonSchema'
+export {
+    type ConfigDevice,
+    type DongleSettings,
+    DeviceConfigSchema,
+    DongleSettingsSchema,
+    isDeviceConfig,
+    parseDeviceConfig,
+    newDeviceConfig,
+    DEVICE_PERSONALITY,
+} from './device'
+export {
+    type DeviceDecodeResult,
+    buildRemapprDeviceBlob,
+    decodeRemapprDeviceBlob,
+} from './compilers/remappr/device'
 export {
     type BuilderFirmwareId,
     type BuilderFirmwareTarget,
     BUILDER_FIRMWARE_TARGETS,
+    targetBuildsForm,
 } from './firmwareTargets'
 export {
     uidToHex,
@@ -104,6 +133,7 @@ export {
     fieldSupported,
     groupedTimingFields,
     type Flavor,
+    FLAVOR_LABELS,
     FLAVOR_OPTIONS,
     type HoldTapNumField,
     HOLD_TAP_NUM_FIELDS,
@@ -144,15 +174,46 @@ export {
     linkKnobRange,
     withLinkOverride,
     linkProfileError,
+    partTimingFields,
+    timingFieldsFor,
 } from './editorFields'
+export {
+    type DeviceNumberField,
+    type DongleNumberKey,
+    type RadioNumberKey,
+    DONGLE_FIELDS,
+    RADIO_FIELDS,
+    RADIO_AUTO_PAIR_DEFAULT,
+    type PowerField,
+    POWER_FIELDS,
+    powerTimeoutLabel,
+    MOUSE_SCROLL_DIVISOR_FIELD,
+    MOUSE_ACCEL_POINTS_MAX,
+    MOUSE_BUTTON_NAMES,
+    MOUSE_BUTTON_MAP_IDENTITY,
+    compactSection,
+} from './deviceFields'
 export {
     type DerivedMatrix,
     deriveMatrix,
+    keyCentre,
     materializeMatrix,
     matrixDims,
+    matrixSplit,
     resolveKeyMatrix,
 } from './matrix'
 export { resolveController } from './controller'
+export {
+    type DocumentDescription,
+    describeDocument,
+    layoutFingerprint,
+} from './describe'
+export {
+    type ChangeOp,
+    type DocumentChange,
+    type DocumentDiff,
+    diffDocuments,
+} from './diff'
 export {
     checkCompleteness,
     effectiveFirmware,
@@ -171,6 +232,12 @@ export {
     defaultAutocorrectEntries,
 } from './autocorrectDictionary'
 export { normalizeAction, normalizeKeymap, parseKeymap } from './normalize'
+export {
+    type LegacyKnobBindings,
+    knobSlotOf,
+    remapKnobKeys,
+    syncKnobs,
+} from './knobs'
 export {
     denormalizeAction,
     preferredSourceJson,
@@ -206,7 +273,14 @@ export {
     registerCompiler,
 } from './compiler'
 
-export { type ProjectBundle, buildProjectBundle } from './bundle'
+export {
+    type ProjectBundle,
+    buildProjectBundle,
+    RELEASE_CONDITION,
+    RELEASE_MARKER,
+    upgradedWorkflow,
+    WORKFLOW_PATHS,
+} from './bundle'
 export {
     type DeviceCaps,
     type PreflightIssue,
@@ -235,8 +309,23 @@ export {
     resolveQmkPin,
     gpioSpec,
     hasZmkPinMap,
+    boardPinLabels,
+    boardPinForms,
+    samePin,
+    boardFootprint,
+    type BoardFootprint,
     KNOWN_ZMK_BOARDS,
 } from './pinmaps'
+export {
+    BOARD_PIN_ABILITIES,
+    reservedPins,
+    suggestPinsByRole,
+    type BoardBus,
+    type BoardPin,
+    type BoardPinAbilities,
+    type PinNeed,
+    type PinUse,
+} from './pinAbilities'
 
 export {
     type ActionCategory,
@@ -253,3 +342,40 @@ export {
 import './compilers/zmk'
 import './compilers/qmk'
 import './compilers/remappr'
+export {
+    DESIGN_FEATURES,
+    SUGGESTED_FEATURES,
+    FIRMWARE_SWITCHES,
+    firmwareForDisplay,
+    setDesignFeature,
+    supportsFeature,
+    type DesignFeatureCard,
+    type FirmwareSwitch,
+    type SwitchTable,
+} from './firmwareSwitches'
+export { DESIGN_FEATURE_NAME } from './firmwareConf'
+export { ELEMENT_SHAPE, PART_SHAPE, partGlyph, partToLayout } from './parts'
+export {
+    SLIDER_MAP_INFO,
+    SLIDER_STEPS_DEFAULT,
+    SLIDER_STEPS_MAX,
+    type SliderMapInfo,
+    sliderMapInfo,
+    type LegacySliderBindings,
+    syncSliders,
+    remapSliderKeys,
+    sliderSlotOf,
+    sliderBindingAt,
+    setSliderBinding,
+} from './sliders'
+export { syncInputSlots, remapInputKeys } from './inputSlots'
+export {
+    DISPLAY_MODULES,
+    DISPLAY_PIN_NAMES,
+    displayFromModule,
+    displayModule,
+    displayPins,
+    displaySize,
+    type DisplayModule,
+    type DisplayPin,
+} from './displays'

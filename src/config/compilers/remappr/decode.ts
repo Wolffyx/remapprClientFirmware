@@ -39,6 +39,9 @@ import type {
     ConfigKeymap,
     ConfigLinkProfile,
     ConfigLinkProfileOverride,
+    ConfigPowerSettings,
+    ConfigDisplay,
+    ConfigRadioSettings,
     ConfigMouse,
     ConfigNode,
     Direction,
@@ -80,9 +83,18 @@ import {
     LINK_PROFILE_TBL_HDR_LEN,
     LINK_PROFILE_OVR_WIRE,
     LinkProfileId,
+    POWER_TBL_LEN,
+    RADIO_TBL_LEN,
     bytesToHex,
     type BehaviorRecord,
 } from './blobWriter'
+import { readPower } from './power'
+import { readRadio } from './radio'
+import { readMouseTable } from './mouse'
+import { matrixDefaultsFromParts } from './matrix'
+import { readPartEntries } from './sensor'
+import { readDisplayTable, withDisplaySettings } from './display'
+import { readSliders } from './slider'
 
 const HID_PAGE_KEYBOARD = 7
 const HID_PAGE_CONSUMER = 12
@@ -102,6 +114,7 @@ export const DecodeCode = {
     REFERENCE: -9,
     CAPABILITY: -10,
     BUDGET: -11,
+    DEVICE: -12,
 } as const
 
 export type DecodeCodeValue = (typeof DecodeCode)[keyof typeof DecodeCode]
@@ -119,6 +132,7 @@ const DECODE_CODE_NAME: Record<number, string> = {
     [-9]: 'REFERENCE',
     [-10]: 'CAPABILITY',
     [-11]: 'BUDGET',
+    [-12]: 'DEVICE',
 }
 
 /** Human label for a decode result code, e.g. "CRC mismatch (-4)". */
@@ -137,7 +151,7 @@ export interface DecodeResult {
 
 /* ── little-endian reader ───────────────────────────────────────────────── */
 
-class ByteReader {
+export class ByteReader {
     pos = 0
     constructor(private readonly b: Uint8Array) {}
     get length(): number {
@@ -350,6 +364,7 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
             if (name === 'reset') return { type: 'reset' }
             if (name === 'bootloader') return { type: 'bootloader' }
             if (name === 'soft_off') return { type: 'soft_off' }
+            if (name === 'battery_show') return { type: 'battery_show' }
             if (name === 'ext_power_toggle')
                 return { type: 'ext_power', action: 'toggle' }
             if (name === 'ext_power_on')
@@ -595,7 +610,7 @@ function tapHold(
 
 /* ── table walk ─────────────────────────────────────────────────────────── */
 
-interface TableFrame {
+export interface TableFrame {
     id: number
     version: number
     start: number // payload start
@@ -633,11 +648,24 @@ function parseBehaviorRecord(r: ByteReader): BehaviorRecord {
  * walks the table frames. Header-level failures return a `code` and no config;
  * intra-table reference issues surface as diagnostics with a best-effort config.
  */
-export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
-    const diag = new DiagnosticBag()
-    const fail = (code: DecodeCodeValue): DecodeResult => ({
+/** A blob's validated header and its table frames (payloads not yet read). */
+export interface BlobFrames {
+    code: DecodeCodeValue
+    /** Header config_version; meaningful when `code === OK`. */
+    configVersion: number
+    frames: TableFrame[]
+}
+
+/**
+ * Validate the 20-byte header (magic / min_reader / CRC32-over-body) exactly
+ * like the firmware, then split the body into table frames. Shared by the
+ * keymap decoder and the device decoder (device.ts).
+ */
+export function readBlobFrames(bytes: Uint8Array): BlobFrames {
+    const fail = (code: DecodeCodeValue): BlobFrames => ({
         code,
-        diagnostics: diag.all,
+        configVersion: 0,
+        frames: [],
     })
 
     // ── header ──
@@ -670,6 +698,19 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         frames.push({ id, version, start, end: start + len })
         off = start + len
     }
+    return { code: DecodeCode.OK, configVersion, frames }
+}
+
+export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
+    const diag = new DiagnosticBag()
+    const fail = (code: DecodeCodeValue): DecodeResult => ({
+        code,
+        diagnostics: diag.all,
+    })
+
+    const parsed = readBlobFrames(bytes)
+    if (parsed.code !== DecodeCode.OK) return fail(parsed.code)
+    const { configVersion, frames } = parsed
     const table = (id: number): TableFrame | undefined =>
         frames.find((f) => f.id === id)
 
@@ -710,6 +751,21 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         matrixPollPeriodMs = lr.u16()
     }
     if (numLayers === 0 || numPositions === 0) return fail(DecodeCode.BOUNDS)
+    // Matrix timing a MATRIX part holds (TBL_PART) wins over the tail, as on
+    // the device (compilers/remappr/matrix.ts).
+    const partT = table(TableId.Sensor)
+    const partEntries = partT
+        ? readPartEntries(bytes, partT.start, partT.end)
+        : []
+    if (typeof partEntries === 'string') diag.warn(`part table: ${partEntries}`)
+    const matrix =
+        typeof partEntries === 'string'
+            ? {}
+            : matrixDefaultsFromParts(partEntries)
+    matrixPressDebounceMs = matrix.matrixPressDebounceMs ?? matrixPressDebounceMs
+    matrixReleaseDebounceMs =
+        matrix.matrixReleaseDebounceMs ?? matrixReleaseDebounceMs
+    matrixPollPeriodMs = matrix.matrixPollPeriodMs ?? matrixPollPeriodMs
 
     // ── BEHAVIOR (required) ──
     const behT = table(TableId.Behavior)
@@ -828,6 +884,10 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const encoderT = table(TableId.Encoder)
     if (encoderT) readEncoders(bytes, encoderT, decoded, layers, diag)
 
+    // ── SLIDER (optional, slider part design §4b) → layer.sliders[] in place ──
+    const sliderT = table(TableId.Slider)
+    if (sliderT) readSliders(bytes, sliderT, decoded, layers, diag)
+
     // ── RGB (optional, id 7) → per-key colors (decode-only; preps Phase 4c emit) ──
     const rgbT = table(TableId.Rgb)
     const perKey = rgbT
@@ -853,6 +913,23 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         ? readLinkProfile(bytes, linkProfileT, diag)
         : undefined
 
+    // ── RADIO (optional, id 26, device-config plan) → node.radio ──
+    const radioT = table(TableId.Radio)
+    const radio = radioT ? readRadioTable(bytes, radioT, diag) : undefined
+
+    // ── DISPLAY (optional, id 31, display part design §3) → node.displays ──
+    const displayT = table(TableId.Display)
+    const shown = displayT ? readDisplays(bytes, displayT, diag) : undefined
+    // Their parts' own settings ride in TBL_PART.
+    const displays =
+        shown && typeof partEntries !== 'string'
+            ? withDisplaySettings(shown, partEntries)
+            : shown
+
+    // ── POWER (optional, id 30, sleep-wake design) → node.power ──
+    const powerT = table(TableId.Power)
+    const power = powerT ? readPowerTable(bytes, powerT, diag) : undefined
+
     // ── ACTION_BINDING (optional, id 17, §F) → top-level actionBindings[] ──
     const actionT = table(TableId.ActionBinding)
     const actionBindings = actionT ? readActionBindings(bytes, actionT) : []
@@ -874,7 +951,10 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         pers.role ||
         pers.forwardMode ||
         cluster ||
-        linkProfile
+        linkProfile ||
+        radio ||
+        power ||
+        displays
             ? {
                   ...(pers.personality ? { personality: pers.personality } : {}),
                   ...(pers.role ? { role: pers.role } : {}),
@@ -882,6 +962,9 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
                   ...(mouse ? { mouse } : {}),
                   ...(cluster ? { cluster } : {}),
                   ...(linkProfile ? { linkProfile } : {}),
+                  ...(radio ? { radio } : {}),
+                  ...(power ? { power } : {}),
+                  ...(displays ? { displays } : {}),
               }
             : undefined
 
@@ -1035,40 +1118,25 @@ function readRgb(
     return Object.keys(out).length ? out : undefined
 }
 
-// TBL_MOUSE (id 8, §4b): u16 cpi, u16 auto_layer_timeout_ms, u8 accel_point_count,
-// u8 flags, then N × { u16 speed_in, u16 mult_x100 }. Bounds-checked so a foreign
-// or truncated blob can't throw; returns undefined when the table carries no
-// pointer settings. The inverse of blobWriter.mouseTable / index.ts node.mouse.
+// TBL_MOUSE (id 8, §4b; version 2 adds inverts / swap / scroll divisor / button
+// map): the shared reader in compilers/remappr/mouse.ts. Bounds-checked so a
+// foreign or truncated blob can't throw; returns undefined when the table
+// carries no pointer settings.
 function readMouse(
     bytes: Uint8Array,
     t: TableFrame,
     diag: DiagnosticBag,
 ): ConfigMouse | undefined {
-    if (t.end - t.start < 6) {
-        diag.error('mouse table header truncated')
+    if (t.version < 1 || t.version > 3) {
+        diag.error(`mouse table version ${t.version} not supported`)
         return undefined
     }
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
-    const cpi = r.u16()
-    const autoLayerTimeoutMs = r.u16()
-    const count = r.u8()
-    r.u8() // flags (reserved)
-    if (t.start + 6 + count * 4 > t.end) {
-        diag.error('mouse accel curve truncated')
+    const m = readMouseTable(bytes, t.start, t.end, t.version)
+    if (typeof m === 'string') {
+        diag.error(m)
         return undefined
     }
-    const accel: Array<[number, number]> = []
-    for (let i = 0; i < count; i++) {
-        const speedIn = r.u16()
-        const multX100 = r.u16()
-        accel.push([speedIn, multX100])
-    }
-    const out: ConfigMouse = {}
-    if (cpi) out.cpi = cpi
-    if (autoLayerTimeoutMs) out.autoLayerTimeoutMs = autoLayerTimeoutMs
-    if (accel.length) out.accel = accel
-    return Object.keys(out).length ? out : undefined
+    return Object.keys(m).length ? m : undefined
 }
 
 // pattern-check: skip pure wire-decode fn mirroring the TBL_PERSONALITY layout
@@ -1192,6 +1260,64 @@ function readLinkProfile(
         overrides.push({ knob, value })
     }
     return overrides.length ? { profile, overrides } : { profile }
+}
+
+// pattern-check: skip frame checks around the shared radio reader
+// TBL_RADIO (id 26): the 8-byte radio settings (compilers/remappr/radio.ts).
+// A wrong version or a short frame is reported, not thrown.
+function readRadioTable(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigRadioSettings | undefined {
+    if (t.version !== 1) {
+        diag.error(`radio table version ${t.version} not supported`)
+        return undefined
+    }
+    if (t.end - t.start < RADIO_TBL_LEN) {
+        diag.error('radio table truncated')
+        return undefined
+    }
+    return readRadio(bytes, t.start)
+}
+
+// pattern-check: skip frame checks around the shared display reader
+// TBL_DISPLAY (id 31): the pages per display (compilers/remappr/display.ts).
+function readDisplays(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigDisplay[] | undefined {
+    if (t.version !== 1) {
+        diag.error(`display table version ${t.version} not supported`)
+        return undefined
+    }
+    const displays = readDisplayTable(bytes, t.start, t.end)
+    if (typeof displays === 'string') {
+        diag.error(displays)
+        return undefined
+    }
+    return displays
+}
+
+// pattern-check: skip frame checks around the shared power reader
+// TBL_POWER (id 30): the 16-byte timeouts (compilers/remappr/power.ts). A
+// longer frame is a later version's; a wrong version or a short frame is
+// reported, not thrown.
+function readPowerTable(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigPowerSettings | undefined {
+    if (t.version !== 1) {
+        diag.error(`power table version ${t.version} not supported`)
+        return undefined
+    }
+    if (t.end - t.start < POWER_TBL_LEN) {
+        diag.error('power table truncated')
+        return undefined
+    }
+    return readPower(bytes, t.start)
 }
 
 interface DecodedNames {
@@ -1562,6 +1688,10 @@ function raiseSemanticAction(
             if (val !== 0) a.val = val
             return a
         }
+        case 7:
+            return arg0 !== 0
+                ? { kind: 'device', action: code, value: arg0 }
+                : { kind: 'device', action: code }
         default:
             return { kind: 'none' }
     }

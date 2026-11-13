@@ -1,5 +1,12 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 // Pattern check: Adapter (Tier 1) — extended — extends src/firmware/qmk/service.ts QmkKeyboardService; HidClient-backed VIA implementation of the neutral KeyboardService facade.
+import {
+    activeLayoutSource,
+    createIdentity,
+    nameIdentifier,
+    usbIdentifier,
+    type IdentityApi,
+} from '@firmware/identity'
 import { filterCatalogByCodec } from '@firmware/catalog/filter'
 import type { KeyCatalog } from '@firmware/catalog/types'
 import type { KeycodeCodec } from '@firmware/codec'
@@ -276,6 +283,12 @@ async function readLayerEncoders(
 export class QmkKeyboardService implements KeyboardService {
     public capabilities: Capabilities
     public readonly deviceInfo: DeviceInfo
+    /** USB ids, the VIA product name and the layout's hash. */
+    public readonly identity: IdentityApi = createIdentity([
+        () => usbIdentifier(this.deviceInfo),
+        () => nameIdentifier('via_name', this.deviceInfo.name),
+        activeLayoutSource(() => this.getPhysicalLayouts()),
+    ])
     public readonly wireless?: WirelessApi
     public readonly rgb?: RgbApi
     public readonly advanced?: AdvancedApi

@@ -9,6 +9,7 @@ import type {
     ClusterDiag,
     DynamicEntriesApi,
     EncoderApi,
+    SliderApi,
     HsvColor,
     IndicatorConfig,
     KeyboardService,
@@ -189,6 +190,15 @@ export interface MockServiceOptions {
      *  handoff) instead of the static Corne demo. The physical layout, key
      *  count, and getConfigSource() all derive from this board. */
     seedConfig?: ConfigKeymap
+    /** The physical layouts to offer instead of the one derived from
+     *  `seedConfig`. Each must keep the config's keys in the same order. */
+    layouts?: PhysicalLayout[]
+}
+
+function initialLayouts(opts: MockServiceOptions): PhysicalLayout[] {
+    if (opts.layouts) return opts.layouts.map((l) => ({ ...l }))
+    if (opts.seedConfig) return [configToPhysicalLayout(opts.seedConfig)]
+    return MOCK_LAYOUTS.map((l) => ({ ...l }))
 }
 
 export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
@@ -204,6 +214,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
     public readonly codec = mockCodec
     public readonly sideload: SideloadApi
     public readonly encoders: EncoderApi
+    public readonly sliders: SliderApi
     public readonly dynamic: DynamicEntriesApi
     public readonly macros: MacroApi
     public readonly rgb: RgbApi
@@ -310,9 +321,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
         this.cfg = this.seedCfg
         this.keyCount = this.seedCfg.keyboard.keys.length
         this.perKeyColors = this.rainbow()
-        this.layouts = opts.seedConfig
-            ? [configToPhysicalLayout(opts.seedConfig)]
-            : MOCK_LAYOUTS.map((l) => ({ ...l }))
+        this.layouts = initialLayouts(opts)
         this.deviceInfo = {
             name:
                 opts.deviceInfo?.name ??
@@ -384,6 +393,28 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                         ? { cw: action, ccw: cur.ccw }
                         : { cw: cur.cw, ccw: action }
                 this.layers[li] = { ...layer, encoders: encs }
+                this.markPending(true)
+            },
+        }
+        this.sliders = {
+            setSlider: async (layerId, slot, slider) => {
+                this.requireUnlocked()
+                const li = this.layerIndexById(layerId)
+                if (li < 0)
+                    throw new ProtocolError(`Unknown layer id: ${layerId}`)
+                const count = this.sliderCount()
+                if (slot < 0 || slot >= count)
+                    throw new ProtocolError(`Slider out of range: ${slot}`)
+                const layer = this.layers[li]
+                const sliders = Array.from(
+                    { length: count },
+                    (_, i) => layer.sliders?.[i] ?? null,
+                )
+                sliders[slot] = slider
+                const { sliders: _old, ...rest } = layer
+                this.layers[li] = sliders.some((b) => b)
+                    ? { ...rest, sliders }
+                    : rest
                 this.markPending(true)
             },
         }
@@ -629,6 +660,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                 name: l.name,
                 keys: l.keys,
                 ...(l.encoders ? { encoders: l.encoders } : {}),
+                ...(l.sliders ? { sliders: l.sliders } : {}),
             }
         })
     }
@@ -672,6 +704,10 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
 
     private encoderCount(): number {
         return this.seedCfg.keyboard.encoders?.length ?? 0
+    }
+
+    private sliderCount(): number {
+        return this.seedCfg.keyboard.sliders?.length ?? 0
     }
 
     private layerNames(): string[] {
@@ -791,6 +827,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
                     )
                     return { cw, ccw }
                 }),
+                ...(l.sliders ? { sliders: [...l.sliders] } : {}),
             })),
             availableLayers:
                 (this.capabilities.maxLayers ?? 8) - this.layers.length,

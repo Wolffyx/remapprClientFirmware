@@ -9,17 +9,28 @@ import type {
     Probe,
     ProbeHint,
 } from '../../adapter'
-import type { ConfigKeymap } from '../../config'
 import { TransportError } from '../../errors'
 import type { KeyboardService } from '../../service'
 import { readTransportIds, type Transport } from '../../transport'
+import type { DeviceKind } from '../../devices/types'
 import type { DeviceInfo } from '../../types'
 import { loadOrCreateIdentity, RemapprSession } from './auth'
-import { loadDeviceConfig } from './configRead'
+import { loadDeviceConfig, makeKeylessConfig } from './configRead'
+import { buildDeviceConfigApi } from './deviceConfig'
+import { deviceKind } from './deviceKind'
+import {
+    buildJoystickService,
+    buildMouseService,
+    hasConfigStore,
+    type DeviceSite,
+} from './deviceServices'
 import { discover, type DiscoveryResult } from './discovery'
 import { warmRemapprIdentity } from './identity'
 import { buildClusterApi } from './clusterView'
 import { buildNodesApi } from './nodeView'
+import { buildSensorApi, servesSensor } from './sensor'
+import { buildHostValuesApi, servesHost } from './hostValues'
+import { buildScreensApi } from './screens'
 import { buildUnicodeApi } from './unicodeView'
 import {
     BLE_CONTROL_CHAR_UUID,
@@ -64,21 +75,29 @@ interface ProbedRemappr {
     /** GET_CAPABILITIES bitmask, or null when the firmware predates the verb
      *  (capability unknown — assume features like auth are present). */
     capBits: number | null
-    /** The device self-identified (or was detected) as a ROLE_DONGLE hub. */
-    isDongle: boolean
+    /** What the device is (see deviceKind): a dongle hub, a mouse (no keymap,
+     *  a device document config and live motion controls) or a keyboard. */
+    kind: DeviceKind
 }
 
 const probedSessions = new WeakMap<Transport, ProbedRemappr>()
+
+const DEVICE_NAMES: Readonly<Record<DeviceKind, string>> = {
+    keyboard: 'Remappr Keyboard',
+    dongle: 'Remappr Dongle',
+    mouse: 'Remappr Mouse',
+    joystick: 'Remappr Joystick',
+}
 
 /** Map the raw 16-byte GET_DEVICE_INFO record onto the client DeviceInfo. */
 function toClientDeviceInfo(
     raw: RawDeviceInfo,
     transport: Transport,
-    isDongle = false,
+    kind: DeviceKind,
 ): DeviceInfo {
     const ids = readTransportIds(transport)
     return {
-        name: isDongle ? 'Remappr Dongle' : 'Remappr Keyboard',
+        name: DEVICE_NAMES[kind],
         firmware: 'remappr',
         firmwareVersion: `${raw.fwMajor}.${raw.fwMinor}.${raw.fwPatch}`,
         vid: ids.vid,
@@ -112,15 +131,48 @@ async function probeDongleFallback(rpc: RemapprRpc): Promise<DiscoveryResult> {
     }
 }
 
-/** A minimal empty keymap for the dongle's own service — it has no config store,
- *  and the renderer lands on the node roster rather than the editor. */
-function makeDongleConfig(): ConfigKeymap {
+// pattern-check: skip — builds the two keyless service variants this adapter
+// constructs; plain construction, no new abstraction.
+/** The dongle's own service: its node roster and its settings. No §19 session;
+ *  it owns its transport and rejects keymap edits. */
+function buildDongleService(
+    rpc: RemapprRpc,
+    probed: ProbedRemappr,
+): RemapprKeyboardService {
+    const { discovery, deviceInfo } = probed
+    const device = hasConfigStore(discovery)
+        ? buildDeviceConfigApi(rpc, {
+              personality: 'dongle',
+              name: deviceInfo.name,
+              writable: true,
+          })
+        : undefined
+    return new RemapprKeyboardService({
+        rpc,
+        deviceInfo,
+        config: makeKeylessConfig(deviceInfo.name),
+        configVersion: discovery.deviceInfo.configVersion,
+        layouts: [],
+        activeLayoutId: 0,
+        maxLayers: 0,
+        limits: discovery.limits,
+        readOnly: true,
+        kind: 'dongle',
+        device,
+        nodes: buildNodesApi(rpc),
+    })
+}
+
+/** Where a mouse or a joystick on its own transport talks: its own RPC, which
+ *  the service closes on disconnect. */
+function ownSite(rpc: RemapprRpc, probed: ProbedRemappr): DeviceSite {
     return {
-        schemaVersion: 1,
-        kind: 'remappr.keymap',
-        meta: { name: 'Remappr Dongle', target: null },
-        keyboard: { id: 'remappr-dongle', name: 'Remappr Dongle', keys: [] },
-        layers: [],
+        rpc,
+        discovery: probed.discovery,
+        deviceInfo: probed.deviceInfo,
+        targetNode: 0,
+        closeTransport: () =>
+            rpc.close({ abortTransport: true }).catch(() => undefined),
     }
 }
 
@@ -138,12 +190,12 @@ async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null>
             // probe LIST_NODES (throws here when it is not a dongle either).
             discovery = await probeDongleFallback(rpc)
         }
-        const isDongle = discovery.role === Role.DONGLE
+        const kind = deviceKind(discovery)
 
         // GET_CAPABILITIES is a keyboard verb on the legacy path; a dongle drops
-        // it (and would cost a probe-timeout), so skip it for a dongle.
+        // it (and would cost a probe-timeout), and a mouse has no use for it.
         let capBits: number | null = null
-        if (!isDongle) {
+        if (kind === 'keyboard') {
             try {
                 const caps = await rpc.callPlain(
                     Cmd.GET_CAPABILITIES,
@@ -162,10 +214,10 @@ async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null>
             deviceInfo: toClientDeviceInfo(
                 discovery.deviceInfo,
                 transport,
-                isDongle,
+                kind,
             ),
             capBits,
-            isDongle,
+            kind,
         }
     } catch {
         await rpc.close({ abortTransport: true }).catch(() => undefined)
@@ -225,7 +277,7 @@ export const remapprAdapter: FirmwareAdapter = {
                 throw new TransportError('Remappr probe failed during connect')
             }
         }
-        const { rpc, discovery, deviceInfo, isDongle, capBits } = probed
+        const { rpc, discovery, deviceInfo, kind, capBits } = probed
 
         if (signal.aborted) {
             await rpc.close({ abortTransport: true }).catch(() => undefined)
@@ -240,24 +292,14 @@ export const remapprAdapter: FirmwareAdapter = {
         )
 
         try {
-            if (isDongle) {
-                // A dongle has no auth session or config of its own (§7.2): skip
-                // the §19 handshake and config load, and surface the node roster.
-                // The service owns the transport (closes it on disconnect) but
-                // rejects edits (no keymap) and lands on the roster (kind).
-                return new RemapprKeyboardService({
-                    rpc,
-                    deviceInfo,
-                    config: makeDongleConfig(),
-                    configVersion: 0,
-                    layouts: [],
-                    activeLayoutId: 0,
-                    maxLayers: 0,
-                    limits: discovery.limits,
-                    readOnly: true,
-                    kind: 'dongle',
-                    nodes: buildNodesApi(rpc),
-                })
+            // A dongle, a mouse or a joystick has no auth session and no keymap
+            // (§7.2): skip the §19 handshake and keymap load. The dongle
+            // surfaces its node roster, the mouse its motion controls, the
+            // joystick its axes and calibration, each its own settings.
+            if (kind === 'dongle') return buildDongleService(rpc, probed)
+            if (kind === 'mouse') return await buildMouseService(ownSite(rpc, probed))
+            if (kind === 'joystick') {
+                return await buildJoystickService(ownSite(rpc, probed))
             }
 
             // §19 is capability-gated: a dev/no-auth firmware (CAP_AUTH clear)
@@ -270,6 +312,10 @@ export const remapprAdapter: FirmwareAdapter = {
                     : undefined
 
             const loaded = await loadDeviceConfig(rpc, discovery)
+            // Its parts (the battery part above all) where it serves SENSOR.
+            const sensor = servesSensor(discovery)
+                ? buildSensorApi(rpc, { writable: true })
+                : undefined
 
             return new RemapprKeyboardService({
                 rpc,
@@ -281,6 +327,16 @@ export const remapprAdapter: FirmwareAdapter = {
                 activeLayoutId: loaded.activeLayoutId,
                 maxLayers: loaded.maxLayers,
                 limits: discovery.limits,
+                hwCaps: discovery.personality?.hwCaps,
+                sensor,
+                // A firmware that draws screens from its config serves the
+                // host values they show.
+                ...(servesHost(discovery)
+                    ? {
+                          hostValues: buildHostValuesApi(rpc),
+                          screens: buildScreensApi(sensor),
+                      }
+                    : {}),
                 // A dongle relays to bonded nodes; a direct keyboard returns an
                 // empty roster. Read-only views today (relayed-write HW-pending).
                 nodes: buildNodesApi(rpc),

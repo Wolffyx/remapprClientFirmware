@@ -8,12 +8,15 @@
 // directly-attached (non-dongle) device answers ERR_CMD → an empty roster.
 
 import {
+    buildChangeChannelsArg,
     buildNodeInfoArg,
     Cmd,
     CommonVerb,
     DongleVerb,
+    ENTER_BOOTLOADER_ARG,
     Namespace,
     NODE_RECORD_LEN,
+    parseChannelChange,
     parseClusterDiag,
     parseErrorCounters,
     parseLinkStats,
@@ -22,11 +25,14 @@ import {
     parsePipeTable,
     Status,
     statusName,
+    type ChannelChange,
+    type ChannelChangeRequest,
     type ClusterDiag,
     type ErrorCounters,
     type LinkStats,
     type NodeRecord,
     type PipeTable,
+    type RelayStats,
 } from './protocol'
 import {
     loadOrCreateIdentity,
@@ -35,7 +41,15 @@ import {
 } from './auth'
 import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
 
-export type { ErrorCounters, LinkStats, NodeRecord, PipeTable }
+export type {
+    ChannelChange,
+    ChannelChangeRequest,
+    ErrorCounters,
+    LinkStats,
+    NodeRecord,
+    PipeTable,
+    RelayStats,
+}
 
 /** Enumerate the nodes bonded to a dongle (DONGLE.LIST_NODES). Returns [] for a
  *  directly-attached (non-dongle) device or an empty roster. */
@@ -121,9 +135,9 @@ export async function clearAllBonds(rpc: RemapprRpc): Promise<number> {
 // pattern-check: skip — thin async wrapper over DONGLE.GET_LINK_STATS, same
 // shape as the wrappers above; no GoF abstraction.
 /** Read the dongle's §16 radio link stats (DONGLE.GET_LINK_STATS): the live
- *  hop map with its per-channel packet-error window and the map generation
- *  counter (bumps on every adaptive channel swap). Idempotent read. Throws on
- *  a non-dongle device (ERR_CMD). */
+ *  hop map with its per-channel packet-error window, each channel's last
+ *  verdict and the map generation counter. Idempotent read. Throws on a
+ *  non-dongle device (ERR_CMD). */
 export async function getLinkStats(rpc: RemapprRpc): Promise<LinkStats> {
     const reply = await rpc.callUniversalPlain(
         Namespace.DONGLE,
@@ -132,6 +146,26 @@ export async function getLinkStats(rpc: RemapprRpc): Promise<LinkStats> {
     if (reply.status !== Status.OK)
         throw new Error(`GET_LINK_STATS → ${statusName(reply.status)}`)
     return parseLinkStats(reply.data)
+}
+
+// pattern-check: skip — thin async wrapper over DONGLE.CHANGE_CHANNELS, same
+// shape as the wrappers above; no GoF abstraction.
+/** Move every node behind the dongle to new channels (DONGLE.CHANGE_CHANNELS):
+ *  the failing ones replaced, or an explicit map. The dongle rolls it out one
+ *  slot at a time; poll getLinkStats().changeInProgress. Throws while a
+ *  roll-out runs (ERR_STATE) or on a refused list (ERR_ARG). Not repeatable. */
+export async function changeChannels(
+    rpc: RemapprRpc,
+    req: ChannelChangeRequest,
+): Promise<ChannelChange> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.CHANGE_CHANNELS,
+        buildChangeChannelsArg(req),
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`CHANGE_CHANNELS → ${statusName(reply.status)}`)
+    return parseChannelChange(reply.data)
 }
 
 // pattern-check: skip — thin async wrapper over DONGLE.SET_NKRO, same shape as
@@ -168,6 +202,20 @@ export async function getPipeTable(rpc: RemapprRpc): Promise<PipeTable> {
     if (reply.status !== Status.OK)
         throw new Error(`GET_PIPE_TABLE → ${statusName(reply.status)}`)
     return parsePipeTable(reply.data)
+}
+
+/** Reboot the dongle into its own bootloader (DONGLE.ENTER_BOOTLOADER) so new
+ *  firmware can be loaded over the bootloader's USB DFU. The dongle drops off
+ *  USB ~200 ms after the reply. Throws ERR_CMD on a board that has no
+ *  software way into its bootloader. */
+export async function enterDongleBootloader(rpc: RemapprRpc): Promise<void> {
+    const reply = await rpc.callUniversalPlain(
+        Namespace.DONGLE,
+        DongleVerb.ENTER_BOOTLOADER,
+        ENTER_BOOTLOADER_ARG,
+    )
+    if (reply.status !== Status.OK)
+        throw new Error(`ENTER_BOOTLOADER → ${statusName(reply.status)}`)
 }
 
 /** Read a device's §20 error counters (COMMON.GET_ERROR_COUNTERS): radio MIC

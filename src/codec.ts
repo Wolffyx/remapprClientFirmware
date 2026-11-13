@@ -21,4 +21,8 @@ export interface KeycodeCodec {
 
     /** Fast filter for catalog assembly. Default is to try encode and check. */
     supports(id: CanonicalKeyId): boolean
+
+    /** This firmware's own spellings of the key (e.g. ZMK `C_VOL_UP`), shown
+     *  beside it in the picker. Absent / empty = the firmware has none. */
+    names?(id: CanonicalKeyId): readonly string[]
 }
