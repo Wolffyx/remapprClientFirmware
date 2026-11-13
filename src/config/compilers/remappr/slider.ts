@@ -27,9 +27,9 @@ import { ByteReader, type TableFrame } from './decode'
 export const SLIDER_KIND = { LEVEL: 1, STEPS: 2 } as const
 export const SLIDER_ANY_LAYER = 0xff
 export const SLIDER_BH_NONE = 0xffff
-export const SLIDER_STEPS_MAX = 100
-/** Steps across the travel when the binding names none. */
-export const SLIDER_STEPS_DEFAULT = 50
+import { SLIDER_STEPS_DEFAULT, SLIDER_STEPS_MAX } from '../../sliders'
+
+export { SLIDER_STEPS_DEFAULT, SLIDER_STEPS_MAX }
 
 const key = (id: string): CanonAction =>
     ({ type: 'key_press', key: id }) as CanonAction

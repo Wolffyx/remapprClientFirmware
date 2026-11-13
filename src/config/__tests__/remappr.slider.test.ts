@@ -170,6 +170,15 @@ describe('TBL_SLIDER', () => {
         expect(layers[1]!.sliders![1]).toBeNull()
     })
 
+    it('cuts a stepped slider into 100 steps when it names none', () => {
+        const { blob } = buildRemapprBlob(
+            board([{ name: 'base', bindings: ['A', 'B', 'C', 'D'], sliders: [{ map: 'volume' }, null] }]),
+            { configVersion: 1 },
+        )
+        // slider 0, any layer, STEPS, 100 steps
+        expect(hex(sliderTable(blob).subarray(2, 6))).toBe('00ff0264')
+    })
+
     it('warns about and leaves out a map the firmware has no form for', () => {
         const { blob, diagnostics } = buildRemapprBlob(
             board([

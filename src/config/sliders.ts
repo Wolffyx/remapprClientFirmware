@@ -27,6 +27,12 @@ import type {
     SliderMap,
 } from './types'
 
+/** Most steps a slider's travel can be cut into. */
+export const SLIDER_STEPS_MAX = 100
+/** Steps across the travel when a binding names none, and what an editor
+ *  starts a new stepped binding with: one per percent. */
+export const SLIDER_STEPS_DEFAULT = 100
+
 export interface SliderMapInfo {
     readonly id: SliderMap
     readonly label: string

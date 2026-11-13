@@ -357,6 +357,8 @@ export { DESIGN_FEATURE_NAME } from './firmwareConf'
 export { ELEMENT_SHAPE, PART_SHAPE, partGlyph, partToLayout } from './parts'
 export {
     SLIDER_MAP_INFO,
+    SLIDER_STEPS_DEFAULT,
+    SLIDER_STEPS_MAX,
     type SliderMapInfo,
     sliderMapInfo,
     type LegacySliderBindings,
