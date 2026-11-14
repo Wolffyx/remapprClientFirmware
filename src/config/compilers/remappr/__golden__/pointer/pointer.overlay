@@ -35,3 +35,13 @@
 		>;
 	};
 };
+
+/ {
+	remappr_mouse: mouse {
+		compatible = "remappr,mouse";
+		native-cpi = <800>;
+		cpi-min = <100>;
+		cpi-max = <26000>;
+		cpi-step = <50>;
+	};
+};

@@ -27,13 +27,24 @@ const lowest = (keys: CanonGeometry[], axis: 'x' | 'y'): number =>
         }),
     )
 
+/** The shift that makes every coordinate of `keys` non-negative. The
+ *  placement and the off-matrix inputs' rects share it, so they line up. */
+export interface Origin {
+    dx: number
+    dy: number
+}
+
+export function layoutOrigin(keys: CanonGeometry[]): Origin {
+    return { dx: -Math.floor(lowest(keys, 'x')), dy: -Math.floor(lowest(keys, 'y')) }
+}
+
 /** One KEY(...) per key, every key at its own position. */
 export function placementTokens(
     keys: CanonGeometry[],
     diag: DiagnosticBag,
+    origin: Origin = layoutOrigin(keys),
 ): string[] {
-    const dx = -Math.floor(lowest(keys, 'x'))
-    const dy = -Math.floor(lowest(keys, 'y'))
+    const { dx, dy } = origin
     let rounded = 0
     const tokens = keys.map((k) => {
         const rotated = !!k.r

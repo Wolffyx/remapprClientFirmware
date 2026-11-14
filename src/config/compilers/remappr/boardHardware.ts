@@ -373,9 +373,11 @@ export function emitEncoders(
             `\t\tgpios = <${a}>, <${b}>;`,
             `\t\tsteps-per-period = <${enc.steps ?? 4}>;`,
             `\t\tzephyr,axis = <${enc.axis ?? 'INPUT_REL_WHEEL'}>;`,
-            `\t\tsample-time-us = <2000>;`,
-            `\t\tidle-timeout-ms = <200>;`,
-            `\t\tidle-poll-time-us = <5000>;`,
+            `\t\tsample-time-us = <${enc.sampleTimeUs ?? 2000}>;`,
+            `\t\tidle-timeout-ms = <${enc.idleTimeoutMs ?? 200}>;`,
+            ...(enc.idlePollTimeUs === 0
+                ? []
+                : [`\t\tidle-poll-time-us = <${enc.idlePollTimeUs ?? 5000}>;`]),
             `\t};`,
         )
     })
@@ -422,6 +424,37 @@ function settingDefaults(
     return pairs
 }
 
+/** `remappr,mouse` from board.sensor.cpi: the resolution the sensor reports
+ *  and the DPI range a config may ask for. The node is what makes the device
+ *  scale motion, take SET_DPI and report CAP_POINTER; without it a mouse
+ *  finds no pointer, so a mouse without `cpi` is an error. */
+function mouseNode(config: ConfigKeymap, diag: DiagnosticBag): string[] {
+    const cpi = config.board?.sensor?.cpi
+    if (!cpi) {
+        if (config.node?.personality === 'mouse')
+            diag.error(
+                `a mouse needs board.sensor.cpi (its native resolution): without ` +
+                    `the remappr,mouse node it reports no pointer and refuses SET_DPI`,
+                ['board', 'sensor', 'cpi'],
+            )
+        return []
+    }
+    const opt = (name: string, v: number | undefined): string[] =>
+        v === undefined ? [] : [`\t\t${name} = <${v}>;`]
+    return [
+        ``,
+        `/ {`,
+        `\tremappr_mouse: mouse {`,
+        `\t\tcompatible = "remappr,mouse";`,
+        `\t\tnative-cpi = <${cpi.native}>;`,
+        ...opt('cpi-min', cpi.min),
+        ...opt('cpi-max', cpi.max),
+        ...opt('cpi-step', cpi.step),
+        `\t};`,
+        `};`,
+    ]
+}
+
 /** The motion sensor from `board.sensor`: its node on the SPI bus, with the
  *  product's defaults (node.sensor.defaults) as `remappr,setting-defaults`.
  *  No sensor → empty fragment. */
@@ -459,6 +492,7 @@ export function emitSensor(
             : []),
         `\t};`,
         `};`,
+        ...mouseNode(config, diag),
     ]
     return {
         includes: [`#include <dt-bindings/remappr/sensor.h>`],

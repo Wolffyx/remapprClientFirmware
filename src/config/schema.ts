@@ -917,6 +917,27 @@ export const BoardSchema = z
                         .regex(/^(INPUT_[A-Z0-9_]+|\d+)$/)
                         .optional()
                         .describe('Relative axis code, e.g. "INPUT_REL_WHEEL".'),
+                    sampleTimeUs: z
+                        .number()
+                        .int()
+                        .positive()
+                        .optional()
+                        .describe('Phase sample period while turning, us (default 2000).'),
+                    idleTimeoutMs: z
+                        .number()
+                        .int()
+                        .positive()
+                        .optional()
+                        .describe('No step this long ends active sampling, ms (default 200).'),
+                    idlePollTimeUs: z
+                        .number()
+                        .int()
+                        .nonnegative()
+                        .optional()
+                        .describe(
+                            'Poll period while idle instead of a pin interrupt, us ' +
+                                '(default 5000; 0 leaves it out, so the pins interrupt).',
+                        ),
                 }),
             )
             .optional()
@@ -928,6 +949,8 @@ export const BoardSchema = z
         nodeBus: z.array(z.lazy(() => BoardNodeBusPortSchema)).optional(),
         radioLink: z.lazy(() => BoardRadioLinkSchema).optional(),
         radio: z.lazy(() => BoardRadioSchema).optional(),
+        buttons: z.array(z.lazy(() => BoardButtonSchema)).optional(),
+        sliders: z.array(z.lazy(() => BoardSliderSchema)).optional(),
         reservedPins: z
             .array(
                 z.object({
@@ -1129,8 +1152,56 @@ export const BoardSensorSchema = z
             .positive()
             .optional()
             .describe('SPI clock, Hz (default 8000000).'),
+        cpi: z
+            .object({
+                native: z
+                    .number()
+                    .int()
+                    .positive()
+                    .describe('Counts per inch the sensor reports as wired.'),
+                min: z.number().int().positive().optional(),
+                max: z.number().int().positive().optional(),
+                step: z.number().int().positive().optional(),
+            })
+            .refine((c) => (c.min ?? 100) <= (c.max ?? 3200), {
+                message: 'cpi.min is above cpi.max',
+            })
+            .optional()
+            .describe(
+                'The pointer (remappr,mouse): the native resolution and the DPI ' +
+                    'range a config or the app may pick (default 100..3200 by 100).',
+            ),
     })
     .describe('A motion sensor on SPI, for the board generator.')
+
+// pattern-check: skip declarative zod schemas mirroring the extra-input and slider bindings
+export const BoardButtonSchema = z
+    .object({
+        key: z
+            .number()
+            .int()
+            .nonnegative()
+            .describe('The keyboard.keys index of the button (after every matrix key).'),
+        pin: z.string().min(1).describe('The button pin, wired to ground.'),
+        code: z
+            .string()
+            .regex(/^INPUT_(KEY|BTN)_[A-Z0-9_]+$/, 'an INPUT_KEY_* or INPUT_BTN_* code')
+            .optional()
+            .describe('The input code it reports (default INPUT_KEY_F13 onward).'),
+    })
+    .describe('An off-matrix button on its own pin (gpio-keys + remappr,extra-input).')
+
+export const BoardSliderSchema = z
+    .object({
+        adc: z.lazy(() => BoardAdcChannelSchema),
+        function: z
+            .enum(['rgb-brightness'])
+            .optional()
+            .describe('What it controls while the config binds it to nothing.'),
+        deadband: z.number().int().min(0).max(255).optional(),
+        pollMs: z.number().int().positive().optional(),
+    })
+    .describe('An analog slider on an ADC channel (remappr,slider).')
 
 // pattern-check: skip declarative zod schemas mirroring the firmware power bindings
 /** A devicetree macro token (`ADC_GAIN_1_6`, `NRF_SAADC_AIN4`) or a number. */

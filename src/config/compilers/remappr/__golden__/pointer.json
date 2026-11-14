@@ -44,7 +44,13 @@
       "bus": "arduino_spi",
       "cs": "P1.12",
       "motion": "P1.10",
-      "reset": "P1.11"
+      "reset": "P1.11",
+      "cpi": {
+        "native": 800,
+        "min": 100,
+        "max": 26000,
+        "step": 50
+      }
     }
   }
 }
