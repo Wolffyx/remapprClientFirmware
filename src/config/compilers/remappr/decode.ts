@@ -146,24 +146,54 @@ export interface DecodeResult {
 
 /* ── little-endian reader ───────────────────────────────────────────────── */
 
+// pattern-check: skip — bounds check added to the existing reader (bug fix)
+/** A read ran past the end of its table frame (or of the buffer). Decoders turn
+ *  it into TABLE_FRAME, as the firmware does for a short table. */
+export class FrameOverrun extends Error {
+    constructor(pos: number, end: number) {
+        super(`read past the end of the table (offset ${pos}, end ${end})`)
+        this.name = 'FrameOverrun'
+    }
+}
+
 export class ByteReader {
     pos = 0
-    constructor(private readonly b: Uint8Array) {}
+    private readonly end: number
+    /** `end` bounds every read (exclusive); a read past it throws FrameOverrun
+     *  instead of running into the next table or reading `undefined` as 0. */
+    constructor(
+        private readonly b: Uint8Array,
+        end: number = b.length,
+    ) {
+        this.end = Math.min(end, b.length)
+    }
+    /** A reader over one table frame's payload, positioned at its start. */
+    static frame(b: Uint8Array, t: { start: number; end: number }): ByteReader {
+        const r = new ByteReader(b, t.end)
+        r.seek(t.start)
+        return r
+    }
     get length(): number {
-        return this.b.length
+        return this.end
     }
     remaining(): number {
-        return this.b.length - this.pos
+        return this.end - this.pos
+    }
+    private need(n: number): void {
+        if (this.pos + n > this.end) throw new FrameOverrun(this.pos, this.end)
     }
     u8(): number {
+        this.need(1)
         return this.b[this.pos++]
     }
     u16(): number {
+        this.need(2)
         const v = this.b[this.pos] | (this.b[this.pos + 1] << 8)
         this.pos += 2
         return v
     }
     u32(): number {
+        this.need(4)
         const v =
             (this.b[this.pos] |
                 (this.b[this.pos + 1] << 8) |
@@ -693,10 +723,27 @@ export function readBlobFrames(bytes: Uint8Array): BlobFrames {
         frames.push({ id, version, start, end: start + len })
         off = start + len
     }
+    // A 1..7-byte remainder cannot hold a table header; the firmware validator
+    // refuses it (config_blob.c), so a blob the device would reject never
+    // decodes here as if it were fine.
+    if (off !== bodyEnd) return fail(DecodeCode.TABLE_FRAME)
     return { code: DecodeCode.OK, configVersion, frames }
 }
 
 export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
+    try {
+        return decodeBlobTables(bytes)
+    } catch (e) {
+        if (!(e instanceof FrameOverrun)) throw e
+        const diag = new DiagnosticBag()
+        diag.error(e.message)
+        return { code: DecodeCode.TABLE_FRAME, diagnostics: diag.all }
+    }
+}
+
+// The decode proper. Every table reader is bounded to its frame, so a short
+// table throws FrameOverrun, which decodeRemapprBlob reports as TABLE_FRAME.
+function decodeBlobTables(bytes: Uint8Array): DecodeResult {
     const diag = new DiagnosticBag()
     const fail = (code: DecodeCodeValue): DecodeResult => ({
         code,
@@ -714,8 +761,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     if (!layerT) return fail(DecodeCode.MISSING)
     if (layerT.version !== 1) return fail(DecodeCode.TABLE_VER)
     if (layerT.end - layerT.start < 8) return fail(DecodeCode.TABLE_FRAME)
-    const lr = new ByteReader(bytes)
-    lr.seek(layerT.start)
+    const lr = ByteReader.frame(bytes, layerT)
     const numLayers = lr.u16()
     const numPositions = lr.u16()
     const defaultTermMs = lr.u16()
@@ -771,8 +817,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const numCells = numLayers * numPositions
     if (bindT.end - bindT.start !== numCells * 2) return fail(DecodeCode.TABLE_FRAME)
     const cells: number[] = []
-    const br = new ByteReader(bytes)
-    br.seek(bindT.start)
+    const br = ByteReader.frame(bytes, bindT)
     for (let i = 0; i < numCells; i++) {
         const idx = br.u16()
         if (idx >= behaviors.length) {
@@ -984,8 +1029,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
 
 // u16 count + count × 16-byte records (BEHAVIOR / SUBS framing). null on overrun.
 function readRecordTable(bytes: Uint8Array, t: TableFrame): BehaviorRecord[] | null {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     if (t.start + 2 + count * 16 > t.end) return null
     const out: BehaviorRecord[] = []
@@ -1005,8 +1049,7 @@ function readPosholds(
     diag: DiagnosticBag,
 ): void {
     if (t.end - t.start < 2) return
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     for (let i = 0; i < count; i++) {
         if (r.pos + 4 > t.end) {
@@ -1054,8 +1097,7 @@ function readRgb(
         diag.error('rgb table header truncated')
         return undefined
     }
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const mode = r.u8()
     const perLayer = (r.u8() & 1) !== 0
     const hdrLayers = r.u8()
@@ -1116,8 +1158,7 @@ function readPersonality(
 ): Pick<ConfigNode, 'personality' | 'role' | 'forwardMode'> {
     const len = t.end - t.start
     if (len < 1) return {}
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const out: Pick<ConfigNode, 'personality' | 'role' | 'forwardMode'> = {}
     const p = ({ 1: 'keyboard', 2: 'mouse' } as Record<
         number,
@@ -1147,8 +1188,7 @@ function readCluster(
         diag.error('cluster table header truncated')
         return undefined
     }
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u8()
     r.u8() // flags (reserved)
     if (t.start + CLUSTER_TBL_HDR_LEN + count * CLUSTER_NODE_WIRE > t.end) {
@@ -1196,8 +1236,7 @@ function readLinkProfile(
         diag.error('link-profile table header truncated')
         return undefined
     }
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const profileId = r.u8()
     const count = r.u8()
     if (
@@ -1286,8 +1325,7 @@ function readNames(
         modMorphs: new Map(),
     }
     if (t.end - t.start < 2) return out
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const dec = new TextDecoder()
     for (let i = 0; i < count; i++) {
@@ -1321,8 +1359,7 @@ function readMacros(
     t: TableFrame,
     diag: DiagnosticBag,
 ): CanonMacro[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const v2 = t.version >= 2
     const out: CanonMacro[] = []
@@ -1372,8 +1409,7 @@ function readCombos(
     layerName: (i: number) => string,
     diag: DiagnosticBag,
 ): CanonCombo[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const out: CanonCombo[] = []
     for (let ci = 0; ci < count; ci++) {
@@ -1406,8 +1442,7 @@ function readEncoders(
     layers: CanonLayer[],
     diag: DiagnosticBag,
 ): void {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const resolve = (
         idx: number,
@@ -1451,8 +1486,7 @@ function readConditionals(
     t: TableFrame,
     layerName: (i: number) => string,
 ): CanonConditionalLayer[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const out: CanonConditionalLayer[] = []
     for (let i = 0; i < count; i++) {
@@ -1473,8 +1507,7 @@ function readActionBindings(
     bytes: Uint8Array,
     t: TableFrame,
 ): CanonActionBinding[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     r.u16() // num_positions — implied by the keymap geometry
     const out: CanonActionBinding[] = []
@@ -1526,7 +1559,7 @@ function readAutocorrect(
             truncated = true
             return
         }
-        const r = new ByteReader(bytes)
+        const r = new ByteReader(bytes, t.end)
         r.seek(t.start + off)
 
         const need = (n: number): boolean => {
@@ -1653,8 +1686,7 @@ function readKeyOverrides(
     layerName: (i: number) => string,
     diag: DiagnosticBag,
 ): CanonKeyOverride[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const out: CanonKeyOverride[] = []
     for (let i = 0; i < count; i++) {
@@ -1706,8 +1738,7 @@ function readLeaders(
     decoded: CanonAction[],
     diag: DiagnosticBag,
 ): CanonLeaderSequence[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const out: CanonLeaderSequence[] = []
     for (let i = 0; i < count; i++) {

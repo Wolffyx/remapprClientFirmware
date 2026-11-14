@@ -114,7 +114,7 @@ export function readSensorTable(
     end: number,
 ): ConfigDeviceSensor | string {
     if (end - start < SENSOR_TBL_HDR_LEN) return 'sensor table header truncated'
-    const r = new ByteReader(bytes)
+    const r = new ByteReader(bytes, end)
     r.seek(start)
     const count = r.u16()
     if (start + SENSOR_TBL_HDR_LEN + count * SENSOR_TBL_ENTRY_LEN > end) {

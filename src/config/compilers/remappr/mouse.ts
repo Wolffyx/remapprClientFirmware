@@ -98,7 +98,7 @@ export function readMouseTable(
     version: number,
 ): ConfigMouse | string {
     if (end - start < MOUSE_TBL_HDR_LEN) return 'mouse table header truncated'
-    const r = new ByteReader(bytes)
+    const r = new ByteReader(bytes, end)
     r.seek(start)
     const cpi = r.u16()
     const autoLayerTimeoutMs = r.u16()
@@ -181,8 +181,7 @@ export function readMouseActions(
     bytes: Uint8Array,
     t: TableFrame,
 ): ConfigMouse['buttonActions'] | string {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     r.u16() // num_positions
     if (t.start + 4 + count * 10 > t.end) return 'action table truncated'

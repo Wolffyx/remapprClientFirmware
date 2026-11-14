@@ -103,7 +103,7 @@ export function readJoystickTable(
 ): ConfigJoystick | string {
     if (end - start < JOYSTICK_TBL_HDR_LEN)
         return 'joystick table header truncated'
-    const r = new ByteReader(bytes)
+    const r = new ByteReader(bytes, end)
     r.seek(start)
     const hatWays = r.u8()
     const count = r.u8()
@@ -183,8 +183,7 @@ export function readJoystickActions(
     bytes: Uint8Array,
     t: TableFrame,
 ): ConfigJoystick['buttonActions'] | string {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     r.u16() // num_positions
     if (t.start + 4 + count * 10 > t.end) return 'action table truncated'
