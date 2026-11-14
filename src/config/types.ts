@@ -126,11 +126,35 @@ export interface CanonTapHold {
     _preset?: 'mod_tap' | 'layer_tap'
 }
 
-export type CanonAction =
+/** Set by the Remappr blob decoder on an action whose 16-byte behavior record
+ *  the canonical form cannot hold in full: a type or sub-code with no canonical
+ *  form, a usage the catalog does not know, or a flag or field the form has no
+ *  slot for. It is the record as hex; the Remappr compiler writes it back so a
+ *  binding the user did not touch survives a save. Never authored by hand, and
+ *  dropped by serialize (an edited binding is a new action without it). */
+export interface CanonWireCarry {
+    _wire?: string
+}
+
+export type CanonAction = (
     | CanonKeyPress
     | CanonTapHold
-    | { type: 'layer'; mode: LayerMode; layer: string }
-    | { type: 'sticky_key'; key: CanonicalKeyId; _keySrc?: string }
+    | {
+          type: 'layer'
+          mode: LayerMode
+          layer: string
+          /** mode 'sticky': release the one-shot layer after this long, ms
+           *  (0/absent = `defaults.stickyReleaseDefaultMs`). */
+          releaseAfterMs?: number
+      }
+    | {
+          type: 'sticky_key'
+          key: CanonicalKeyId
+          _keySrc?: string
+          /** Release the one-shot after this long, ms (0/absent =
+           *  `defaults.stickyReleaseDefaultMs`). */
+          releaseAfterMs?: number
+      }
     | { type: 'caps_word' }
     | { type: 'transparent' }
     | { type: 'none' }
@@ -164,11 +188,29 @@ export type CanonAction =
     | { type: 'mod_morph'; ref: string }
     | { type: 'hold_tap'; ref: string; holdParam: string; tapParam: string }
     // §5.2 vocabulary (firmware behavior_type 20..36) — per-key actions.
-    | { type: 'auto_shift'; key: CanonicalKeyId; mods: Modifier[]; _keySrc?: string }
+    | {
+          type: 'auto_shift'
+          key: CanonicalKeyId
+          mods: Modifier[]
+          _keySrc?: string
+          /** Hold this long to add the modifiers, ms (absent = the default
+           *  tapping term). */
+          timeoutMs?: number
+          /** A re-press within this window taps (no shift), ms. */
+          quickTapMs?: number
+          /** Typing faster than this taps (no shift), ms. */
+          requirePriorIdleMs?: number
+      }
     | { type: 'alt_repeat' }
     | { type: 'layer_lock' }
     | { type: 'layer_mod'; layer: string; mods: Modifier[] }
-    | { type: 'tap_toggle'; layer: string }
+    | {
+          type: 'tap_toggle'
+          layer: string
+          /** Hold past this to make the layer momentary, ms (absent = the
+           *  default tapping term). */
+          tappingTermMs?: number
+      }
     | { type: 'set_base_saved'; layer: string }
     | { type: 'auto_layer'; layer: string }
     | { type: 'gui_lock'; action: LockAction }
@@ -180,6 +222,8 @@ export type CanonAction =
     | { type: 'macro_play'; slot: number }
     | { type: 'leader'; windowMs?: number }
     | { type: 'peripheral'; kind: PeripheralKind; code: number }
+) &
+    CanonWireCarry
 
 export interface CanonGeometry {
     x: number
@@ -226,18 +270,27 @@ export interface CanonEncoderBinding {
 
 /** What an analog slider's position controls. `volume`/`brightness`/`mouse_wheel`
  *  are well-known mapped outputs; `custom` defers to `action`. */
-export type SliderMap = 'volume' | 'brightness' | 'mouse_wheel' | 'custom'
+export type SliderMap = 'volume' | 'brightness' | 'hue' | 'mouse_wheel' | 'custom'
 
 /** A slider's value-mapping: the ADC sweep mapped onto an output. `min`/`max`
  *  bound the output range (firmware defaults when absent); `action` is the
  *  output behavior for `map: "custom"`. Analog input has no first-class keymap
  *  behavior in ZMK/QMK, so compilers emit this as guided scaffolding, not full
- *  codegen — see emitSliderInputs (ZMK) / emitSliderStub (QMK). */
+ *  codegen — see emitSliderInputs (ZMK) / emitSliderStub (QMK).
+ *
+ *  On Remappr (TBL_SLIDER) `brightness` and `hue` follow the slider (LEVEL,
+ *  min/max 0..255 at the bottom/top); `volume`, `mouse_wheel` and `custom`
+ *  fire a behavior per step across the travel (STEPS): `custom` fires
+ *  `action` per step up and `downAction` per step down. */
 export interface CanonSliderBinding {
     map: SliderMap
     min?: number
     max?: number
     action?: CanonAction
+    /** `custom`: what a step down fires (absent = nothing). */
+    downAction?: CanonAction
+    /** Steps across the travel for a stepping map (1..100, default 20). */
+    steps?: number
 }
 
 export interface CanonLayer {
@@ -300,6 +353,13 @@ export interface CanonMacro {
     /** Binding-cells: 0 = plain, 1 = one-param, 2 = two-param macro. */
     params?: 0 | 1 | 2
     steps: CanonMacroStep[]
+    /** §17 write-only macro (a password, say): the device runs it but never
+     *  returns its steps over the control protocol. Written as TBL_MACRO v2. */
+    private?: boolean
+    /** Set by the Remappr blob decoder on a private macro read off a device:
+     *  its steps came back blanked, so `steps` is empty and the macro cannot be
+     *  saved until its steps are entered again. Never authored by hand. */
+    _redacted?: boolean
 }
 
 /** A custom `zmk,behavior-hold-tap`. `bindings` are the two inner behavior
@@ -701,8 +761,9 @@ export interface CanonLeaderSequence {
  *  `enum remappr_action_kind`. */
 export type CanonSemanticAction =
     | { kind: 'none' }
-    /** HID keyboard: `usage` 0x04..0x77 or a modifier 0xE0..0xE7; `mods` = extra
-     *  REMAPPR_MOD_* mask asserted with it. */
+    /** HID keyboard: `usage` 0x04..0xA7 (REMAPPR_KBD_USAGE_MAX; 0x78 and up
+     *  only on firmware that sets the GET_LIMITS KBD_EXT bit) or a modifier
+     *  0xE0..0xE7; `mods` = extra REMAPPR_MOD_* mask asserted with it. */
     | { kind: 'keyboard'; usage: number; mods?: number }
     /** HID consumer/media, page 0x0C, 16-bit `usage` (0 = release). */
     | { kind: 'consumer'; usage: number }
@@ -882,10 +943,68 @@ export type ConfigSensorValue = number | boolean | string
 
 /** The node's sensor (sensor-settings plan §4b). */
 export interface ConfigNodeSensor {
+    /** Which of the device's parts the defaults are for, by part index (its
+     *  place among the board's parts). Absent = 0. */
+    part?: number
     /** The product's defaults by registry name: built into the board and
      *  written into TBL_SENSOR. */
     defaults?: Record<string, ConfigSensorValue>
     [k: string]: unknown
+}
+
+/** What a VALUE / BAR widget shows (screen.h REMAPPR_SCREEN_SRC_*), or a raw
+ *  source code (0x40 + k = host value key k). */
+export type DisplaySource =
+    | 'activeLayer'
+    | 'battery'
+    | 'charging'
+    | 'connection'
+    | 'capsLock'
+    | 'numLock'
+    | 'wpm'
+    | 'deviceName'
+    | number
+
+/** A widget's box and look, in the panel's logical pixels (after rotation). */
+export interface DisplayWidgetBox {
+    x: number
+    y: number
+    w: number
+    h: number
+    /** The 5x7 font at scale 1 (6x8 cells, the default) or 2. */
+    font?: 'small' | 'large'
+    align?: 'left' | 'centre' | 'right'
+    /** The widget's box inverted after drawing. */
+    invert?: boolean
+    /** A one-pixel outline around the box (a RECT: an outline, not filled). */
+    frame?: boolean
+}
+
+/** One widget on a display page (TBL_DISPLAY, display part design §3). */
+export type ConfigDisplayWidget = DisplayWidgetBox &
+    (
+        | { kind: 'text'; text: string }
+        | { kind: 'value'; source: DisplaySource }
+        /** `full` = the value that fills the bar. */
+        | { kind: 'bar'; source: DisplaySource; full: number }
+        /** 1-bit rows as hex, bit 7 = leftmost, whole bytes per row. */
+        | { kind: 'image'; width: number; height: number; bitmap: string }
+        | { kind: 'clock'; format: 'hm' | 'hms' | 'date' }
+        | { kind: 'rect' }
+    )
+
+/** One page of a display: drawn on the DISPLAY part `part` (by part index). */
+export interface ConfigDisplayPage {
+    part: number
+    /** Shown first on its display. */
+    default?: boolean
+    widgets: ConfigDisplayWidget[]
+}
+
+/** What the node's displays show (TBL_DISPLAY). An empty page list clears the
+ *  device's screens. */
+export interface ConfigDisplay {
+    pages: ConfigDisplayPage[]
 }
 
 /** Pointer/mouse-node settings compiled to TBL_MOUSE (§4b). */
@@ -1104,6 +1223,8 @@ export interface ConfigNode {
     /** The sensor's product defaults (TBL_SENSOR, the board's
      *  remappr,setting-defaults). */
     sensor?: ConfigNodeSensor
+    /** What the node's displays show (TBL_DISPLAY). */
+    display?: ConfigDisplay
     [k: string]: unknown
 }
 

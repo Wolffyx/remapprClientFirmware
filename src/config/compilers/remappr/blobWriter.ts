@@ -17,8 +17,8 @@ export const BLOB_HEADER_LEN = 20
 // REMAPPR_CLUSTER_PSK_LEN in include/remappr/config_blob.h.
 export const CLUSTER_PSK_LEN = 16
 
-// enum remappr_table_id (config_blob.h). Ids 2(LAYOUT), 8(MOUSE), 9(PROFILE),
-// 10(ALIAS), 11(SECURITY) are reserved — the firmware does not decode them.
+// enum remappr_table_id (config_blob.h). Ids 2(LAYOUT), 9(PROFILE), 10(ALIAS)
+// and 11(SECURITY) are reserved — the firmware does not decode them.
 export const TableId = {
     Layer: 1,
     Layout: 2,
@@ -50,6 +50,10 @@ export const TableId = {
     Joystick: 28, // joystick axes + hat (input-layout plan §4)
     Sensor: 29, // sensor settings (sensor-settings plan §4)
     Power: 30, // idle / sleep / off timeouts (sleep-wake design)
+    // Written from `node.display` / `layers[].sliderBindings`; a save carries a
+    // device's own table when the config does not write one (carry.ts).
+    Display: 31, // what each display shows (display part design §3)
+    Slider: 32, // what each slider does, per layer (slider part design §4b)
 } as const
 
 /** enum remappr_personality (firmware include/remappr/role.h). */
@@ -199,7 +203,7 @@ export const NameKind = {
     ModMorph: 2,
 } as const
 
-// enum remappr_behavior_type (behavior_table.h) — 39 types, 0..38 (dense). The
+// enum remappr_behavior_type (behavior_table.h) — 40 types, 0..39 (dense). The
 // 16-byte record layout is identical across all types; only `type` and the
 // interpretation of tap/hold/term/quick/prior differ.
 export const BehaviorType = {
@@ -455,7 +459,12 @@ export interface MacroStep {
 
 export interface MacroRecord {
     steps: MacroStep[]
+    /** §17 write-only (REMAPPR_MACRO_FLAG_PRIVATE); needs TBL_MACRO v2. */
+    private?: boolean
 }
+
+/** TBL_MACRO v2 per-macro flags (behavior_table.h REMAPPR_MACRO_FLAG_*). */
+export const MACRO_FLAG_PRIVATE = 1 << 0
 
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_CONDITIONAL layout
 /** One conditional (tri-)layer: while every ifLayer is active, thenLayer is on. */
@@ -550,7 +559,8 @@ export const ACT_GAMEPAD_AXIS = 18
 
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_JOYSTICK layout
 /** TBL_JOYSTICK (id 28) v1: the hat ways (0 = 8) and one 8-byte entry per
- *  analog input it configures. */
+ *  analog input it configures, shaping included. The firmware reads v1 for one
+ *  release only; write v2 (JoystickTableV2) with the shaping in TBL_PART. */
 export interface JoystickTable {
     hatWays: number
     axes: Array<{
@@ -569,6 +579,101 @@ export const JOY_FLAG_INVERT = 1 << 0
 export const JOY_FLAG_RADIAL = 1 << 1
 export const JOYSTICK_TBL_HDR_LEN = 2
 export const JOYSTICK_TBL_AXIS_LEN = 8
+export const JOYSTICK_TBL_AXIS_LEN_V2 = 2
+
+/** TBL_JOYSTICK v2: what each analog input means (its report axis) and the hat
+ *  ways. The shaping (invert, radial, curve, deadzones) is the AXES part's,
+ *  in TBL_PART (docs/part-wire-v1.md §4). */
+export interface JoystickTableV2 {
+    hatWays: number
+    axes: Array<{ input: number; out: number }>
+}
+
+// pattern-check: skip plain wire-DTO interface mirroring the TBL_SLIDER layout
+/** One TBL_SLIDER (id 32) entry, 10 bytes (config_blob.h, behavior_table.h).
+ *  `slider` is the rank among the device's SLIDER parts; `layer` 0xFF = any
+ *  layer without its own entry. LEVEL: `arg` = SliderTarget, `min`/`max` the
+ *  output at the bottom / top, both behaviors SLIDER_BH_NONE. STEPS: `arg` =
+ *  steps across the travel (1..100), min = max = 0, `up`/`down` BEHAVIOR
+ *  indices fired per step (SLIDER_BH_NONE = none). */
+export interface SliderRecord {
+    slider: number
+    layer: number
+    kind: number
+    arg: number
+    min: number
+    max: number
+    up: number
+    down: number
+}
+/** enum remappr_slider_kind. */
+export const SliderKind = {
+    level: 1,
+    steps: 2,
+} as const
+/** enum remappr_slider_target (what a LEVEL slider sets). */
+export const SliderTarget = {
+    rgbBrightness: 1,
+    rgbHue: 2,
+} as const
+export const SLIDER_BH_NONE = 0xffff
+export const SLIDER_ANY_LAYER = 0xff
+export const SLIDER_STEPS_MAX = 100
+export const SLIDER_TBL_HDR_LEN = 2
+export const SLIDER_TBL_ENTRY_LEN = 10
+
+// pattern-check: skip plain wire-DTO interfaces mirroring the TBL_DISPLAY layout
+/** One TBL_DISPLAY page: the DISPLAY part it belongs to (by part index) and
+ *  its widgets' run in the widget list. */
+export interface DisplayPageRecord {
+    part: number
+    first: number
+    count: number
+    flags: number
+}
+/** One TBL_DISPLAY widget, 12 bytes (include/remappr/screen.h). */
+export interface DisplayWidgetRecord {
+    kind: number
+    flags: number
+    x: number
+    y: number
+    w: number
+    h: number
+    font: number
+    source: number
+    arg: number
+    arg2: number
+}
+/** TBL_DISPLAY (id 31) v1: pages, widgets, and the string / bitmap pools the
+ *  widgets point into. */
+export interface DisplayTable {
+    pages: DisplayPageRecord[]
+    widgets: DisplayWidgetRecord[]
+    strings: Uint8Array
+    bitmaps: Uint8Array
+}
+/** enum remappr_screen_kind. */
+export const ScreenKind = {
+    text: 1,
+    value: 2,
+    bar: 3,
+    image: 4,
+    clock: 5,
+    rect: 6,
+} as const
+export const SCREEN_W_INVERT = 1 << 0
+export const SCREEN_W_ALIGN_SHIFT = 1
+export const SCREEN_W_ALIGN_MASK = 3 << SCREEN_W_ALIGN_SHIFT
+export const SCREEN_W_FRAME = 1 << 3
+export const SCREEN_PAGE_DEFAULT = 1 << 0
+export const SCREEN_TBL_HDR_LEN = 8
+export const SCREEN_TBL_PAGE_LEN = 4
+export const SCREEN_TBL_WIDGET_LEN = 12
+/** What one device holds (screen.h REMAPPR_SCREEN_*_MAX defaults). */
+export const SCREEN_PAGES_MAX = 16
+export const SCREEN_WIDGETS_MAX = 64
+export const SCREEN_STRINGS_MAX = 1024
+export const SCREEN_BITMAPS_MAX = 4096
 
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_PART layout
 /** One TBL_PART (id 29, was TBL_SENSOR) entry: a setting's value for one of
@@ -867,6 +972,66 @@ export class BlobBuilder {
     }
 
     // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_JOYSTICK (id 28) v2: u8 hat_ways, u8 axis_count, then per entry
+     *  u8 input, u8 out_axis — matching firmware decode_joystick.c. */
+    joystickTableV2(j: JoystickTableV2): this {
+        this.tableBegin(TableId.Joystick, 2)
+        this.w.u8(j.hatWays)
+        this.w.u8(j.axes.length)
+        for (const a of j.axes) {
+            this.w.u8(a.input)
+            this.w.u8(a.out)
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_SLIDER (id 32) v1: u16 count, then per entry u8 slider, u8 layer,
+     *  u8 kind, u8 arg, u8 min, u8 max, u16 up_bh, u16 down_bh — matching
+     *  firmware decode_sliders.c. */
+    sliderTable(entries: readonly SliderRecord[]): this {
+        this.tableBegin(TableId.Slider, 1)
+        this.w.u16(entries.length)
+        for (const e of entries) {
+            for (const v of [e.slider, e.layer, e.kind, e.arg, e.min, e.max]) {
+                this.w.u8(v)
+            }
+            this.w.u16(e.up)
+            this.w.u16(e.down)
+        }
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_DISPLAY (id 31) v1: u8 page_count, u8 widget_count, u16 strings_len,
+     *  u16 bitmaps_len, u16 reserved, the pages (4 B), the widgets (12 B), then
+     *  the string and bitmap pools — matching firmware decode_display.c. */
+    displayTable(d: DisplayTable): this {
+        this.tableBegin(TableId.Display, 1)
+        this.w.u8(d.pages.length)
+        this.w.u8(d.widgets.length)
+        this.w.u16(d.strings.length)
+        this.w.u16(d.bitmaps.length)
+        this.w.u16(0) // reserved
+        for (const p of d.pages) {
+            for (const v of [p.part, p.first, p.count, p.flags]) this.w.u8(v)
+        }
+        for (const x of d.widgets) {
+            for (const v of [x.kind, x.flags, x.x, x.y, x.w, x.h, x.font, x.source]) {
+                this.w.u8(v)
+            }
+            this.w.u16(x.arg)
+            this.w.u16(x.arg2)
+        }
+        for (const b of d.strings) this.w.u8(b)
+        for (const b of d.bitmaps) this.w.u8(b)
+        this.tableEnd()
+        return this
+    }
+
+    // pattern-check: skip one more table-emit method on the existing Builder
     /** TBL_PART (id 29): u16 count, then per entry u8 part, u8 id, u8 ch,
      *  u8 reserved, i32 value — matching firmware decode_sensor.c. Version 1
      *  while every channel is 0 (the same bytes firmware before the PART
@@ -887,11 +1052,19 @@ export class BlobBuilder {
     }
 
     // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_MACRO. v1 unless a macro is private: v2 adds u8 flags + u8 reserved
+     *  after each num_steps (§17), and firmware older than v2 refuses it, so a
+     *  blob without private macros stays v1. */
     macroTable(macros: MacroRecord[]): this {
-        this.tableBegin(TableId.Macro, 1)
+        const v2 = macros.some((m) => m.private)
+        this.tableBegin(TableId.Macro, v2 ? 2 : 1)
         this.w.u16(macros.length)
         for (const m of macros) {
             this.w.u16(m.steps.length)
+            if (v2) {
+                this.w.u8(m.private ? MACRO_FLAG_PRIVATE : 0)
+                this.w.u8(0) // reserved
+            }
             for (const s of m.steps) {
                 this.w.u8(s.op)
                 this.w.u8(0) // pad
