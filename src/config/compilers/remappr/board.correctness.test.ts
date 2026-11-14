@@ -415,3 +415,56 @@ describe('L1.15 chain-length', () => {
         ).toBe(true)
     })
 })
+
+describe('L1.8 free strings reach devicetree checked', () => {
+    it('keeps a */ in meta.name from closing the header comment', () => {
+        const json = JSON.parse(pad({ matrix: { rows: ROWS1, cols: COLS2 } }))
+        json.meta.name = 'Evil */ / { bad'
+        const ov = overlayOf(compile(JSON.stringify(json)))
+        expect(ov.split('*/')).toHaveLength(2) // only the comment's own close
+    })
+
+    it.skipIf(!TC)('a shield named with */ still compiles with dtc', () => {
+        const json = JSON.parse(pad({ matrix: { rows: ROWS1, cols: COLS2 } }))
+        json.meta.name = 'Evil */ / { bad'
+        expect(dtcCheck(TC!, overlayOf(compile(JSON.stringify(json)))).log).toBe('')
+    })
+
+    it('takes a node label with or without its leading &', () => {
+        const ov = overlayOf(
+            compile(
+                strip(
+                    { spi: '&spi3' },
+                    {
+                        controller: 'nrf52840dk/nrf52840',
+                        sensor: { part: 'pixart,paw3395', bus: '&arduino_spi', motion: 'P1.10' },
+                    },
+                ),
+            ),
+        )
+        expect(ov).not.toContain('&&')
+        expect(ov).toContain('&spi3 {')
+        expect(ov).toContain('&arduino_spi {')
+    })
+
+    it('is an error for a label, compatible or raw spec that is not devicetree', () => {
+        const res = compile(
+            pad({
+                matrix: { rows: ['&gpio0 4 GPIO_ACTIVE_HIGH>; evil = <1'], cols: COLS2 },
+                sensor: { part: 'pixart,"paw', bus: 'spi 1', motion: '&gpio1 10 0' },
+            }),
+        )
+        const errs = errorsOf(res)
+        expect(errs.some((m) => /board\.matrix|GPIO spec/.test(m))).toBe(true)
+        expect(errs.some((m) => /compatible/.test(m))).toBe(true)
+        expect(errs.some((m) => /node label/.test(m))).toBe(true)
+    })
+
+    it('validates board.encoders in the schema', () => {
+        expect(() =>
+            parseKeymap(pad({ encoders: [{ a: 'PA0', b: 'PA1', axis: 'INPUT_REL_WHEEL>; x = <1' }] })),
+        ).toThrow()
+        expect(() => parseKeymap(pad({ encoders: [{ a: 'PA0' }] }))).toThrow()
+        expect(() => parseKeymap(pad({ encoders: [{ a: 'PA0', b: 'PA1', steps: 4 }] }))).not.toThrow()
+    })
+})

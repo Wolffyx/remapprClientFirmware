@@ -24,6 +24,7 @@ import type { DiagnosticBag } from '../../diagnostics'
 import { ROLE_FLAGS } from '../../pinmaps'
 import type { CanonWs2812, ConfigKeymap, ConfigSensorValue } from '../../types'
 import type { PinBook, Soc } from './boardPins'
+import { dtCompatible, dtLabel } from './dtText'
 
 /** A peripheral's contribution to the shield: header `#include`s, top-level DT
  *  blocks (appended after the main `/ {}`), and Kconfig.defconfig lines. */
@@ -266,6 +267,24 @@ function checkChain(
     ]
 }
 
+const PHANDLE = /^&[A-Za-z_][A-Za-z0-9_]*$/
+const DMAS = /^<[^;{}<>"\r\n]*>(\s*,\s*<[^;{}<>"\r\n]*>)*$/
+
+/** The raw STM32 strings are written into devicetree as they are: pinctrl
+ *  entries must be phandles, `dmas` a list of `<...>` cell groups. */
+function checkStm32Raw(
+    s: NonNullable<CanonWs2812['stm32']>,
+    diag: DiagnosticBag,
+    path: (string | number)[],
+): void {
+    s.pinctrl.forEach((p, i) => {
+        if (!PHANDLE.test(p.trim()))
+            diag.error(`pinctrl entry "${p}" is not a phandle like "&spi1_mosi_pa7"`, [...path, 'pinctrl', i])
+    })
+    if (s.dmas !== undefined && !DMAS.test(s.dmas.trim()))
+        diag.error(`dmas "${s.dmas}" is not a list of <...> cell groups`, [...path, 'dmas'])
+}
+
 /** WS2812 per-key RGB from `keyboard.hardware.ws2812` (chain-length = LED count).
  *  Emits the SPI led_strip block + a `chosen remappr,led-strip` the runtime RGB
  *  service renders the per-key map / effects onto. No ws2812 → empty fragment.
@@ -277,10 +296,12 @@ export function emitRgb(
     book: PinBook,
     diag: DiagnosticBag,
 ): PeripheralFragment {
-    const ws = config.keyboard.hardware?.ws2812
-    if (!ws) return EMPTY
+    const raw = config.keyboard.hardware?.ws2812
+    if (!raw) return EMPTY
     const soc = book.target.soc
     const path = ['keyboard', 'hardware', 'ws2812']
+    const ws = { ...raw, spi: dtLabel(raw.spi, diag, [...path, 'spi']) }
+    if (ws.stm32) checkStm32Raw(ws.stm32, diag, [...path, 'stm32'])
     book.claim(ws.dataPin, [...path, 'dataPin'])
     const kind: Soc = ws.stm32 ? 'stm32' : soc
     if (ws.stm32 && soc !== 'stm32' && soc !== 'unknown') {
@@ -418,14 +439,16 @@ export function emitSensor(
     const pin = (k: 'cs' | 'motion' | 'reset', flags: string): string =>
         book.spec(sensor[k] ?? '', flags, path(k))
     const defaults = settingDefaults(config.node?.sensor?.defaults ?? {}, diag)
-    const unit = sensor.part.split(',').pop() || 'sensor'
+    const part = dtCompatible(sensor.part, diag, path('part'))
+    const bus = dtLabel(sensor.bus, diag, path('bus'))
+    const unit = part.split(',').pop() || 'sensor'
     const nodes = [
-        `&${sensor.bus} {`,
+        `&${bus} {`,
         `\tstatus = "okay";`,
         ...(sensor.cs ? [`\tcs-gpios = <${pin('cs', 'GPIO_ACTIVE_LOW')}>;`] : []),
         ``,
         `\tremappr_sensor: ${unit}@0 {`,
-        `\t\tcompatible = "${sensor.part}";`,
+        `\t\tcompatible = "${part}";`,
         `\t\treg = <0>;`,
         `\t\tspi-max-frequency = <${sensor.spiMaxHz ?? 8000000}>;`,
         `\t\tmotion-gpios = <${pin('motion', '(GPIO_ACTIVE_LOW | GPIO_PULL_UP)')}>;`,

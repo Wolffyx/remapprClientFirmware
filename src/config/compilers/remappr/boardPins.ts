@@ -23,6 +23,10 @@ import {
     resolveZmkPin,
 } from '../../pinmaps'
 import type { ConfigKeymap } from '../../types'
+import { dtCellsOk } from './dtText'
+
+/** A raw spec: a phandle, then cells, with nothing that ends the cell list. */
+const RAW_SPEC = /^&[A-Za-z_][A-Za-z0-9_]*(\s|$)/
 
 export type Soc = 'nrf' | 'stm32' | 'rp2040' | 'unknown'
 
@@ -130,7 +134,7 @@ export class PinBook {
     claim(raw: string, path: DiagnosticPath): void {
         const s = raw.trim()
         const core = s.startsWith('&') ? s : resolvePinCore(s, this.target)
-        if (core) this.take(core, path)
+        if (core && dtCellsOk(core)) this.take(core, path)
     }
 
     /** The text inside `<...>` for one pin: a raw `&`-spec verbatim, or the
@@ -159,13 +163,23 @@ export class PinBook {
 
     /** A raw `&`-spec as is, a label's resolved core, or null (an error). */
     private core(s: string, path: DiagnosticPath): string | null {
-        if (s.startsWith('&')) return s
+        if (s.startsWith('&')) return this.raw(s, path)
         const core = resolvePinCore(s, this.target)
         if (core) return core
         this.diag.error(
             `GPIO "${s}" does not resolve on ${this.describe()}: give ` +
                 `${FORM_HINT[this.target.soc]}, a label of a known board, or a ` +
                 `raw "&gpioN pin FLAGS" spec`,
+            path,
+        )
+        return null
+    }
+
+    private raw(s: string, path: DiagnosticPath): string | null {
+        if (RAW_SPEC.test(s) && dtCellsOk(s)) return s
+        this.diag.error(
+            `GPIO spec "${s}" is not a devicetree phandle and cells ` +
+                `("&gpioN pin FLAGS")`,
             path,
         )
         return null

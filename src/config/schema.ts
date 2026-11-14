@@ -896,6 +896,21 @@ export const BoardSchema = z
             .optional(),
         split: z.boolean().optional(),
         storage: z.enum(['zms', 'nvs']).optional(),
+        encoders: z
+            .array(
+                z.object({
+                    a: z.string().min(1).describe('Phase-A GPIO.'),
+                    b: z.string().min(1).describe('Phase-B GPIO.'),
+                    steps: z.number().int().positive().optional(),
+                    axis: z
+                        .string()
+                        .regex(/^(INPUT_[A-Z0-9_]+|\d+)$/)
+                        .optional()
+                        .describe('Relative axis code, e.g. "INPUT_REL_WHEEL".'),
+                }),
+            )
+            .optional()
+            .describe('Rotary encoders (gpio-qdec) for the board generator.'),
         sensor: z.lazy(() => BoardSensorSchema).optional(),
         reservedPins: z
             .array(
