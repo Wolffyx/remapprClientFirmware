@@ -208,6 +208,14 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         help: 'Time between scans while the device sleeps: longer saves power, shorter wakes faster.',
     },
     {
+        id: 0x34,
+        name: 'eagerPress',
+        macro: 'EAGER_PRESS',
+        label: 'Eager press',
+        type: 'bool',
+        help: 'Send a press on the first read instead of waiting out the press debounce; releases are still debounced.',
+    },
+    {
         id: 0x40,
         name: 'axisInvert',
         macro: 'AXIS_INVERT',

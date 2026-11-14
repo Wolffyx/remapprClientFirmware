@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "kind": "remappr.keymap",
+  "meta": { "name": "Output nRF", "target": "zmk" },
+  "keyboard": {
+    "id": "output_nrf",
+    "name": "Output nRF",
+    "keys": [
+      { "x": 0, "y": 0, "matrix": [0, 0] },
+      { "x": 1, "y": 0, "matrix": [0, 1] }
+    ],
+    "hardware": {
+      "ws2812": { "spi": "spi3", "dataPin": "P1.13", "chainLength": 12, "colorOrder": "GRB" }
+    }
+  },
+  "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+  "node": { "personality": "keyboard", "role": "coordinator" },
+  "board": {
+    "controller": "nrf52840dk/nrf52840",
+    "matrix": {
+      "diode": "col2row",
+      "rows": ["P0.03"],
+      "cols": ["P1.01", "P1.02"],
+      "pollMs": 1,
+      "sleepPollMs": 20,
+      "settleUs": 30,
+      "debouncePressMode": "defer",
+      "debouncePressMs": 5,
+      "debounceReleaseMs": 10
+    },
+    "ledZones": [
+      { "target": "backlight", "offset": 0, "length": 8 },
+      { "target": "indicator", "offset": 8, "length": 4 }
+    ],
+    "nodeBus": [{ "uart": "uart1", "currentSpeed": 1000000 }],
+    "haptic": { "pwm": "pwm0", "channel": 0, "periodNs": 20000000 },
+    "displays": [
+      {
+        "panel": {
+          "part": "solomon,ssd1306fb",
+          "bus": "i2c0",
+          "reg": 60,
+          "width": 128,
+          "height": 32,
+          "busHz": 400000,
+          "props": {
+            "segment-offset": 0,
+            "page-offset": 0,
+            "display-offset": 0,
+            "multiplex-ratio": 31,
+            "prechargep": 34,
+            "segment-remap": true,
+            "com-invdir": true,
+            "com-sequential": true
+          }
+        }
+      }
+    ]
+  }
+}

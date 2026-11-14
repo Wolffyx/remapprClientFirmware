@@ -21,6 +21,7 @@ export const CONTROL_KINDS = [
     'sensor',
     'encoder',
     'axis',
+    'display',
 ] as const satisfies readonly ControlKind[]
 
 export const CONTROL_SHAPES = [

@@ -1,0 +1,32 @@
+if SHIELD_OUTPUT_NRF
+
+# The matrix + keymap drivers auto-enable from devicetree; the input
+# subsystem itself must be on.
+config INPUT
+	default y
+
+# WS2812 per-key RGB (chain-length 12) over spi3.
+config REMAPPR_RGB_LED
+	default y
+config SPI
+	default y
+config WS2812_STRIP_SPI
+	default y
+
+# 1 node-bus port(s) from board.nodeBus.
+config REMAPPR_NODE_BUS
+	default y
+config REMAPPR_NODE_BUS_MAIN
+	default y
+
+# The haptic actuator (remappr,haptic).
+config REMAPPR_HAPTIC_SVC
+	default y
+
+# 1 display part(s) from board.displays.
+config DISPLAY
+	default y
+config REMAPPR_DISPLAY_PART
+	default y
+
+endif # SHIELD_OUTPUT_NRF

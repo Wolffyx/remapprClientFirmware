@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "kind": "remappr.keymap",
+  "meta": {
+    "name": "Custom Dongle Pad",
+    "target": "zmk"
+  },
+  "keyboard": {
+    "id": "custom_dongle",
+    "name": "Custom Dongle Pad",
+    "keys": [
+      {
+        "x": 0,
+        "y": 0,
+        "matrix": [
+          0,
+          0
+        ]
+      },
+      {
+        "x": 1,
+        "y": 0,
+        "matrix": [
+          0,
+          1
+        ]
+      },
+      {
+        "x": 0,
+        "y": 1,
+        "matrix": [
+          1,
+          0
+        ]
+      },
+      {
+        "x": 1,
+        "y": 1,
+        "matrix": [
+          1,
+          1
+        ]
+      }
+    ]
+  },
+  "layers": [
+    {
+      "name": "base",
+      "bindings": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ]
+    }
+  ],
+  "board": {
+    "controller": "nrf52840dongle/nrf52840",
+    "matrix": {
+      "diode": "col2row",
+      "rows": [
+        "ROW0",
+        "ROW1"
+      ],
+      "cols": [
+        "COL0",
+        "COL1"
+      ]
+    },
+    "statusLeds": [
+      {
+        "function": "link",
+        "led": "led0_green"
+      }
+    ],
+    "pinMap": {
+      "ROW0": "&gpio0 2",
+      "ROW1": "&gpio0 29",
+      "COL0": "&gpio0 31",
+      "COL1": "&gpio1 13"
+    }
+  }
+}

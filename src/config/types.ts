@@ -122,11 +122,35 @@ export interface CanonTapHold {
     _preset?: 'mod_tap' | 'layer_tap'
 }
 
-export type CanonAction =
+/** Set by the Remappr blob decoder on an action whose 16-byte behavior record
+ *  the canonical form cannot hold in full: a type or sub-code with no canonical
+ *  form, a usage the catalog does not know, or a flag or field the form has no
+ *  slot for. It is the record as hex; the Remappr compiler writes it back so a
+ *  binding the user did not touch survives a save. Never authored by hand, and
+ *  dropped by serialize (an edited binding is a new action without it). */
+export interface CanonWireCarry {
+    _wire?: string
+}
+
+export type CanonAction = (
     | CanonKeyPress
     | CanonTapHold
-    | { type: 'layer'; mode: LayerMode; layer: string }
-    | { type: 'sticky_key'; key: CanonicalKeyId; _keySrc?: string }
+    | {
+          type: 'layer'
+          mode: LayerMode
+          layer: string
+          /** mode 'sticky': release the one-shot layer after this long, ms
+           *  (0/absent = `defaults.stickyReleaseDefaultMs`). */
+          releaseAfterMs?: number
+      }
+    | {
+          type: 'sticky_key'
+          key: CanonicalKeyId
+          _keySrc?: string
+          /** Release the one-shot after this long, ms (0/absent =
+           *  `defaults.stickyReleaseDefaultMs`). */
+          releaseAfterMs?: number
+      }
     | { type: 'caps_word' }
     | { type: 'transparent' }
     | { type: 'none' }
@@ -165,11 +189,24 @@ export type CanonAction =
           key: CanonicalKeyId
           mods: Modifier[]
           _keySrc?: string
+          /** Hold this long to add the modifiers, ms (absent = the default
+           *  tapping term). */
+          timeoutMs?: number
+          /** A re-press within this window taps (no shift), ms. */
+          quickTapMs?: number
+          /** Typing faster than this taps (no shift), ms. */
+          requirePriorIdleMs?: number
       }
     | { type: 'alt_repeat' }
     | { type: 'layer_lock' }
     | { type: 'layer_mod'; layer: string; mods: Modifier[] }
-    | { type: 'tap_toggle'; layer: string }
+    | {
+          type: 'tap_toggle'
+          layer: string
+          /** Hold past this to make the layer momentary, ms (absent = the
+           *  default tapping term). */
+          tappingTermMs?: number
+      }
     | { type: 'set_base_saved'; layer: string }
     | { type: 'auto_layer'; layer: string }
     | { type: 'gui_lock'; action: LockAction }
@@ -181,6 +218,8 @@ export type CanonAction =
     | { type: 'macro_play'; slot: number }
     | { type: 'leader'; windowMs?: number }
     | { type: 'peripheral'; kind: PeripheralKind; code: number }
+) &
+    CanonWireCarry
 
 export interface CanonGeometry {
     x: number
@@ -255,7 +294,8 @@ export type SliderMap =
  *  bound the output range (firmware defaults when absent); `action` is the
  *  output behavior for `map: "custom"`. Analog input has no first-class keymap
  *  behavior in ZMK/QMK, so compilers emit this as guided scaffolding, not full
- *  codegen — see emitSliderInputs (ZMK) / emitSliderStub (QMK). */
+ *  codegen — see emitSliderInputs (ZMK) / emitSliderStub (QMK). Remappr
+ *  compiles it to TBL_SLIDER (compilers/remappr/slider.ts). */
 export interface CanonSliderBinding {
     map: SliderMap
     min?: number
@@ -335,6 +375,13 @@ export interface CanonMacro {
     /** Binding-cells: 0 = plain, 1 = one-param, 2 = two-param macro. */
     params?: 0 | 1 | 2
     steps: CanonMacroStep[]
+    /** §17 write-only macro (a password, say): the device runs it but never
+     *  returns its steps over the control protocol. Written as TBL_MACRO v2. */
+    private?: boolean
+    /** Set by the Remappr blob decoder on a private macro read off a device:
+     *  its steps came back blanked, so `steps` is empty and the macro cannot be
+     *  saved until its steps are entered again. Never authored by hand. */
+    _redacted?: boolean
 }
 
 /** A custom `zmk,behavior-hold-tap`. `bindings` are the two inner behavior
@@ -821,8 +868,9 @@ export interface CanonLeaderSequence {
  *  `enum remappr_action_kind`. */
 export type CanonSemanticAction =
     | { kind: 'none' }
-    /** HID keyboard: `usage` 0x04..0x77 or a modifier 0xE0..0xE7; `mods` = extra
-     *  REMAPPR_MOD_* mask asserted with it. */
+    /** HID keyboard: `usage` 0x04..0xA7 (REMAPPR_KBD_USAGE_MAX; 0x78 and up
+     *  only on firmware that sets the GET_LIMITS KBD_EXT bit) or a modifier
+     *  0xE0..0xE7; `mods` = extra REMAPPR_MOD_* mask asserted with it. */
     | { kind: 'keyboard'; usage: number; mods?: number }
     /** HID consumer/media, page 0x0C, 16-bit `usage` (0 = release). */
     | { kind: 'consumer'; usage: number }
@@ -877,6 +925,63 @@ export interface BoardEncoder {
     steps?: number
     /** Zephyr relative axis code the qdec emits, e.g. "INPUT_REL_WHEEL" (default). */
     axis?: string
+    /** Phase sample period while turning, us. Default 2000. */
+    sampleTimeUs?: number
+    /** No step this long ends active sampling, ms. Default 200. */
+    idleTimeoutMs?: number
+    /** Idle poll period, us; 0 = pin interrupts. Default 5000. */
+    idlePollTimeUs?: number
+}
+
+// pattern-check: skip plain data interfaces for the input board fields
+/** An off-matrix button: a keyboard.keys entry after every matrix key. */
+export interface BoardButton {
+    key: number
+    pin: string
+    /** INPUT_KEY_* / INPUT_BTN_* code; default INPUT_KEY_F13 onward. */
+    code?: string
+}
+
+export interface BoardHaptic {
+    pwm: string
+    channel: number
+    /** PWM period, ns. */
+    periodNs: number
+    inverted?: boolean
+    pinctrl?: string[]
+}
+
+export interface BoardLedZone {
+    target: 'underglow' | 'backlight' | 'per-key' | 'indicator'
+    offset: number
+    length: number
+}
+
+/** A panel node the shield declares on its bus. */
+export interface BoardPanel {
+    part: string
+    bus: string
+    reg: number
+    width: number
+    height: number
+    busHz?: number
+    /** Driver properties by devicetree name. */
+    props?: Record<string, number | number[] | boolean | string>
+}
+
+export interface BoardDisplay {
+    /** A board panel's label, or a panel to declare. */
+    panel: string | BoardPanel
+    /** Part defaults by registry name. */
+    defaults?: Record<string, ConfigSensorValue>
+}
+
+/** An analog slider on an ADC channel. */
+export interface BoardSlider {
+    adc: BoardAdcChannel
+    function?: 'rgb-brightness'
+    deadband?: number
+    pollMs?: number
 }
 
 export interface ConfigBoard {
@@ -886,15 +991,53 @@ export interface ConfigBoard {
         rows?: string[]
         cols?: string[]
         pollMs?: number
+        /** Scan period while asleep, ms. */
+        sleepPollMs?: number
+        /** Strobe settle time, us. */
+        settleUs?: number
+        debouncePressMode?: 'eager' | 'defer'
+        debouncePressMs?: number
+        debounceReleaseMs?: number
         [k: string]: unknown
     }
     split?: boolean
     storage?: 'zms' | 'nvs'
+    /** Layer capacity (`max-layers`): layers the app may fill without a
+     *  reflash. Default: the authored layers, at least 4. */
+    maxLayers?: number
     /** Rotary encoder hardware for the board generator (opt-in; emits gpio-qdec). */
     encoders?: BoardEncoder[]
     /** A motion sensor on SPI (opt-in; emits its node with the product's
      *  sensor defaults from node.sensor). */
     sensor?: BoardSensor
+    /** The battery and where its charge is read (remappr,battery). */
+    battery?: BoardBattery
+    /** Status LEDs and what each shows (remappr,status-led). */
+    statusLeds?: BoardStatusLed[]
+    /** Power-off choices the chip leaves open (remappr,power-off). */
+    powerOff?: BoardPowerOff
+    /** Node-bus ports (remappr,node-bus-port), one per inter-node UART. */
+    nodeBus?: BoardNodeBusPort[]
+    /** The radio chip on SPI (remappr,spi-link). */
+    radioLink?: BoardRadioLink
+    /** 2.4 GHz radio facts (remappr,radio-config). */
+    radio?: { channelSeed: number[] }
+    /** Off-matrix buttons on their own pins (remappr,extra-input). */
+    buttons?: BoardButton[]
+    /** Analog sliders (remappr,slider). */
+    sliders?: BoardSlider[]
+    /** A haptic actuator on PWM (remappr,haptic). */
+    haptic?: BoardHaptic
+    /** LED strip slices per lighting role (remappr,led-zone). */
+    ledZones?: BoardLedZone[]
+    /** Display parts (remappr,display). */
+    displays?: BoardDisplay[]
+    /** The board's own pin labels: label → phandle and pin ("&gpio0 4",
+     *  "&arduino_header 10"), looked up before the built-in tables. */
+    pinMap?: Record<string, string>
+    /** Pins the board already uses for a bus it owns (console or node-bus
+     *  UART, a coprocessor SPI); the generator refuses any other use of one. */
+    reservedPins?: { pin: string; use: string }[]
     [k: string]: unknown
 }
 
@@ -914,6 +1057,103 @@ export interface BoardSensor {
     reset?: string
     /** SPI clock, Hz (default 8000000). */
     spiMaxHz?: number
+    /** The pointer (remappr,mouse): native resolution and the DPI range. */
+    cpi?: { native: number; min?: number; max?: number; step?: number }
+}
+
+/** A devicetree macro token (`ADC_GAIN_1_6`) or a number. */
+export type DtToken = string | number
+
+/** One ADC channel. `setup` is the channel node the generator writes on the
+ *  ADC; leave it out when the board configures the channel itself. */
+export interface BoardAdcChannel {
+    /** Node label of the ADC ("adc", "adc1"). */
+    adc: string
+    channel: number
+    setup?: {
+        /** ADC_GAIN_* name. */
+        gain: string
+        /** ADC_REF_* name. */
+        reference: string
+        /** Default ADC_ACQ_TIME_DEFAULT. */
+        acquisitionTime?: DtToken
+        /** The analog input (`NRF_SAADC_AIN4`); required on nRF. */
+        inputPositive?: DtToken
+        /** zephyr,resolution in bits; the channel setup fails without it. */
+        resolution: number
+        oversampling?: number
+    }
+}
+
+/** The battery: an ADC channel behind a divider, or a fuel gauge. */
+export interface BoardBattery {
+    adc?: BoardAdcChannel
+    /** Vadc = Vcell * outputOhms / fullOhms. */
+    divider?: { outputOhms: number; fullOhms: number }
+    /** Node label of a fuel gauge or PMIC the board defines. */
+    fuelGauge?: string
+    /** Charger status pin, active while charging. */
+    charging?: string
+    /** The status pin is high while charging (default: low, pulled up). */
+    chargingActiveHigh?: boolean
+    /** [millivolts, percent] by strictly descending voltage. */
+    ocvCurve?: [number, number][]
+}
+
+export type StatusLedFunction =
+    | 'link'
+    | 'pairing'
+    | 'bonded'
+    | 'heartbeat'
+    | 'activity'
+    | 'battery'
+
+/** A status LED: a pin the generator declares an LED on, or an LED the
+ *  board already has (`led`). */
+export interface BoardStatusLed {
+    function: StatusLedFunction
+    pin?: string
+    /** With `pin`: lit when the pin is low. */
+    activeLow?: boolean
+    /** Node label of a board LED ("led0"). */
+    led?: string
+    blinkMs?: number
+    flashMs?: number
+}
+
+export interface BoardPowerOff {
+    /** Power off even when only some inputs can wake the device. */
+    partialWake?: boolean
+    /** Input pins that take their wake-up line first. */
+    wakeFirst?: string[]
+}
+
+// pattern-check: skip plain data interfaces for the node-bus and radio board fields
+/** One node-bus port on a UART. */
+export interface BoardNodeBusPort {
+    /** Node label of the UART ("usart2"). */
+    uart: string
+    /** upstream faces the main; default downstream. */
+    direction?: 'downstream' | 'upstream'
+    /** Presence-detect pin. */
+    detect?: string
+    /** The detect pin is low while a node is plugged in (default high). */
+    detectActiveLow?: boolean
+    label?: string
+    currentSpeed?: number
+    /** The UART's pinctrl phandles. */
+    pinctrl?: string[]
+    /** Raw `<...>, <...>` tx and rx DMA channels. */
+    dmas?: string
+}
+
+/** The radio chip on SPI. */
+export interface BoardRadioLink {
+    spi: string
+    cs?: string
+    dataReady: string
+    reset?: string
+    spiMaxHz?: number
 }
 
 /** A sensor setting's value in a document or JSON config: a boolean (BOOL), a
@@ -922,6 +1162,9 @@ export type ConfigSensorValue = number | boolean | string
 
 /** The node's sensor (sensor-settings plan §4b). */
 export interface ConfigNodeSensor {
+    /** Which of the device's parts the defaults are for, by part index (its
+     *  place among the board's parts). Absent = 0. */
+    part?: number
     /** The product's defaults by registry name: built into the board and
      *  written into TBL_SENSOR. */
     defaults?: Record<string, ConfigSensorValue>

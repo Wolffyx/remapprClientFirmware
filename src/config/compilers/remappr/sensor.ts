@@ -122,7 +122,7 @@ export function readPartEntries(
     end: number,
 ): SensorTableEntry[] | string {
     if (end - start < SENSOR_TBL_HDR_LEN) return 'sensor table header truncated'
-    const r = new ByteReader(bytes)
+    const r = new ByteReader(bytes, end)
     r.seek(start)
     const count = r.u16()
     if (start + SENSOR_TBL_HDR_LEN + count * SENSOR_TBL_ENTRY_LEN > end) {
@@ -138,31 +138,44 @@ export function readPartEntries(
 }
 
 /**
- * TBL_SENSOR payload in [start, end) -> the first sensor's settings by name
- * (a BOOL the registry knows as a boolean, everything else as its number).
- * A document holds one sensor's settings, so entries for any other sensor
- * (or for a part in @p others) are not read back. Returns an error message for a frame too short for its
- * count.
+ * Entries -> one part's channel-0 settings by name (a BOOL the registry knows
+ * as a boolean, everything else as its number). A document holds one part's
+ * settings: part `index` when given, else the first part listed. A part's other
+ * channels belong to its own section (the axes of a joystick).
+ */
+export function sensorSettingsOf(
+    entries: readonly SensorTableEntry[],
+    index?: number,
+): ConfigDeviceSensor {
+    const part = index ?? entries[0]?.sensor
+    if (part === undefined) return {}
+    const settings: Record<string, ConfigSensorValue> = {}
+    for (const e of entries) {
+        if (e.sensor !== part || (e.ch ?? 0) !== 0) continue
+        const bool = registrySetting(e.id)?.type === 'bool'
+        settings[sensorSettingKey(e.id)] = bool ? e.value !== 0 : e.value
+    }
+    if (Object.keys(settings).length === 0) return {}
+    return part ? { index: part, settings } : { settings }
+}
+
+/**
+ * TBL_PART payload in [start, end) -> one part's settings by name: part
+ * `index` when given, else the first part listed. Parts another section holds
+ * (@p others, the displays) are not the sensor and are not read back. Returns
+ * an error message for a frame too short for its count.
  */
 export function readSensorTable(
     bytes: Uint8Array,
     start: number,
     end: number,
     others: ReadonlySet<number> = new Set(),
+    index?: number,
 ): ConfigDeviceSensor | string {
     const all = readPartEntries(bytes, start, end)
     if (typeof all === 'string') return all
-    // Parts another section holds (the displays) are not the sensor.
-    const entries = all.filter((e) => !others.has(e.sensor))
-    const index = entries[0]?.sensor
-    if (index === undefined) return {}
-    const settings: Record<string, ConfigSensorValue> = {}
-    // A document holds channel 0's values; a part's other channels belong to
-    // its own section (the axes of a joystick).
-    for (const { sensor, id, ch, value } of entries) {
-        if (sensor !== index || ch !== 0) continue
-        const bool = registrySetting(id)?.type === 'bool'
-        settings[sensorSettingKey(id)] = bool ? value !== 0 : value
-    }
-    return index ? { index, settings } : { settings }
+    return sensorSettingsOf(
+        all.filter((e) => !others.has(e.sensor)),
+        index,
+    )
 }

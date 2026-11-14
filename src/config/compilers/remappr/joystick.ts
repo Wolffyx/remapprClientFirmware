@@ -174,7 +174,7 @@ export function readJoystickTable(
 ): ConfigJoystick | string {
     if (end - start < JOYSTICK_TBL_HDR_LEN)
         return 'joystick table header truncated'
-    const r = new ByteReader(bytes)
+    const r = new ByteReader(bytes, end)
     r.seek(start)
     const hatWays = r.u8()
     const count = r.u8()
@@ -197,25 +197,32 @@ const FIELD_BY_ID: ReadonlyMap<number, AxisField> = new Map(
     ),
 )
 
-/** A shaping value onto an input's settings, when it differs from the
- *  default (as readAxis keeps a v1 entry's). */
+/** A shaping value onto an input's settings, kept only when it differs from
+ *  the default (as readAxis keeps a v1 entry's). A TBL_PART value overrides
+ *  what a v1 table entry carried, a 0 included: the device runs the TBL_PART
+ *  value, so 0 puts the field back on its default (left out of the document). */
 const PUT_FIELD: {
     readonly [F in AxisField]: (a: JoystickAxisConfig, v: number) => void
 } = {
     invert: (a, v) => {
         if (v) a.invert = true
+        else delete a.invert
     },
     radial: (a, v) => {
         if (v) a.radial = true
+        else delete a.radial
     },
     curve: (a, v) => {
-        if (v) a.curve = CURVES[v] ?? 'linear'
+        if (!v) delete a.curve
+        else a.curve = CURVES[v] ?? 'linear'
     },
     inner: (a, v) => {
         if (v) a.inner = v
+        else delete a.inner
     },
     outer: (a, v) => {
         if (v) a.outer = v
+        else delete a.outer
     },
 }
 
@@ -240,8 +247,9 @@ function layoutOfEntries(
 }
 
 /**
- * A v2 table's settings with the shaping the TBL_PART `entries` hold for the
- * inputs it names (`axes`: the device's AXES parts, else inferred from the
+ * A table's settings with the shaping the TBL_PART `entries` hold for the
+ * inputs it names (a v2 table has none of its own; on a v1 table the TBL_PART
+ * value wins, as on the device) (`axes`: the device's AXES parts, else inferred from the
  * entries). Entries of any other setting, or for an input the table does not
  * name, are left out.
  */
@@ -334,8 +342,7 @@ export function readJoystickActions(
     bytes: Uint8Array,
     t: TableFrame,
 ): ConfigJoystick['buttonActions'] | string {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     r.u16() // num_positions
     if (t.start + 4 + count * 10 > t.end) return 'action table truncated'

@@ -181,8 +181,7 @@ export function readSliders(
     layers: CanonLayer[],
     diag: DiagnosticBag,
 ): void {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const action = (idx: number): CanonAction | undefined => {
         if (idx === SLIDER_BH_NONE) return undefined
@@ -217,4 +216,26 @@ export function readSliders(
         if (!l.sliders) continue
         while (l.sliders.length < n) l.sliders.push(null)
     }
+}
+
+const SLIDER_HDR_LEN = 2
+const SLIDER_ENTRY_LEN = 10
+
+/** Whether every TBL_SLIDER entry reads back into `layers[].sliders` (a known
+ *  kind, a LEVEL target this client names, a frame that holds its count).
+ *  One that does not is carried as read on a keymap save (carry.ts). */
+export function sliderTableReadable(bytes: Uint8Array, t: TableFrame): boolean {
+    if (t.version !== 1 || t.end - t.start < SLIDER_HDR_LEN) return false
+    const r = ByteReader.frame(bytes, t)
+    const count = r.u16()
+    if (t.start + SLIDER_HDR_LEN + count * SLIDER_ENTRY_LEN > t.end) return false
+    for (let i = 0; i < count; i++) {
+        const at = t.start + SLIDER_HDR_LEN + i * SLIDER_ENTRY_LEN
+        const kind = bytes[at + 2]
+        const arg = bytes[at + 3]
+        if (kind === SLIDER_KIND.STEPS) continue
+        if (kind !== SLIDER_KIND.LEVEL) return false
+        if (!Object.values(LEVEL_TARGET).includes(arg)) return false
+    }
+    return true
 }

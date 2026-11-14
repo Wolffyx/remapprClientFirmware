@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "kind": "remappr.keymap",
+  "meta": { "name": "Split nRF follower", "target": "zmk" },
+  "keyboard": {
+    "id": "split_nrf_follower",
+    "name": "Split nRF follower",
+    "keys": [
+      { "x": 0, "y": 0, "matrix": [0, 0] },
+      { "x": 1, "y": 0, "matrix": [0, 1] }
+    ]
+  },
+  "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+  "node": { "personality": "keyboard", "role": "follower" },
+  "board": {
+    "controller": "nrf52840dk/nrf52840",
+    "matrix": { "diode": "col2row", "rows": ["P0.03"], "cols": ["P1.01", "P1.02"] },
+    "nodeBus": [
+      { "uart": "uart1", "direction": "upstream", "label": "up", "currentSpeed": 1000000, "detect": "P1.04" }
+    ]
+  }
+}

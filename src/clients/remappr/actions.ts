@@ -21,6 +21,10 @@ export const REMAPPR_KIND_TAP_DANCE = 'remappr:td'
 export const REMAPPR_KIND_MOD_MORPH = 'remappr:mm'
 // &battery (system action 11): no params; the device shows its charge.
 export const REMAPPR_KIND_BATTERY_SHOW = 'remappr:battery'
+// A binding the editor cannot show, kept as read from the device (its record
+// rides along as `_wire`). Never offered in the picker: picking any action,
+// Transparent included, replaces it.
+export const REMAPPR_KIND_KEPT = 'remappr:kept'
 
 // Renderer (`HidUsageLabel`, `KeycodePickerGrid`) consumes ZMK-style encoded
 // usages: (page << 16) | id. Keep the adapter on the same encoding so the picker
@@ -304,6 +308,15 @@ function labelFor(
             paramText: 'Batt',
             paramParts: [{ icon: 'battery', text: 'Batt' }],
             description: "Show the battery's charge",
+        }
+    }
+    if (kind === REMAPPR_KIND_KEPT) {
+        return {
+            primary: 'Kept',
+            ...(displayName ? { secondary: displayName } : {}),
+            bindingPrefix: 'kept',
+            description:
+                'Kept as read from the device: the editor cannot show this binding. Pick any action to replace it.',
         }
     }
     return { primary: '?' }

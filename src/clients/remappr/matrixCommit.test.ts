@@ -11,6 +11,7 @@ import type { SensorApi } from '../../service'
 
 import { Cmd } from './protocol'
 import type { RemapprRpc } from './rpc'
+import { plainMutations } from './plainRpc.fixture'
 import { RemapprKeyboardService } from './service'
 
 const CONFIG = parseKeymap(`{
@@ -49,7 +50,7 @@ const MATRIX: SensorInfo = {
 
 function make() {
     const chunks: Uint8Array[] = []
-    const rpc = {
+    const rpc = plainMutations({
         onClosed: () => () => undefined,
         subscribeInput: () => () => undefined,
         close: async () => undefined,
@@ -57,7 +58,7 @@ function make() {
             if (cmd === Cmd.WRITE_CONFIG_CHUNK && arg) chunks.push(arg)
             return { status: 0, data: new Uint8Array() }
         },
-    } as unknown as RemapprRpc
+    }) as unknown as RemapprRpc
     const getSensors = vi.fn(async () => [MATRIX])
     const svc = new RemapprKeyboardService({
         rpc,

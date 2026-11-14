@@ -279,22 +279,155 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   no list of them lives here.
 - `firmware.<target>` namespaces settings so every registered firmware target's
   knobs are reachable. _(consumed per-target in a later phase)_
-- `board` feeds the DT/Kconfig generator; `controller` accepts a known Zephyr
-  board id or a custom board on any Zephyr-supported SoC. The `remappr-board`
-  compiler emits a Zephyr shield from it — `boards/shields/<id>/<id>.overlay`
+- `board` feeds the DT/Kconfig generator. The `remappr-board` compiler emits
+  a Zephyr shield from it — `boards/shields/<id>/<id>.overlay`
   (`remappr,kbd-matrix` + `input-keymap` + `remappr,keymap`) plus
   `Kconfig.shield`/`Kconfig.defconfig` (defaults `CONFIG_INPUT` + the settings
-  backend from `storage`). `matrix.rows`/`cols` take raw `&gpioN pin FLAGS`
-  specs (or friendly labels on a known controller); the matrix cells prefer an
-  explicit `keyboard.hardware.transform` and warn when derived from geometry.
-  Get it via `getCompiler('remappr-board')` or `buildProjectBundle(config,
-  'remappr-board')`.
+  backend from `storage`). Get it via `getCompiler('remappr-board')` or
+  `buildProjectBundle(config, 'remappr-board')`. Anything that would give a
+  shield that does not build is an error, not a warning.
+  - `controller` is a Zephyr board id (`"nrf52840dk/nrf52840"`,
+    `"nucleo_u5a5zj_q"`) or a custom board `{ "custom": true, "soc", "name" }`;
+    it falls back to `keyboard.controller.board`. Its SoC decides which pin
+    labels resolve.
+  - Every pin (matrix, encoder, sensor) is a raw `&gpioN pin FLAGS` spec or a
+    label: one of a known board's (`D4` on a nice!nano), or the SoC's port pin
+    — `P0.13` on nRF, `PA3` on STM32, `GP12` on RP2040. A label that does not
+    resolve is an error.
+  - `pinMap` gives the board's own labels, so a board no built-in table knows
+    (any firmware board, an Arduino header) needs no host code:
+    `{ "D10": "&arduino_header 16", "ROW0": "&gpio0 2" }`, label → phandle and
+    pin, with the flags from the pin's role. It is looked up before the
+    built-in tables.
+  - The shield builds for any Zephyr board: keyboard_node's `app.overlay`
+    carries the USB HID and control interfaces for a board with no overlay of
+    its own (remappr-firmware with `dts/remappr/keyboard-hid.dtsi`). Build with
+    `--sysbuild ... -- -D<app>_SHIELD=<id>`, so only the app image takes the
+    shield.
+  - The matrix wiring comes from `matrix.rows`/`cols`, else
+    `keyboard.hardware.kscan` (with its diode direction and debounce), else
+    `keyboard.pins`. A keyboard without matrix pins is an error; a mouse,
+    joystick or dongle without them gets no matrix and no default keymap.
+    Direct-pin wiring is not generated yet.
+  - The cells prefer `keyboard.hardware.transform` or per-key `matrix`, and
+    warn when derived from geometry. A cell past the GPIO counts, two keys on
+    one cell, a pin used twice, or a pin listed in `reservedPins`
+    (`[{ "pin": "PA9", "use": "console UART TX" }]`) is an error. Choices of
+    one layout option (`option: [g, 0]` and `[g, 1]`, an ANSI/ISO Enter) may
+    share a cell; the cell reports the lowest choice's position. An encoder
+    or slider key needs a cell of its own (its push switch in the matrix), or
+    its push switch in `buttons`.
+  - Each key is placed at its own position, size and rotation (whole
+    key-units and degrees; fractional values are rounded, with a warning).
+  - `matrix` also takes the scan timings: `pollMs`, `sleepPollMs`,
+    `settleUs`, `debouncePressMode` (`eager`, the default, or `defer`),
+    `debouncePressMs` (used in `defer` mode only) and `debounceReleaseMs`
+    (these two override `kscan`'s).
+  - `maxLayers` (1..32) is how many layers the app may fill without a reflash;
+    default the authored layers, at least 4.
+  - `encoders` are `gpio-qdec` nodes: `a`, `b`, `steps`, `axis`, and the
+    timings `sampleTimeUs` (2000), `idleTimeoutMs` (200) and `idlePollTimeUs`
+    (5000; 0 leaves it out, so the pins interrupt).
+  - `buttons` are off-matrix keys on their own pins (`[{ "key", "pin",
+    "code"? }]`): a `gpio-keys` child and a `remappr,extra-input` node with the
+    key's rect, in 1/100 key-unit. The button keys must be the last keys of
+    `keyboard.keys`, in `buttons` order, since their engine positions follow
+    the matrix keys'. `code` is an `INPUT_KEY_*`/`INPUT_BTN_*` code, default
+    `INPUT_KEY_F13` onward. A board whose keys are all buttons needs no
+    `matrix`: its keymap node has no scan and lists the button codes as
+    `extra-input-codes`, so its layers and `max-layers` still reach the
+    firmware.
+  - `sliders` are analog sliders (`remappr,slider`) on an ADC channel (`adc`,
+    as for the battery), with optional `function` (`rgb-brightness`),
+    `deadband` and `pollMs`.
+  - A `keyboard.hardware.ws2812` strip goes on an nRF SPIM, or on an STM32 SPI
+    with `ws2812.stm32` (its pinctrl and GPDMA). The bit frames follow
+    `spiMaxFrequency`; a chain over 64 LEDs raises `CONFIG_REMAPPR_RGB_LED_MAX`.
 - `board.sensor` puts a motion sensor on an SPI bus of the board: `part` is its
   devicetree compatible, `bus` the bus's node label, `motion` (and optionally
   `cs`, `reset`) its pins, as raw `&gpioN pin FLAGS` specs or friendly labels;
   `spiMaxHz` defaults to 8 MHz. The shield gets the sensor's node with
   `node.sensor.defaults` as `remappr,setting-defaults`; its driver turns on
-  from devicetree.
+  from devicetree. `cpi` (`{ "native", "min"?, "max"?, "step"? }`) adds the
+  `remappr,mouse` node: the resolution the sensor reports and the DPI range a
+  config may pick. Without it the device reports no pointer and refuses
+  SET_DPI, so a mouse needs it.
+
+- `board.battery` is the battery (`remappr,battery`): `adc` (`{ adc, channel,
+  setup? }`, with `divider: { outputOhms, fullOhms }`) or `fuelGauge` (the
+  node label of a gauge the board defines), never both; optional `charging`
+  pin (active low with a pull-up; `chargingActiveHigh: true` for a charger
+  that drives it high) and `ocvCurve` (`[[mV, %], ...]`, voltages strictly descending). An ADC
+  `setup` (`gain`, `reference`, `resolution` in bits, optional
+  `acquisitionTime`, `inputPositive`, `oversampling`) writes the channel node on the ADC; leave it
+  out when the board configures the channel. An nRF SAADC channel needs
+  `inputPositive` (`"NRF_SAADC_AIN4"`).
+- `board.statusLeds` are status LEDs (`remappr,status-led`): `function`
+  (`link`, `pairing`, `bonded`, `heartbeat`, `activity`, `battery`) and either
+  `led` (an LED the board declares, `"led0"`) or `pin` (with `activeLow`), on
+  which the shield declares the LED; optional `blinkMs`, `flashMs`.
+- `board.powerOff` is the power-off policy (`remappr,power-off`):
+  `partialWake` and `wakeFirst` (input pins that take their wake-up line
+  first; they are the board's inputs, so they are not new pins). On STM32 it
+  also turns on the PWR wake-up lines.
+
+- `board.haptic` is a haptic actuator (`remappr,haptic`) on a PWM channel:
+  `pwm` (the controller's label), `channel`, `periodNs` (a fact of the
+  actuator, so it has no default), optional `inverted` and `pinctrl`. The
+  haptic service takes its triggers over the node bus, so it is turned on only
+  with a node-bus port.
+- `board.ledZones` slice the WS2812 strip by lighting role
+  (`remappr,led-zone`): `[{ "target", "offset", "length" }]`, `target` one of
+  `underglow`, `backlight`, `per-key`, `indicator`. A zone past the chain, two
+  zones that overlap and two zones for one role are errors.
+- `board.displays` are display parts (`remappr,display`). `panel` is the label
+  of a panel the board has, or a panel the shield declares: `part` (its
+  driver compatible), `bus`, `reg`, `width`, `height`, optional `busHz`, and
+  `props`, the driver's own properties by devicetree name (a number, a cell
+  list, `true` for a flag, or a string). `defaults` are the part's setting
+  defaults by registry name.
+- `board.nodeBus` are the node-bus ports (`remappr,node-bus-port`), one per
+  inter-node UART; a split keyboard is one device over them. Each has `uart`
+  (the UART's node label), `direction` (`downstream`, the default, or
+  `upstream`: at most one, and none on the coordinator), an optional `detect`
+  pin (high while a node is plugged in; `detectActiveLow: true` for one that
+  reads low) and `label`, and what turns the UART on: `currentSpeed`, `pinctrl`
+  phandles and raw `dmas` (its DMA controller is turned on too). A port turns
+  on `CONFIG_REMAPPR_NODE_BUS`; `node.role: "coordinator"` also turns on the
+  static main role.
+- `board.radioLink` is the radio chip on SPI (`remappr,spi-link`): `spi` (the
+  bus label), `dataReady`, optional `cs`, `reset` and `spiMaxHz` (8 MHz). It
+  picks the SPI radio backend.
+- `board.radio.channelSeed` are the RF channels (0..100, no duplicates, at
+  least 8) the dongle seeds its hop map from (the first 8, the rest its
+  replacement pool) and a node hunts (`remappr,radio-config`, label
+  `remappr_radio`). It is read by the dongle and by a node whose radio runs on
+  its own SoC (keyboard_node with `radio_local.conf`). With `board.radioLink`
+  the link runs on the radio chip, so the seed belongs in the chip's or the
+  dongle's JSON and is refused here.
+
+  ```jsonc
+  "node": { "role": "coordinator" },
+  "board": {
+    "nodeBus": [{ "uart": "usart2", "currentSpeed": 1000000,
+                  "pinctrl": ["&usart2_tx_pd5", "&usart2_rx_pd6"] }],
+    "radioLink": { "spi": "spi1", "cs": "PD14", "dataReady": "PD15", "reset": "PF12" }
+  }
+  ```
+
+  ```jsonc
+  "board": {
+    "battery": {
+      "adc": { "adc": "adc", "channel": 4,
+               "setup": { "gain": "ADC_GAIN_1_6", "reference": "ADC_REF_INTERNAL",
+                          "resolution": 12, "inputPositive": "NRF_SAADC_AIN4" } },
+      "divider": { "outputOhms": 10000, "fullOhms": 14000 },
+      "charging": "P0.29"
+    },
+    "statusLeds": [{ "function": "link", "led": "led0" }],
+    "powerOff": { "partialWake": true }
+  }
+  ```
 
   ```jsonc
   "board": {

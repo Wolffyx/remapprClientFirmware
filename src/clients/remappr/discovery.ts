@@ -10,10 +10,13 @@ import {
     Cmd,
     CommonVerb,
     type DeviceInfo,
+    KNOWN_NS_VERSION,
     type Limits,
+    type Manifest,
     Namespace,
     parseDeviceInfo,
     parseLimits,
+    parseManifest,
     parsePersonalityMap,
     type PersonalityMap,
     Status,
@@ -43,6 +46,27 @@ export interface DiscoveryResult {
      *  undefined on a v1 device. The adapter branches the connect path on it
      *  (a dongle skips auth/config and lands on its node roster). */
     role?: number
+    /** GET_MANIFEST, where the COMMON verb mask lists it: each namespace's
+     *  ns_version and verbs. Undefined on older firmware and on the dongle. */
+    manifest?: Manifest
+}
+
+/** True when the device serves `namespace` (its personality map lists it) and
+ *  no newer ns_version than this client decodes (the manifest, where the
+ *  device has one, says which). A namespace whose layouts changed is treated
+ *  as absent rather than misread. */
+export function servesNamespace(discovery: DiscoveryResult, namespace: number): boolean {
+    const listed = discovery.personality?.namespaces.some((n) => n.namespace === namespace)
+    if (!listed) return false
+    const desc = discovery.manifest?.namespaces.find((n) => n.namespace === namespace)
+    if (!desc) return true
+    const known = KNOWN_NS_VERSION[namespace]
+    return known === undefined || desc.nsVersion <= known
+}
+
+/** The ns_version the device reports for `namespace`, if its manifest says. */
+export function nsVersionOf(discovery: DiscoveryResult, namespace: number): number | undefined {
+    return discovery.manifest?.namespaces.find((n) => n.namespace === namespace)?.nsVersion
 }
 
 /**
@@ -133,11 +157,38 @@ export async function discover(
         /* universal limits unavailable — leave undefined */
     }
 
+    const manifest = await readManifest(rpc, target, personality)
+
     return {
         protoMax: deviceInfo.protoMax,
         deviceInfo,
         personality,
         limits,
         role: personality?.role,
+        ...(manifest ? { manifest } : {}),
+    }
+}
+
+/** GET_MANIFEST, only where the COMMON verb mask lists it (bit N = opcode N):
+ *  a dongle and older firmware do not serve it, and asking would cost a
+ *  timeout. A failed read leaves it undefined, like the other discovery
+ *  verbs. */
+async function readManifest(
+    rpc: RemapprRpc,
+    target: number,
+    personality: PersonalityMap | undefined,
+): Promise<Manifest | undefined> {
+    const common = personality?.namespaces.find((n) => n.namespace === Namespace.COMMON)
+    if (!common || !(common.verbMask & (1 << CommonVerb.GET_MANIFEST))) return undefined
+    try {
+        const r = await rpc.callUniversalPlain(
+            Namespace.COMMON,
+            CommonVerb.GET_MANIFEST,
+            undefined,
+            target ? { targetNode: target, retries: RELAY_READ_RETRIES } : undefined,
+        )
+        return r.status === Status.OK ? parseManifest(r.data) : undefined
+    } catch {
+        return undefined // manifest unavailable — gate on the personality map alone
     }
 }

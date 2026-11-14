@@ -12,6 +12,8 @@
 //     the prior canonical binding) keeps the prior binding verbatim, so a key
 //     edit elsewhere can't silently strip a Ctrl+C / lighting / macro the runtime
 //     never modeled. Only positions the user actually retyped are re-raised.
+//     A binding kept as read from the device (`_wire`) that the runtime cannot
+//     show lowers to its own `kept` kind, so clearing it to Transparent is an edit.
 import type {
     CanonAction,
     CanonHoldTarget,
@@ -34,6 +36,7 @@ import {
     buildRemapprKeyAction,
     HID_KP,
     REMAPPR_KIND_BATTERY_SHOW,
+    REMAPPR_KIND_KEPT,
     REMAPPR_KIND_KEYPRESS,
     REMAPPR_KIND_LAYER_MOMENTARY,
     REMAPPR_KIND_LAYER_TAP,
@@ -89,8 +92,25 @@ const poolsOf = (config: ConfigKeymap): CompositePools => ({
 })
 
 /** Lower a single canonical action to a neutral KeyAction (pure; `diag`/`path`
- *  optional so the merge step can lower without emitting warnings). */
+ *  optional so the merge step can lower without emitting warnings). A binding
+ *  that carries its device record (`_wire`) and would show as Transparent gets
+ *  its own kind instead, so picking Transparent counts as an edit and clears it
+ *  rather than looking untouched and keeping the device's binding. */
 function lowerAction(
+    a: CanonAction,
+    layerNames: string[],
+    pools: CompositePools,
+    diag?: DiagnosticBag,
+    path: (string | number)[] = [],
+): KeyAction {
+    const ka = lowerCanon(a, layerNames, pools, diag, path)
+    if (!a._wire || a.type === 'transparent') return ka
+    if (ka.kind !== REMAPPR_KIND_TRANSPARENT) return ka
+    const name = a.type === 'none' ? undefined : a.type
+    return buildRemapprKeyAction(REMAPPR_KIND_KEPT, [], [], undefined, name)
+}
+
+function lowerCanon(
     a: CanonAction,
     layerNames: string[],
     pools: CompositePools,

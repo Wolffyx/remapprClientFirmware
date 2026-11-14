@@ -1,0 +1,12 @@
+if SHIELD_SPLIT_NRF_FOLLOWER
+
+# The matrix + keymap drivers auto-enable from devicetree; the input
+# subsystem itself must be on.
+config INPUT
+	default y
+
+# 1 node-bus port(s) from board.nodeBus.
+config REMAPPR_NODE_BUS
+	default y
+
+endif # SHIELD_SPLIT_NRF_FOLLOWER

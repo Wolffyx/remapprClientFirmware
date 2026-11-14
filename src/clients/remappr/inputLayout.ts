@@ -137,6 +137,7 @@ const CLASSES: readonly {
     { kind: 'hat', shape: 'hat', name: 'Hat' },
     { kind: 'axis', shape: 'ring', name: 'Axis' },
     { kind: 'axis', shape: 'pill', name: 'Slider' },
+    { kind: 'display', shape: 'screen', name: 'Screen' },
 ]
 
 /** enum remappr_input_shape by value; 0 (auto) = the class default. */
@@ -271,13 +272,10 @@ export function inputLayoutModel(
 // ---------------------------------------------------------------------------
 
 /** How a keyboard draws an input that is not one of its keys, by class: the
- *  device classes' shape and name, plus a screen (drawn, never bound). */
+ *  device classes' shape and name (a screen is drawn, never bound). */
 const PART_LOOKS: readonly (
     { shape: ControlShape; name: string } | undefined
-)[] = [
-    ...CLASSES.map(({ shape, name }) => ({ shape, name })),
-    { shape: 'screen', name: 'Screen' },
-]
+)[] = CLASSES.map(({ shape, name }) => ({ shape, name }))
 
 /** Entries of one class in the order the device counts them: by the ordinal
  *  in their input id (a slider's part rank: the index its config uses) when

@@ -6,6 +6,7 @@ import { parseKeymap, type ConfigKeymap } from '../../config'
 
 import { REMAPPR_KIND_KEYPRESS, REMAPPR_KIND_TRANSPARENT } from './actions'
 import type { RemapprRpc } from './rpc'
+import { plainMutations } from './plainRpc.fixture'
 import { RemapprKeyboardService } from './service'
 
 // As the blob decodes: turns on the layers, no keyboard.encoders slots.
@@ -31,12 +32,12 @@ const NO_KNOB = parseKeymap(`{
     "layers": [{ "name": "base", "bindings": ["A"] }]
 }`)
 
-const stubRpc = {
+const stubRpc = plainMutations({
     onClosed: () => () => undefined,
     subscribeInput: () => () => undefined,
     close: async () => undefined,
     callPlain: async () => ({ status: 0, data: new Uint8Array() }),
-} as unknown as RemapprRpc
+}) as unknown as RemapprRpc
 
 function makeService(
     config: ConfigKeymap,

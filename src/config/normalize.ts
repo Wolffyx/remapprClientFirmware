@@ -191,6 +191,16 @@ function normalizeTapTarget(tap: TapTarget): CanonKeyPress {
     }
 }
 
+/** The fields of `o` among `keys` that are set. */
+function pickDefined<T extends object, K extends keyof T>(
+    o: T,
+    keys: readonly K[],
+): Partial<Pick<T, K>> {
+    const out: Partial<Pick<T, K>> = {}
+    for (const k of keys) if (o[k] !== undefined) out[k] = o[k]
+    return out
+}
+
 const timings = (a: {
     tappingTermMs?: number
     quickTapMs?: number
@@ -272,12 +282,22 @@ export function normalizeAction(b: SurfaceAction): CanonAction {
                 _preset: 'layer_tap',
             }
         case 'layer':
-            return { type: 'layer', mode: b.mode, layer: b.layer }
+            return {
+                type: 'layer',
+                mode: b.mode,
+                layer: b.layer,
+                ...(b.releaseAfterMs !== undefined
+                    ? { releaseAfterMs: b.releaseAfterMs }
+                    : {}),
+            }
         case 'sticky_key':
             return {
                 type: 'sticky_key',
                 key: toCanonical(b.key),
                 _keySrc: b.key,
+                ...(b.releaseAfterMs !== undefined
+                    ? { releaseAfterMs: b.releaseAfterMs }
+                    : {}),
             }
         case 'output':
             return {
@@ -339,11 +359,16 @@ export function normalizeAction(b: SurfaceAction): CanonAction {
                 key: toCanonical(b.key),
                 mods: [...b.mods],
                 _keySrc: b.key,
+                ...pickDefined(b, ['timeoutMs', 'quickTapMs', 'requirePriorIdleMs']),
             }
         case 'layer_mod':
             return { type: 'layer_mod', layer: b.layer, mods: [...b.mods] }
         case 'tap_toggle':
-            return { type: 'tap_toggle', layer: b.layer }
+            return {
+                type: 'tap_toggle',
+                layer: b.layer,
+                ...pickDefined(b, ['tappingTermMs']),
+            }
         case 'set_base_saved':
             return { type: 'set_base_saved', layer: b.layer }
         case 'auto_layer':
@@ -591,6 +616,7 @@ function canonKeymap(km: SurfaceKeymap): ConfigKeymap {
                       ...(m.description ? { description: m.description } : {}),
                       ...(m.params !== undefined ? { params: m.params } : {}),
                       steps: m.steps.map(normalizeMacroStep),
+                      ...(m.private ? { private: true } : {}),
                   })),
               }
             : {}),

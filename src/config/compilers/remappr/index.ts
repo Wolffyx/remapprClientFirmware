@@ -57,6 +57,7 @@ import {
     CLUSTER_UID_MAX,
     LinkProfileId,
     hexToBytes,
+    type SliderRecord,
     type ActionBindingRecord,
     type ClusterNodeRecord,
     type LinkProfileOverrideRecord,
@@ -71,7 +72,9 @@ import {
     type NameRecord,
     type PosholdRecord,
 } from './blobWriter'
-import { encodeAutocorrectDictionary } from './autocorrect'
+import { AUTOCORRECT_MAX_TYPO, encodeAutocorrectDictionary } from './autocorrect'
+import { carryUnmodeledTables } from './carry'
+import { mergeWire } from './wire'
 import { powerRecord } from './power'
 import { displaySettingEntries, encodeDisplays } from './display'
 import { radioRecord } from './radio'
@@ -106,6 +109,86 @@ const HID_PAGE_CONSUMER = 12
 // Consumer — the firmware emits the bare GD usage through its system-control HID
 // interface; the record carries no modifier field (§44.4).
 const HID_PAGE_SYSTEM = 1
+
+/** Last keyboard usage the firmware sends (REMAPPR_KBD_USAGE_MAX on a build
+ *  with the GET_LIMITS KBD_EXT bit). A build without it stops at 0x77, which
+ *  config/featureWarnings reports against the device's bits; no build sends
+ *  0xA8..0xDF, so a key bound there does nothing. */
+export const KBD_USAGE_MAX = 0xa7
+
+/** What a firmware build may hold, where a build can change it. The defaults
+ *  are the firmware's. */
+export interface RemapprCompileLimits {
+    /** Keys in a leader sequence (REMAPPR_BEHAVIOR_LEADER_MAX, 5). */
+    leaderMaxKeys?: number
+    /** Longest autocorrect typo (REMAPPR_AUTOCORRECT_MAX_TYPO, 24). */
+    autocorrectMaxTypo?: number
+    /** Key positions the engine tracks (CONFIG_REMAPPR_BEHAVIOR_POSITIONS_MAX, 128). */
+    maxPositions?: number
+    /** Keys in one combo (CONFIG_REMAPPR_BEHAVIOR_COMBO_KEYS, 8). */
+    comboMaxKeys?: number
+    /** The keyboard node's config pools (app/keyboard_node kb_config.c):
+     *  combo records (cfg_combos, 32), their key positions together
+     *  (cfg_combo_pos, 128) and slider bindings (cfg_sliders, 8). */
+    combosMax?: number
+    comboPositionsMax?: number
+    slidersMax?: number
+}
+const COMBO_MAX_KEYS = 8
+const COMBOS_MAX = 32
+const COMBO_POSITIONS_MAX = 128
+const SLIDERS_MAX = 8
+const LEADER_MAX_KEYS = 5
+const POSITIONS_MAX = 128
+/** Fixed by the wire: the keymap's u8 layer count, the u16 key-override layer
+ *  mask, TBL_LINK_PROFILE's override slots (REMAPPR_LINK_PROFILE_OVR_MAX). */
+const LAYERS_MAX = 255
+const KEY_OVERRIDE_LAYERS = 16
+const LINK_PROFILE_OVR_MAX = 8
+
+const isModifierUsage = (u: number): boolean => u >= 0xe0 && u <= 0xe7
+
+/** Warn when keyboard `usage` is past what the firmware sends. */
+function warnDeadUsage(
+    usage: number,
+    diag: DiagnosticBag,
+    path: (string | number)[],
+    what: string,
+): void {
+    if (usage <= KBD_USAGE_MAX || isModifierUsage(usage)) return
+    diag.warn(
+        `${what} is keyboard usage 0x${usage.toString(16)}, past the last one ` +
+            `the firmware sends (0x${KBD_USAGE_MAX.toString(16)}): it does nothing`,
+        path,
+    )
+}
+
+/** Behavior types whose `tap` is a keyboard usage. */
+const KEYBOARD_TAP_TYPES: ReadonlySet<number> = new Set([
+    BehaviorType.Key,
+    BehaviorType.KeyMods,
+    BehaviorType.ModTap,
+    BehaviorType.LayerTap,
+    BehaviorType.StickyKey,
+    BehaviorType.KeyToggle,
+    BehaviorType.AutoShift,
+])
+
+const MACRO_KEY_OPS: ReadonlySet<number> = new Set([
+    MacroOp.Tap,
+    MacroOp.Press,
+    MacroOp.Release,
+])
+
+function warnDeadMacroUsages(
+    steps: readonly MacroStep[],
+    diag: DiagnosticBag,
+    path: (string | number)[],
+): void {
+    for (const st of steps) {
+        if (MACRO_KEY_OPS.has(st.op)) warnDeadUsage(st.arg, diag, path, 'a macro step')
+    }
+}
 
 const NONE_REC: BehaviorRecord = {
     type: BehaviorType.None,
@@ -369,8 +452,22 @@ function buildMacros(
             ctx.templates.set(m.id, { m, mi })
             return
         }
+        // A private macro read off a device came back with its steps blanked;
+        // writing it as read would store an empty macro in its place.
+        if (m._redacted && m.steps.length === 0) {
+            diag.error(
+                `macro "${m.id}" is private: the device does not return its steps, ` +
+                    'so enter them again before saving',
+                ['macros', mi],
+            )
+        }
+        const steps = lowerMacroSteps(m, mi, diag)
+        warnDeadMacroUsages(steps, diag, ['macros', mi])
         ctx.index.set(m.id, ctx.records.length)
-        ctx.records.push({ steps: lowerMacroSteps(m, mi, diag) })
+        ctx.records.push({
+            steps,
+            ...(m.private ? { private: true } : {}),
+        })
     })
     return ctx
 }
@@ -483,7 +580,8 @@ function tokenUsage(token: string): number | null {
 // only tap-hold shapes the firmware represents. bindings[0] is the hold behavior,
 // bindings[1] the tap behavior (ZMK order); holdParam/tapParam are their args. The
 // tap side must be &kp <key>; the hold side is &kp/&sk <modifier> (→ MOD_TAP) or
-// &mo/&to/&tog <layer> (→ LAYER_TAP). Anything else is a wire gap. requirePriorIdle,
+// &mo <layer> (→ LAYER_TAP, a momentary hold). Anything else, &to/&tog holds
+// included, is a wire gap. requirePriorIdle,
 // retro-tap, and §28 positions are emitted faithfully and restored by the decoder
 // onto a plain inline tap_hold (a def decodes back as inline); hold-trigger-on-
 // release has no wire bit yet (Phase 2) and is warned + dropped.
@@ -548,7 +646,15 @@ function lowerHoldTap(
         }
         return rec({ type: BehaviorType.ModTap, ...common, hold: bit })
     }
-    if (holdTok === 'mo' || holdTok === 'to' || holdTok === 'tog') {
+    if (holdTok === 'to' || holdTok === 'tog') {
+        diag.error(
+            `hold_tap "${action.ref}" hold "${def.bindings[0]}" is not on the wire ` +
+                `(a firmware layer hold is momentary: use &mo)`,
+            path,
+        )
+        return rec({ type: BehaviorType.None })
+    }
+    if (holdTok === 'mo') {
         const li =
             layerIndex.get(action.holdParam) ??
             (/^\d+$/.test(action.holdParam)
@@ -622,7 +728,23 @@ function withComposite(
 
 // Lower one canonical binding to a behavior record. Unsupported actions emit a
 // diagnostic and fall back to NONE so the blob still forms (thin slice).
+// A decoded binding carrying `_wire` (wire.ts) writes back what its canonical
+// form could not hold, so a save does not change what an untouched key does.
 function lowerAction(
+    action: CanonAction,
+    diag: DiagnosticBag,
+    path: (string | number)[],
+    macroCtx: MacroCtx,
+    layerIndex: Map<string, number>,
+    comp: CompCtx,
+): BehaviorRecord {
+    const lowered = lowerCanonAction(action, diag, path, macroCtx, layerIndex, comp)
+    const r = action._wire ? mergeWire(lowered, action._wire) : lowered
+    if (KEYBOARD_TAP_TYPES.has(r.type)) warnDeadUsage(r.tap, diag, path, 'the key')
+    return r
+}
+
+function lowerCanonAction(
     action: CanonAction,
     diag: DiagnosticBag,
     path: (string | number)[],
@@ -758,13 +880,11 @@ function lowerAction(
                 let idx = macroCtx.instances.get(ikey)
                 if (idx === undefined) {
                     idx = macroCtx.records.length
+                    const steps = lowerMacroSteps(tpl.m, tpl.mi, diag, action.param)
+                    warnDeadMacroUsages(steps, diag, path)
                     macroCtx.records.push({
-                        steps: lowerMacroSteps(
-                            tpl.m,
-                            tpl.mi,
-                            diag,
-                            action.param,
-                        ),
+                        steps,
+                        ...(tpl.m.private ? { private: true } : {}),
                     })
                     macroCtx.instances.set(ikey, idx)
                     // §24 display name: the template's id plus the argument, so
@@ -805,7 +925,17 @@ function lowerAction(
                       : action.mode === 'toggle'
                         ? BehaviorType.ToggleLayer
                         : BehaviorType.StickyLayer // 'sticky'
-            return rec({ type: t, hold: li })
+            if (action.releaseAfterMs && t !== BehaviorType.StickyLayer) {
+                diag.warn(
+                    `releaseAfterMs applies to a sticky layer only — ignored`,
+                    path,
+                )
+            }
+            // A sticky layer's tapping_term_ms is its release-after (0 = the
+            // keymap's sticky default).
+            const releaseAfter =
+                t === BehaviorType.StickyLayer ? (action.releaseAfterMs ?? 0) : 0
+            return rec({ type: t, hold: li, tappingTermMs: releaseAfter })
         }
         case 'sticky_key': {
             const usage = keyUsage(action.key, diag, path)
@@ -813,9 +943,12 @@ function lowerAction(
             const bit = usageToModBit(usage)
             // A modifier one-shot rides the sticky-mod path; any other usage is
             // a one-shot key (BH_STICKY_KEY: held until the next key releases).
+            // tapping_term_ms is the one-shot's release-after (0 = the keymap's
+            // sticky default).
+            const tappingTermMs = action.releaseAfterMs ?? 0
             return bit !== null
-                ? rec({ type: BehaviorType.StickyMod, hold: bit })
-                : rec({ type: BehaviorType.StickyKey, tap: usage })
+                ? rec({ type: BehaviorType.StickyMod, hold: bit, tappingTermMs })
+                : rec({ type: BehaviorType.StickyKey, tap: usage, tappingTermMs })
         }
         case 'key_toggle': {
             const usage = keyUsage(action.key, diag, path)
@@ -911,10 +1044,15 @@ function lowerAction(
             // tap = key usage, hold = mod mask added on a hold past the term.
             const usage = keyUsage(action.key, diag, path)
             if (usage === null) return rec({ type: BehaviorType.None })
+            // Runs the tap-hold machinery: term = the shift timeout, plus
+            // quick-tap and prior-idle like a mod-tap (0 = defaults).
             return rec({
                 type: BehaviorType.AutoShift,
                 tap: usage,
                 hold: modsToMask(action.mods),
+                tappingTermMs: action.timeoutMs ?? 0,
+                quickTapMs: action.quickTapMs ?? 0,
+                requirePriorIdleMs: action.requirePriorIdleMs ?? 0,
             })
         }
         case 'alt_repeat':
@@ -940,7 +1078,11 @@ function lowerAction(
                 diag.error(`unknown layer "${action.layer}"`, path)
                 return rec({ type: BehaviorType.None })
             }
-            return rec({ type: BehaviorType.LayerTapToggle, hold: li })
+            return rec({
+                type: BehaviorType.LayerTapToggle,
+                hold: li,
+                tappingTermMs: action.tappingTermMs ?? 0,
+            })
         }
         case 'set_base_saved': {
             const li = layerIndex.get(action.layer)
@@ -1137,6 +1279,32 @@ function lowerAction(
     }
 }
 
+/**
+ * Errors for what the device's config pools cannot hold: it refuses the whole
+ * blob (VALIDATE ERR_BOUNDS) with no reason. A combo on several layers takes
+ * one record, and its keys again, per layer.
+ */
+function checkPools(
+    combos: readonly ComboRecord[],
+    sliders: readonly SliderRecord[],
+    limits: RemapprCompileLimits,
+    diag: DiagnosticBag,
+): void {
+    const maxKeys = limits.comboMaxKeys ?? COMBO_MAX_KEYS
+    if (combos.some((c) => c.positions.length > maxKeys))
+        diag.error(`a combo takes at most ${maxKeys} keys`, ['combos'])
+    const positions = combos.reduce((n, c) => n + c.positions.length, 0)
+    const pools: [number, number, string, string][] = [
+        [combos.length, limits.combosMax ?? COMBOS_MAX, 'combo records (one per layer)', 'combos'],
+        [positions, limits.comboPositionsMax ?? COMBO_POSITIONS_MAX, 'combo key slots', 'combos'],
+        [sliders.length, limits.slidersMax ?? SLIDERS_MAX, 'slider bindings', 'layers'],
+    ]
+    for (const [n, max, what, at] of pools) {
+        if (n <= max) continue
+        diag.error(`the config takes ${n} ${what}; a device holds ${max}`, [at])
+    }
+}
+
 // Pure encoder: ConfigKeymap → RMBC blob bytes. Shared by the export `compile()`
 // path (version from meta) and the live-device commit path (version = active+1).
 // Does NOT 16-byte-pad — the golden artifact is unpadded; flash-alignment padding
@@ -1146,6 +1314,12 @@ export interface RemapprBlobOpts {
     /** The device's described parts (GET_PARTS + their settings): its MATRIX
      *  parts then hold the config's matrix timing (compilers/remappr/matrix.ts). */
     parts?: readonly SensorInfo[]
+    /** The blob read off the device. Its tables the config does not model
+     *  (and the compile does not write) are carried over byte for byte, so
+     *  a save does not drop them; one that cannot be carried is an error. */
+    carryFrom?: Uint8Array
+    /** What the target firmware build holds (defaults: the firmware's). */
+    limits?: RemapprCompileLimits
 }
 
 /** The matrix timing that goes to the MATRIX parts, warned about where a part
@@ -1172,6 +1346,7 @@ function encodeBlob(
     configVersion: number,
     opts: RemapprBlobOpts = {},
 ): Uint8Array {
+    const limits = opts.limits ?? {}
     const numLayers = config.layers.length
     // numPositions is the physical key count. Prefer the declared geometry, but a
     // device with no stored geometry (a fresh/default config) leaves
@@ -1184,8 +1359,17 @@ function encodeBlob(
         config.keyboard.keys.length || config.layers[0]?.bindings.length || 0
 
     if (numLayers === 0) diag.error('keymap has no layers', ['layers'])
-    if (numPositions === 0)
-        diag.error('keyboard has no keys', ['keyboard', 'keys'])
+    if (numPositions === 0) diag.error('keyboard has no keys', ['keyboard', 'keys'])
+    if (numLayers > LAYERS_MAX)
+        diag.error(`keymap has ${numLayers} layers; the firmware holds ${LAYERS_MAX}`, [
+            'layers',
+        ])
+    const maxPositions = limits.maxPositions ?? POSITIONS_MAX
+    if (numPositions > maxPositions)
+        diag.error(
+            `keyboard has ${numPositions} keys; the firmware tracks ${maxPositions}`,
+            ['keyboard', 'keys'],
+        )
 
     // Macros first: BH_MACRO cells reference them by index.
     const macroCtx = buildMacros(config.macros, diag)
@@ -1246,25 +1430,34 @@ function encodeBlob(
     })
 
     // Combos (optional). Output is a bare behavior; positions index physical keys.
-    const combos: ComboRecord[] = (config.combos ?? []).map((c, ci) => ({
-        positions: c.keys,
-        // Per-combo timeout wins; else the config default; else the 40 ms fallback.
-        timeoutMs: c.timeoutMs ?? config.defaults?.comboTimeoutMs ?? 40,
-        layer:
-            c.layers && c.layers.length === 1
-                ? config.layers.findIndex((l) => l.name === c.layers![0])
-                : COMBO_ANY_LAYER,
-        outputIndex: getOrAdd(
-            lowerAction(
-                c.action,
-                diag,
-                ['combos', ci, 'action'],
-                macroCtx,
-                layerIndex,
-                comp,
+    // A combo record names one layer (0xFF = any), so a combo on several layers
+    // becomes one record per layer; the decoder merges them back.
+    const combos: ComboRecord[] = (config.combos ?? []).flatMap((c, ci) => {
+        const base = {
+            positions: c.keys,
+            // Per-combo timeout wins; else the config default; else 40 ms.
+            timeoutMs: c.timeoutMs ?? config.defaults?.comboTimeoutMs ?? 40,
+            outputIndex: getOrAdd(
+                lowerAction(
+                    c.action,
+                    diag,
+                    ['combos', ci, 'action'],
+                    macroCtx,
+                    layerIndex,
+                    comp,
+                ),
             ),
-        ),
-    }))
+        }
+        if (!c.layers?.length) return [{ ...base, layer: COMBO_ANY_LAYER }]
+        return c.layers.flatMap((name) => {
+            const li = layerIndex.get(name)
+            if (li === undefined) {
+                diag.error(`unknown layer "${name}"`, ['combos', ci, 'layers'])
+                return []
+            }
+            return [{ ...base, layer: li }]
+        })
+    })
 
     // Sliders (optional, slider part design §4b): slot = slider index; their
     // STEPS actions join the BEHAVIOR table like the encoders' outputs.
@@ -1332,23 +1525,36 @@ function encodeBlob(
     const keyOverrides: KeyOverrideRecord[] = (config.keyOverrides ?? []).map(
         (ko, i) => {
             const p = ['keyOverrides', i]
+            // The mask is a u16 (0 = any layer): a layer past 15 cannot be
+            // named, and dropping it would widen the override to every layer.
             const layersMask = (ko.layers ?? []).reduce((mask, ln) => {
                 const li = layerIndex.get(ln)
                 if (li === undefined) {
                     diag.error(`unknown layer "${ln}"`, [...p, 'layers'])
                     return mask
                 }
+                if (li >= KEY_OVERRIDE_LAYERS) {
+                    diag.error(
+                        `layer "${ln}" is layer ${li}; a key override can name ` +
+                            `layers 0..${KEY_OVERRIDE_LAYERS - 1} only`,
+                        [...p, 'layers'],
+                    )
+                    return mask
+                }
                 return mask | (1 << li)
             }, 0)
+            const trigger = keyUsage(ko.trigger, diag, [...p, 'trigger']) ?? 0
+            const replacement = ko.replacement
+                ? (keyUsage(ko.replacement, diag, [...p, 'replacement']) ?? 0)
+                : 0
+            warnDeadUsage(trigger, diag, [...p, 'trigger'], 'the trigger')
+            warnDeadUsage(replacement, diag, [...p, 'replacement'], 'the replacement')
             return {
-                trigger: keyUsage(ko.trigger, diag, [...p, 'trigger']) ?? 0,
+                trigger,
                 triggerMods: modsToMask(ko.triggerMods),
                 negativeMods: modsToMask(ko.negativeMods ?? []),
                 suppressedMods: modsToMask(ko.suppressedMods ?? []),
-                replacement: ko.replacement
-                    ? (keyUsage(ko.replacement, diag, [...p, 'replacement']) ??
-                      0)
-                    : 0,
+                replacement,
                 replacementMods: modsToMask(ko.replacementMods ?? []),
                 layers: layersMask,
             }
@@ -1359,16 +1565,19 @@ function encodeBlob(
     const leaders: LeaderRecord[] = (config.leaderSequences ?? []).map(
         (ls, i) => {
             const p = ['leaderSequences', i]
-            const usages = ls.sequence.map(
-                (k, ki) => keyUsage(k, diag, [...p, 'sequence', ki]) ?? 0,
-            )
-            if (usages.length > 5)
+            const usages = ls.sequence.map((k, ki) => {
+                const u = keyUsage(k, diag, [...p, 'sequence', ki]) ?? 0
+                warnDeadUsage(u, diag, [...p, 'sequence', ki], 'a sequence key')
+                return u
+            })
+            const maxKeys = limits.leaderMaxKeys ?? LEADER_MAX_KEYS
+            if (usages.length > maxKeys)
                 diag.error(
-                    `leader sequence ${i} has ${usages.length} keys (max 5)`,
+                    `leader sequence ${i} has ${usages.length} keys (max ${maxKeys})`,
                     p,
                 )
             return {
-                usages: usages.slice(0, 5),
+                usages: usages.slice(0, maxKeys),
                 outputIndex: getOrAdd(
                     lowerAction(
                         ls.action,
@@ -1427,8 +1636,12 @@ function encodeBlob(
     // macroCtx.records includes any per-argument clones of parameterized
     // templates appended while bindings lowered above (§44.3).
     if (macroCtx.records.length > 0) builder.macroTable(macroCtx.records)
+    checkPools(combos, sliders, limits, diag)
     if (combos.length > 0) builder.comboTable(combos)
     if (encoders.length > 0) builder.encoderTable(encoders)
+    // TBL_SLIDER (slider part design §4b): layers[].sliders, slot = slider
+    // index. STEPS name BEHAVIOR indices, so they were lowered (sliderRecords)
+    // before the BEHAVIOR table was written.
     if (sliders.length > 0) builder.sliderTable(sliders)
     // TBL_MOUSE (§4b): pointer settings from the v2 node.mouse block. Emitted
     // when the node declares any pointer intent; version 2 only when it uses an
@@ -1439,9 +1652,12 @@ function encodeBlob(
         : undefined
     if (mouseRec) builder.mouseTable(mouseRec)
     // TBL_SENSOR (sensor-settings plan §4b): the product's sensor defaults from
-    // node.sensor.defaults, for the first sensor, so firmware not built from
-    // this JSON runs them too.
-    const sensor = sensorEntries(config.node?.sensor?.defaults, 0)
+    // node.sensor.defaults, for the part node.sensor.part names (default 0),
+    // so firmware not built from this JSON runs them too.
+    const sensor = sensorEntries(
+        config.node?.sensor?.defaults,
+        config.node?.sensor?.part ?? 0,
+    )
     for (const skip of sensor.skipped) {
         diag.warn(`sensor default "${skip.key}" left out: ${skip.reason}`, [
             'node',
@@ -1576,6 +1792,12 @@ function encodeBlob(
         const overrides: LinkProfileOverrideRecord[] = (
             linkProfile.overrides ?? []
         ).map((o) => ({ knob: o.knob, value: o.value >>> 0 }))
+        if (overrides.length > LINK_PROFILE_OVR_MAX)
+            diag.error(
+                `link profile has ${overrides.length} overrides; the firmware ` +
+                    `takes ${LINK_PROFILE_OVR_MAX}`,
+                ['node', 'linkProfile', 'overrides'],
+            )
         const profileId = LinkProfileId[linkProfile.profile]
         if (profileId !== LinkProfileId.balanced || overrides.length > 0) {
             builder.linkProfileTable(profileId, overrides)
@@ -1611,10 +1833,11 @@ function encodeBlob(
             )
             return false
         })
-        .map((b) => ({
-            position: b.position,
-            ...lowerSemanticAction(b.action),
-        }))
+        .map((b, i) => {
+            if (b.action.kind === 'keyboard')
+                warnDeadUsage(b.action.usage, diag, ['actionBindings', i], 'the action')
+            return { position: b.position, ...lowerSemanticAction(b.action) }
+        })
     if (actionBindings.length > 0)
         builder.actionBindingTable(numPositions, actionBindings)
     // AUTOCORRECT (§5.2-E, TBL_AUTOCORRECT): the serialized dictionary trie. The
@@ -1626,7 +1849,10 @@ function encodeBlob(
     if (config.autocorrect !== undefined) {
         try {
             builder.autocorrectTable(
-                encodeAutocorrectDictionary(config.autocorrect.entries),
+                encodeAutocorrectDictionary(
+                    config.autocorrect.entries,
+                    limits.autocorrectMaxTypo ?? AUTOCORRECT_MAX_TYPO,
+                ),
             )
         } catch (e) {
             diag.error(
@@ -1680,7 +1906,10 @@ export function buildRemapprBlob(
     opts: { configVersion: number } & RemapprBlobOpts,
 ): { blob: Uint8Array; diagnostics: readonly Diagnostic[] } {
     const diag = new DiagnosticBag()
-    const blob = encodeBlob(config, diag, opts.configVersion, opts)
+    const compiled = encodeBlob(config, diag, opts.configVersion, opts)
+    const blob = opts.carryFrom
+        ? carryUnmodeledTables(compiled, opts.carryFrom, diag)
+        : compiled
     return { blob, diagnostics: diag.all }
 }
 

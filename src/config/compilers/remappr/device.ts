@@ -34,6 +34,7 @@ import {
 } from './blobWriter'
 import {
     ByteReader,
+    FrameOverrun,
     DecodeCode,
     type DecodeCodeValue,
     readBlobFrames,
@@ -231,6 +232,9 @@ type Frames = (id: number) => TableFrame | undefined
 export interface DeviceDecodeOpts {
     /** Where the device keeps its analog inputs (its AXES parts). */
     axes?: AxesLayout
+    /** The device's described parts: a mouse document then reads its
+     *  pointer part's settings (else the first part TBL_PART lists). */
+    sensors?: readonly SensorInfo[]
 }
 type DeviceTables = Pick<
     DeviceDecodeResult,
@@ -300,6 +304,7 @@ function decodeDongleTables(
 function decodeMouseTables(
     bytes: Uint8Array,
     table: Frames,
+    opts: DeviceDecodeOpts,
 ): DeviceTables | DecodeCodeValue {
     const out: DeviceTables = {}
     const mt = table(TableId.Mouse)
@@ -325,7 +330,16 @@ function decodeMouseTables(
     const st = table(TableId.Sensor)
     if (st) {
         if (st.version < 1 || st.version > 2) return DecodeCode.TABLE_VER
-        const sensor = readSensorTable(bytes, st.start, st.end, displayParts(bytes, table))
+        // The document holds the pointer part's settings: that part when the
+        // device's parts are known, else the first part the table lists.
+        const pointer = opts.sensors?.find((x) => x.cls === 'pointer')?.index
+        const sensor = readSensorTable(
+            bytes,
+            st.start,
+            st.end,
+            displayParts(bytes, table),
+            pointer,
+        )
         if (typeof sensor === 'string') return DecodeCode.TABLE_FRAME
         if (sensor.settings) out.sensor = sensor
     }
@@ -344,7 +358,8 @@ function decodeJoystickTable(
     if (jt.version < 1 || jt.version > 2) return DecodeCode.TABLE_VER
     const j = readJoystickTable(bytes, jt.start, jt.end, jt.version)
     if (typeof j === 'string') return DecodeCode.TABLE_FRAME
-    const pt = jt.version === 2 ? table(TableId.Sensor) : undefined
+    // TBL_PART shaping wins over a v1 table's own, as on the device.
+    const pt = table(TableId.Sensor)
     if (!pt) return j
     if (pt.version < 1 || pt.version > 2) return DecodeCode.TABLE_VER
     const entries = readPartEntries(bytes, pt.start, pt.end)
@@ -403,7 +418,13 @@ export function decodeRemapprDeviceBlob(
     const personality = PERSONALITY_BY_CODE[bytes[pers.start]]
     if (!personality) return { code: DecodeCode.DEVICE }
 
-    const tables = TABLES_BY_PERSONALITY[personality](bytes, table, opts)
+    let tables: ReturnType<(typeof TABLES_BY_PERSONALITY)[typeof personality]>
+    try {
+        tables = TABLES_BY_PERSONALITY[personality](bytes, table, opts)
+    } catch (e) {
+        if (e instanceof FrameOverrun) return { code: DecodeCode.TABLE_FRAME }
+        throw e
+    }
     if (typeof tables === 'number') return { code: tables }
     return {
         code: DecodeCode.OK,
