@@ -109,19 +109,21 @@ function stubTree(labels: string[]): string {
     return ['/ {', ...nodes, '};'].join('\n')
 }
 
-/** Binding for the stub board nodes: any properties, and an SPI bus, so a
- *  child with `on-bus: spi` (remappr,spi-link) is checked against its own
- *  binding. */
-const STUB_BINDING = [
-    'description: stub board node for the shield binding check',
-    'compatible: "remappr-test,stub"',
-    'bus: spi',
-    'gpio-cells: [pin, flags]',
-    'dma-cells: [channel, slot, config]',
-    'io-channel-cells: [input]',
-    'pwm-cells: [channel, period, flags]',
-    '',
-].join('\n')
+/** Bindings for the stub board nodes: any properties, and a bus, so a child
+ *  with `on-bus` (remappr,spi-link, a display panel) is checked against its
+ *  own binding. A stub whose label names an I2C bus (`i2c0`, `arduino_i2c`)
+ *  is an I2C bus, any other an SPI bus. */
+const stubBinding = (bus: 'spi' | 'i2c'): string =>
+    [
+        'description: stub board node for the shield binding check',
+        `compatible: "remappr-test,stub-${bus}"`,
+        `bus: ${bus}`,
+        'gpio-cells: [pin, flags]',
+        'dma-cells: [channel, slot, config]',
+        'io-channel-cells: [input]',
+        'pwm-cells: [channel, period, flags]',
+        '',
+    ].join('\n')
 
 /** Loads the preprocessed tree, gives every stub node (and any node the
  *  overlay re-typed, like `&spi3 { compatible = "nordic,nrf-spim"; }`) the
@@ -136,7 +138,8 @@ src, out, *dirs = sys.argv[2:]
 text = open(src).read()
 stubs = [n.path for n in dtlib.DT(src).node_iter() if n.name.startswith("stub_")]
 text += "".join(
-    '\\n&{%s} { compatible = "remappr-test,stub"; };' % p for p in stubs)
+    '\\n&{%s} { compatible = "remappr-test,stub-%s"; };'
+    % (p, "i2c" if "i2c" in p else "spi") for p in stubs)
 open(out, "w").write(text + "\\n")
 try:
     edtlib.EDT(out, dirs, warn_reg_unit_address_mismatch=False)
@@ -153,7 +156,8 @@ function edtCheck(tc: DtcToolchain, dir: string, pre: string): DtcResult | null 
         return null
     const stubDir = join(dir, 'stub-bindings')
     mkdirSync(stubDir)
-    writeFileSync(join(stubDir, 'remappr-test,stub.yaml'), STUB_BINDING)
+    for (const bus of ['spi', 'i2c'] as const)
+        writeFileSync(join(stubDir, `remappr-test,stub-${bus}.yaml`), stubBinding(bus))
     const r = spawnSync(
         'python3',
         [

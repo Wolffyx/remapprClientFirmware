@@ -79,7 +79,7 @@ export function matrixWiring(
             'col2row',
         rows,
         cols,
-        debouncePressMs: ks?.debouncePressMs,
-        debounceReleaseMs: ks?.debounceReleaseMs,
+        debouncePressMs: bm?.debouncePressMs ?? ks?.debouncePressMs,
+        debounceReleaseMs: bm?.debounceReleaseMs ?? ks?.debounceReleaseMs,
     }
 }

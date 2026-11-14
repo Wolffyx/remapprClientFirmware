@@ -775,6 +775,40 @@ export interface BoardButton {
     code?: string
 }
 
+export interface BoardHaptic {
+    pwm: string
+    channel: number
+    /** PWM period, ns. */
+    periodNs: number
+    inverted?: boolean
+    pinctrl?: string[]
+}
+
+export interface BoardLedZone {
+    target: 'underglow' | 'backlight' | 'per-key' | 'indicator'
+    offset: number
+    length: number
+}
+
+/** A panel node the shield declares on its bus. */
+export interface BoardPanel {
+    part: string
+    bus: string
+    reg: number
+    width: number
+    height: number
+    busHz?: number
+    /** Driver properties by devicetree name. */
+    props?: Record<string, number | number[] | boolean | string>
+}
+
+export interface BoardDisplay {
+    /** A board panel's label, or a panel to declare. */
+    panel: string | BoardPanel
+    /** Part defaults by registry name. */
+    defaults?: Record<string, ConfigSensorValue>
+}
+
 /** An analog slider on an ADC channel. */
 export interface BoardSlider {
     adc: BoardAdcChannel
@@ -790,6 +824,13 @@ export interface ConfigBoard {
         rows?: string[]
         cols?: string[]
         pollMs?: number
+        /** Scan period while asleep, ms. */
+        sleepPollMs?: number
+        /** Strobe settle time, us. */
+        settleUs?: number
+        debouncePressMode?: 'eager' | 'defer'
+        debouncePressMs?: number
+        debounceReleaseMs?: number
         [k: string]: unknown
     }
     split?: boolean
@@ -818,6 +859,12 @@ export interface ConfigBoard {
     buttons?: BoardButton[]
     /** Analog sliders (remappr,slider). */
     sliders?: BoardSlider[]
+    /** A haptic actuator on PWM (remappr,haptic). */
+    haptic?: BoardHaptic
+    /** LED strip slices per lighting role (remappr,led-zone). */
+    ledZones?: BoardLedZone[]
+    /** Display parts (remappr,display). */
+    displays?: BoardDisplay[]
     /** Pins the board already uses for a bus it owns (console or node-bus
      *  UART, a coprocessor SPI); the generator refuses any other use of one. */
     reservedPins?: { pin: string; use: string }[]
