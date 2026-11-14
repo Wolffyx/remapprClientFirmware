@@ -420,6 +420,7 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                       ...(m.description ? { description: m.description } : {}),
                       ...(m.params !== undefined ? { params: m.params } : {}),
                       steps: m.steps.map(denormalizeMacroStep),
+                      ...(m.private ? { private: true } : {}),
                   })),
               }
             : {}),

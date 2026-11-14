@@ -3,7 +3,13 @@
 // it's the same linear protocol read, parameterized by `targetNode` (0 = the
 // unchanged direct probe; ≠0 rides the §6.2 COMMON relay to a behind-dongle node).
 import type { ConfigKeymap } from '../../config'
-import { decodeRemapprBlob, DecodeCode } from '../../config/compilers/remappr/decode'
+import { BLOB_HEADER_LEN, BLOB_MAGIC } from '../../config/compilers/remappr/blobWriter'
+import {
+    decodeCodeLabel,
+    decodeRemapprBlob,
+    DecodeCode,
+} from '../../config/compilers/remappr/decode'
+import { ProtocolError } from '../../errors'
 import type { PhysicalLayout } from '../../types'
 
 import type { DiscoveryResult } from './discovery'
@@ -13,6 +19,7 @@ import {
     Cmd,
     Namespace,
     Status,
+    statusName,
 } from './protocol'
 import { type RemapprRpc, RELAY_READ_RETRIES } from './rpc'
 
@@ -47,8 +54,12 @@ export async function readConfigBlob(
     let offset = 0
     let total = 0
     const want = legacy ? READ_CHUNK_WANT_DIRECT : READ_CHUNK_WANT_RELAY
-    let guard = 0
-    while (guard++ < 8192) {
+    for (let guard = 0; ; guard++) {
+        if (guard >= MAX_READ_CHUNKS) {
+            throw new ProtocolError(
+                `READ_CONFIG_CHUNK did not reach the end of the config after ${offset} bytes`,
+            )
+        }
         const arg = buildReadChunkArg(offset, want)
         const r = legacy
             ? await rpc.callPlain(Cmd.READ_CONFIG_CHUNK, arg)
@@ -60,7 +71,15 @@ export async function readConfigBlob(
                       ? undefined
                       : { targetNode: target, retries: RELAY_READ_RETRIES },
               )
-        if (r.status !== Status.OK || r.data.length === 0) break // EOF
+        // Only OK with no bytes is the end of the blob. An error status is a
+        // failed read, never EOF: a truncated blob decodes to nothing, and the
+        // editor would then offer to save a blank keymap over the real one.
+        if (r.status !== Status.OK) {
+            throw new ProtocolError(
+                `READ_CONFIG_CHUNK at offset ${offset} failed: ${statusName(r.status)}`,
+            )
+        }
+        if (r.data.length === 0) break // EOF
         chunks.push(r.data)
         offset += r.data.length
         total += r.data.length
@@ -71,7 +90,29 @@ export async function readConfigBlob(
         out.set(c, off)
         off += c.length
     }
+    checkReadLength(out)
     return out
+}
+
+// One chunk per request, so this bounds the read at well over any config size.
+const MAX_READ_CHUNKS = 8192
+
+/** A read that ended before the length its RMBC header declares was cut short.
+ *  A blob that is not RMBC at all is left for the decoder to refuse. */
+function checkReadLength(blob: Uint8Array): void {
+    if (blob.length < BLOB_HEADER_LEN) {
+        throw new ProtocolError(
+            `the device reports a config but the read returned only ${blob.length} bytes`,
+        )
+    }
+    const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength)
+    if (dv.getUint32(0, true) !== BLOB_MAGIC) return
+    const declared = BLOB_HEADER_LEN + dv.getUint32(12, true)
+    if (blob.length < declared) {
+        throw new ProtocolError(
+            `the config read stopped at ${blob.length} of ${declared} bytes`,
+        )
+    }
 }
 
 /** A minimal single-layer config for a device/node with no active blob. */
@@ -113,6 +154,13 @@ export interface LoadedConfig {
     layouts: PhysicalLayout[]
     activeLayoutId: number
     maxLayers: number
+    /** Set when the device holds a config this client could not decode. The
+     *  `config` is then a placeholder, so saving it would overwrite the real
+     *  one: the service built from it must be read-only. */
+    unreadable?: string
+    /** The blob as read, when it decoded: commit carries the tables the config
+     *  does not model from it, so a save does not drop them. */
+    deviceBlob?: Uint8Array
 }
 
 /**
@@ -141,6 +189,11 @@ export async function loadDeviceConfig(
         config = decoded.config
         configVersion = decoded.configVersion ?? configVersion
     }
+    const unreadable =
+        blob.length > 0 && !config
+            ? `The keymap on this device could not be read (${decodeCodeLabel(decoded.code)}), ` +
+              'so it is shown read-only: saving would overwrite it.'
+            : undefined
 
     const fallbackCount = config?.layers[0]?.bindings.length ?? 0
     const geometry = await fetchPhysicalLayouts(rpc, {
@@ -161,5 +214,7 @@ export async function loadDeviceConfig(
         layouts: geometry.layouts,
         activeLayoutId: geometry.activeLayoutId,
         maxLayers,
+        ...(unreadable ? { unreadable } : {}),
+        ...(decoded.code === DecodeCode.OK ? { deviceBlob: blob } : {}),
     }
 }

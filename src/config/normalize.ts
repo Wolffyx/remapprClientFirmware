@@ -550,6 +550,7 @@ export function normalizeKeymap(km: SurfaceKeymap): ConfigKeymap {
                       ...(m.description ? { description: m.description } : {}),
                       ...(m.params !== undefined ? { params: m.params } : {}),
                       steps: m.steps.map(normalizeMacroStep),
+                      ...(m.private ? { private: true } : {}),
                   })),
               }
             : {}),

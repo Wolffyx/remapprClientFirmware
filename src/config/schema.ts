@@ -508,6 +508,12 @@ export const MacroSchema = z.object({
         .optional()
         .describe('Binding-cells: 0 = plain, 1 = one-param, 2 = two-param.'),
     steps: z.array(MacroStepSchema).min(1),
+    private: z
+        .boolean()
+        .optional()
+        .describe(
+            'Write-only: the device runs it but never returns its steps (e.g. a password).',
+        ),
 })
 
 export const HoldTapDefSchema = z
