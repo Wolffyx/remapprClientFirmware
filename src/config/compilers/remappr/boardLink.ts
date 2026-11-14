@@ -7,7 +7,10 @@
 //                       A split keyboard is one device over these ports.
 //   • board.radioLink → remappr,spi-link: the radio chip on SPI, with its
 //                       DATA_READY and reset pins; picks the SPI radio backend.
-//   • board.radio     → remappr,radio-config: the RF channel seed.
+//   • board.radio     → remappr,radio-config: the RF channel seed, under the
+//                       `remappr_radio` label the dongle and the in-process
+//                       radio link read. With the radio chip on SPI the seed
+//                       is the chip's own, so it is refused there.
 // The ports' Kconfig comes from the JSON too: the node bus is on when a port
 // is declared, and the static main role is on for node.role "coordinator".
 import type { DiagnosticBag } from '../../diagnostics'
@@ -50,6 +53,10 @@ function uartBlock(
         ``,
     ]
 }
+
+/** A presence-detect pin: high while plugged in, unless the JSON says low. */
+const detectFlags = (port: BoardNodeBusPort): string =>
+    port.detectActiveLow ? ROLE_FLAGS.direct : ROLE_FLAGS.input
 
 /** One UART per port, at most one upstream port, and none on the main. */
 function checkTopology(
@@ -104,7 +111,7 @@ export function emitNodeBus(
             `\t\tuart = <&${uart}>;`,
             `\t\tdirection = "${dir}";`,
             ...(port.detect
-                ? [`\t\tdetect-gpios = <${book.spec(port.detect, ROLE_FLAGS.input, [...path, 'detect'])}>;`]
+                ? [`\t\tdetect-gpios = <${book.spec(port.detect, detectFlags(port), [...path, 'detect'])}>;`]
                 : []),
             ...(port.label
                 ? [`\t\tlabel = "${dtString(port.label, diag, [...path, 'label'])}";`]
@@ -169,18 +176,34 @@ export function emitRadioLink(
     }
 }
 
+/** The label the firmware reads the seed by (DT_NODELABEL(remappr_radio) in
+ *  app/dongle and subsys/remappr/radio_link), on the node path the dongle
+ *  board overlays use, so a shield and an overlay merge into one node. */
+export const RADIO_CONFIG_LABEL = 'remappr_radio'
+
 /** remappr,radio-config from board.radio. */
-export function emitRadioConfig(config: ConfigKeymap): PeripheralFragment {
+export function emitRadioConfig(
+    config: ConfigKeymap,
+    diag: DiagnosticBag,
+): PeripheralFragment {
     const seed = config.board?.radio?.channelSeed
     if (!seed) return EMPTY
+    if (config.board?.radioLink) {
+        diag.error(
+            `board.radio.channelSeed has no reader here: with the radio chip on SPI ` +
+                `(board.radioLink) the link runs on the chip, which reads its own ` +
+                `devicetree. Give the seed in the radio chip's or the dongle's board JSON`,
+            ['board', 'radio', 'channelSeed'],
+        )
+        return EMPTY
+    }
     return {
         includes: [],
         nodes: [
             `/ {`,
-            `\tradio_config: radio-config {`,
+            `\t${RADIO_CONFIG_LABEL}: remappr-radio {`,
             `\t\tcompatible = "remappr,radio-config";`,
-            `\t\t/* RF channels ${seed.join(', ')} */`,
-            `\t\tchannel-seed = [${seed.map((c) => c.toString(16).padStart(2, '0')).join(' ')}];`,
+            `\t\tchannel-seed = /bits/ 8 <${seed.join(' ')}>;`,
             `\t};`,
             `};`,
         ],

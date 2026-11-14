@@ -403,7 +403,7 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         emitPowerOff(config, book),
         emitNodeBus(config, book, diag),
         emitRadioLink(config, book, diag),
-        emitRadioConfig(config),
+        emitRadioConfig(config, diag),
     ]
 
     const overlay: string[] = [

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "kind": "remappr.keymap",
+  "meta": { "name": "Radio nRF", "target": "zmk" },
+  "keyboard": {
+    "id": "radio_nrf",
+    "name": "Radio nRF",
+    "keys": [
+      { "x": 0, "y": 0, "matrix": [0, 0] },
+      { "x": 1, "y": 0, "matrix": [0, 1] }
+    ]
+  },
+  "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+  "node": { "personality": "keyboard" },
+  "board": {
+    "controller": "nrf52840dk/nrf52840",
+    "matrix": { "diode": "col2row", "rows": ["P0.03"], "cols": ["P1.01", "P1.02"] },
+    "radio": { "channelSeed": [2, 26, 50, 74, 98, 14, 38, 62, 86, 10, 34, 58] }
+  }
+}

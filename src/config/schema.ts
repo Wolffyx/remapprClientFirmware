@@ -1327,6 +1327,13 @@ export const BoardNodeBusPortSchema = z
             .min(1)
             .optional()
             .describe('Presence-detect pin, asserted while a node is plugged in.'),
+        detectActiveLow: z
+            .boolean()
+            .optional()
+            .describe(
+                'The detect pin reads low while a node is plugged in (pulled up). ' +
+                    'Default: high, pulled down.',
+            ),
         label: z.string().min(1).max(16).optional().describe('Port name for logs.'),
         currentSpeed: z
             .number()
@@ -1362,10 +1369,15 @@ export const BoardRadioSchema = z
     .object({
         channelSeed: z
             .array(z.number().int().min(0).max(100))
-            .min(1)
+            .min(8, 'at least 8 channels: the hop map is the first 8 (REMAPPR_RADIO_HOP_MIN)')
+            .max(101, 'at most 101 channels: there are 101 (0..100)')
+            .refine((a) => new Set(a).size === a.length, {
+                message: 'a channel is listed twice; the radio refuses a seed with duplicates',
+            })
             .describe(
-                'RF channels (0..100) the dongle seeds its hop map from and a node ' +
-                    'hunts; dongle and node should agree.',
+                'RF channels (0..100, no duplicates, at least 8) the dongle seeds its ' +
+                    'hop map from (the first 8) and a node hunts; dongle and node ' +
+                    'should agree.',
             ),
     })
     .describe('2.4 GHz radio facts (remappr,radio-config).')

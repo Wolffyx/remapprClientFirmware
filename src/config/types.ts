@@ -891,6 +891,8 @@ export interface BoardNodeBusPort {
     direction?: 'downstream' | 'upstream'
     /** Presence-detect pin. */
     detect?: string
+    /** The detect pin is low while a node is plugged in (default high). */
+    detectActiveLow?: boolean
     label?: string
     currentSpeed?: number
     /** The UART's pinctrl phandles. */
