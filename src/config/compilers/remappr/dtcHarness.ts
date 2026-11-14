@@ -15,7 +15,13 @@
 // ~/Projects/remappr-ws/{zephyr,remappr-firmware}. Without them `dtcToolchain()`
 // returns null and the callers skip.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+    existsSync,
+    mkdirSync,
+    mkdtempSync,
+    rmSync,
+    writeFileSync,
+} from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -87,18 +93,85 @@ function missingLabels(pre: string): string[] {
     return [...used].filter((l) => !defined.has(l)).sort()
 }
 
-/** One stub node per missing label. Each can stand for a gpio controller, a
- *  dma controller or a bus with children, which covers what a shield refers
- *  to on its board. */
+/** One stub node per missing label. Each can stand for a gpio, dma, adc or
+ *  pwm controller, a uart, or a bus with children, which covers what a shield
+ *  refers to on its board. */
 function stubTree(labels: string[]): string {
     const nodes = labels.map(
         (l) =>
             `\t${l}: stub_${l} {\n` +
             `\t\tgpio-controller;\n\t\t#gpio-cells = <2>;\n` +
             `\t\t#dma-cells = <3>;\n` +
+            `\t\t#io-channel-cells = <1>;\n` +
+            `\t\t#pwm-cells = <3>;\n` +
             `\t\t#address-cells = <1>;\n\t\t#size-cells = <0>;\n\t};`,
     )
     return ['/ {', ...nodes, '};'].join('\n')
+}
+
+/** Binding for the stub board nodes: any properties, and an SPI bus, so a
+ *  child with `on-bus: spi` (remappr,spi-link) is checked against its own
+ *  binding. */
+const STUB_BINDING = [
+    'description: stub board node for the shield binding check',
+    'compatible: "remappr-test,stub"',
+    'bus: spi',
+    'gpio-cells: [pin, flags]',
+    'dma-cells: [channel, slot, config]',
+    'io-channel-cells: [input]',
+    'pwm-cells: [channel, period, flags]',
+    '',
+].join('\n')
+
+/** Loads the preprocessed tree, gives every stub node (and any node the
+ *  overlay re-typed, like `&spi3 { compatible = "nordic,nrf-spim"; }`) the
+ *  stub binding, then builds an EDT over the Zephyr and firmware bindings.
+ *  edtlib raises on a missing required property, a wrong type or a value
+ *  outside an enum: the checks a Zephyr build makes on the shield. */
+const EDT_SCRIPT = `
+import sys
+sys.path.insert(0, sys.argv[1])
+from devicetree import dtlib, edtlib
+src, out, *dirs = sys.argv[2:]
+text = open(src).read()
+stubs = [n.path for n in dtlib.DT(src).node_iter() if n.name.startswith("stub_")]
+text += "".join(
+    '\\n&{%s} { compatible = "remappr-test,stub"; };' % p for p in stubs)
+open(out, "w").write(text + "\\n")
+try:
+    edtlib.EDT(out, dirs, warn_reg_unit_address_mismatch=False)
+except edtlib.EDTError as e:
+    print(e, file=sys.stderr)
+    sys.exit(1)
+`
+
+/** The edtlib binding check, when Python and Zephyr's devicetree package are
+ *  there; null otherwise (the caller has the dtc result alone). */
+function edtCheck(tc: DtcToolchain, dir: string, pre: string): DtcResult | null {
+    const lib = join(tc.zephyr, 'scripts/dts/python-devicetree/src')
+    if (!existsSync(join(lib, 'devicetree/edtlib.py')) || !onPath('python3'))
+        return null
+    const stubDir = join(dir, 'stub-bindings')
+    mkdirSync(stubDir)
+    writeFileSync(join(stubDir, 'remappr-test,stub.yaml'), STUB_BINDING)
+    const r = spawnSync(
+        'python3',
+        [
+            '-c',
+            EDT_SCRIPT,
+            lib,
+            pre,
+            join(dir, 'edt.dts'),
+            join(tc.zephyr, 'dts/bindings'),
+            join(tc.firmware, 'dts/bindings'),
+            stubDir,
+        ],
+        { encoding: 'utf8' },
+    )
+    if (r.status === 0) return { ok: true, log: '' }
+    // edtlib's YAML loader is missing: no binding check here.
+    if (/No module named/.test(r.stderr)) return null
+    return { ok: false, log: r.stderr }
 }
 
 const HEADER = [
@@ -133,7 +206,8 @@ export function dtcCheck(tc: DtcToolchain, overlay: string): DtcResult {
             ['-q', '-I', 'dts', '-O', 'dtb', '-o', join(dir, 'out.dtb'), join(dir, 'board.pre.dts')],
             { encoding: 'utf8' },
         )
-        return { ok: dtc.status === 0, log: dtc.stderr }
+        if (dtc.status !== 0) return { ok: false, log: dtc.stderr }
+        return edtCheck(tc, dir, join(dir, 'board.pre.dts')) ?? { ok: true, log: '' }
     } catch (e) {
         const err = e as { stderr?: string; message: string }
         return { ok: false, log: err.stderr || err.message }

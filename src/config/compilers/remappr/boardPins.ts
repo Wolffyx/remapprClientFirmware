@@ -148,6 +148,15 @@ export class PinBook {
         return s.startsWith('&') ? s : `${core} ${flags}`
     }
 
+    /** Like `spec`, for a pin another node already owns (a power-off wake
+     *  pin is one of the board's inputs): resolved and checked, not taken. */
+    ref(raw: string, flags: string, path: DiagnosticPath): string {
+        const s = raw.trim()
+        const core = this.core(s, path)
+        if (!core) return s
+        return s.startsWith('&') ? s : `${core} ${flags}`
+    }
+
     private take(core: string, path: DiagnosticPath): void {
         const id = identity(core)
         const prior = this.claims.get(id)
