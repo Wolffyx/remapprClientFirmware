@@ -63,6 +63,8 @@ import {
     LightingActionCode,
     LightingTargetCode,
     LockAction,
+    CLUSTER_PSK_LEN,
+    MACRO_FLAG_PRIVATE,
     MacroOp,
     MouseButtonCode,
     MouseDirCode,
@@ -696,6 +698,10 @@ export interface BlobFrames {
     /** Header config_version; meaningful when `code === OK`. */
     configVersion: number
     frames: TableFrame[]
+    /** The CRC did not match because the device blanked a secret on read-back
+     *  (a private macro's steps, the cluster key), not because the bytes are
+     *  damaged. Present on OK only. */
+    redacted?: boolean
 }
 
 /**
@@ -723,7 +729,7 @@ export function readBlobFrames(bytes: Uint8Array): BlobFrames {
     const crcStored = h.u32()
     if (bodyLen > bytes.length - BLOB_HEADER_LEN) return fail(DecodeCode.TRUNCATED)
     const body = bytes.subarray(BLOB_HEADER_LEN, BLOB_HEADER_LEN + bodyLen)
-    if (crc32(body) !== crcStored) return fail(DecodeCode.CRC)
+    const crcOk = crc32(body) === crcStored
 
     // ── table frames ──
     const frames: TableFrame[] = []
@@ -744,7 +750,44 @@ export function readBlobFrames(bytes: Uint8Array): BlobFrames {
     // refuses it (config_blob.c), so a blob the device would reject never
     // decodes here as if it were fine.
     if (off !== bodyEnd) return fail(DecodeCode.TABLE_FRAME)
-    return { code: DecodeCode.OK, configVersion, frames }
+    if (crcOk) return { code: DecodeCode.OK, configVersion, frames }
+    // READ_CONFIG_CHUNK blanks the secrets (§17, §6 N5b) under a CRC the
+    // device computed over the real bytes, so a blob read off a device that
+    // holds one never matches its CRC.
+    if (!holdsBlankedSecret(bytes, frames)) return fail(DecodeCode.CRC)
+    return { code: DecodeCode.OK, configVersion, frames, redacted: true }
+}
+
+const allZero = (b: Uint8Array): boolean => b.every((v) => v === 0)
+
+/** Whether a blanked secret sits in `bytes`: a TBL_MACRO v2 private macro with
+ *  all-zero steps, or a TBL_CLUSTER_SEC with an all-zero key. */
+function holdsBlankedSecret(bytes: Uint8Array, frames: TableFrame[]): boolean {
+    return frames.some((t) => {
+        if (t.id === TableId.ClusterSec) {
+            const key = bytes.subarray(t.start, t.start + CLUSTER_PSK_LEN)
+            return t.end - t.start >= CLUSTER_PSK_LEN && allZero(key)
+        }
+        return t.id === TableId.Macro && t.version >= 2 && hasBlankedPrivateMacro(bytes, t)
+    })
+}
+
+// Walk a TBL_MACRO v2 like the firmware redactor (decode_macros.c) does.
+function hasBlankedPrivateMacro(bytes: Uint8Array, t: TableFrame): boolean {
+    if (t.end - t.start < 2) return false
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const count = dv.getUint16(t.start, true)
+    let p = t.start + 2
+    for (let i = 0; i < count && p + 4 <= t.end; i++) {
+        const steps = dv.getUint16(p, true) * 4
+        const flags = bytes[p + 2]
+        p += 4
+        if (p + steps > t.end) return false
+        const blanked = steps > 0 && allZero(bytes.subarray(p, p + steps))
+        if ((flags & MACRO_FLAG_PRIVATE) !== 0 && blanked) return true
+        p += steps
+    }
+    return false
 }
 
 export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
@@ -1384,19 +1427,41 @@ function readMacros(
     const out: CanonMacro[] = []
     for (let mi = 0; mi < count; mi++) {
         const numSteps = r.u16()
+        let flags = 0
         if (v2) {
-            r.u8() // flags
+            flags = r.u8()
             r.u8() // reserved
         }
-        const steps: CanonMacroStep[] = []
+        const isPrivate = (flags & MACRO_FLAG_PRIVATE) !== 0
+        const start = r.pos
+        const raw: [number, number][] = []
         for (let si = 0; si < numSteps; si++) {
             const op = r.u8()
             r.u8() // pad
-            const arg = r.u16()
+            raw.push([op, r.u16()])
+        }
+        // The device blanks a private macro's step bytes on read-back (§17).
+        if (isPrivate && numSteps > 0 && allZero(bytes.subarray(start, r.pos))) {
+            out.push({
+                id: `macro_${mi}`,
+                params: 0,
+                steps: [],
+                private: true,
+                _redacted: true,
+            })
+            continue
+        }
+        const steps: CanonMacroStep[] = []
+        for (const [op, arg] of raw) {
             const step = macroStep(op, arg, diag)
             if (step) steps.push(step)
         }
-        out.push({ id: `macro_${mi}`, params: 0, steps })
+        out.push({
+            id: `macro_${mi}`,
+            params: 0,
+            steps,
+            ...(isPrivate ? { private: true } : {}),
+        })
     }
     return out
 }

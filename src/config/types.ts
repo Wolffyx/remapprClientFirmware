@@ -312,6 +312,13 @@ export interface CanonMacro {
     /** Binding-cells: 0 = plain, 1 = one-param, 2 = two-param macro. */
     params?: 0 | 1 | 2
     steps: CanonMacroStep[]
+    /** §17 write-only macro (a password, say): the device runs it but never
+     *  returns its steps over the control protocol. Written as TBL_MACRO v2. */
+    private?: boolean
+    /** Set by the Remappr blob decoder on a private macro read off a device:
+     *  its steps came back blanked, so `steps` is empty and the macro cannot be
+     *  saved until its steps are entered again. Never authored by hand. */
+    _redacted?: boolean
 }
 
 /** A custom `zmk,behavior-hold-tap`. `bindings` are the two inner behavior

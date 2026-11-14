@@ -340,8 +340,20 @@ function buildMacros(
             ctx.templates.set(m.id, { m, mi })
             return
         }
+        // A private macro read off a device came back with its steps blanked;
+        // writing it as read would store an empty macro in its place.
+        if (m._redacted && m.steps.length === 0) {
+            diag.error(
+                `macro "${m.id}" is private: the device does not return its steps, ` +
+                    'so enter them again before saving',
+                ['macros', mi],
+            )
+        }
         ctx.index.set(m.id, ctx.records.length)
-        ctx.records.push({ steps: lowerMacroSteps(m, mi, diag) })
+        ctx.records.push({
+            steps: lowerMacroSteps(m, mi, diag),
+            ...(m.private ? { private: true } : {}),
+        })
     })
     return ctx
 }
@@ -750,6 +762,7 @@ function lowerCanonAction(
                             diag,
                             action.param,
                         ),
+                        ...(tpl.m.private ? { private: true } : {}),
                     })
                     macroCtx.instances.set(ikey, idx)
                     // §24 display name: the template's id plus the argument, so
