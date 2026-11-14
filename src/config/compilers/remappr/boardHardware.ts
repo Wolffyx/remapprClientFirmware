@@ -24,7 +24,7 @@ import type { DiagnosticBag } from '../../diagnostics'
 import { ROLE_FLAGS } from '../../pinmaps'
 import type { CanonWs2812, ConfigKeymap, ConfigSensorValue } from '../../types'
 import type { PinBook, Soc } from './boardPins'
-import { dtCompatible, dtLabel } from './dtText'
+import { dtCompatible, dtDmasOk, dtLabel, dtPhandleOk } from './dtText'
 
 /** A peripheral's contribution to the shield: header `#include`s, top-level DT
  *  blocks (appended after the main `/ {}`), and Kconfig.defconfig lines. */
@@ -267,9 +267,6 @@ function checkChain(
     ]
 }
 
-const PHANDLE = /^&[A-Za-z_][A-Za-z0-9_]*$/
-const DMAS = /^<[^;{}<>"\r\n]*>(\s*,\s*<[^;{}<>"\r\n]*>)*$/
-
 /** The raw STM32 strings are written into devicetree as they are: pinctrl
  *  entries must be phandles, `dmas` a list of `<...>` cell groups. */
 function checkStm32Raw(
@@ -278,10 +275,10 @@ function checkStm32Raw(
     path: (string | number)[],
 ): void {
     s.pinctrl.forEach((p, i) => {
-        if (!PHANDLE.test(p.trim()))
+        if (!dtPhandleOk(p))
             diag.error(`pinctrl entry "${p}" is not a phandle like "&spi1_mosi_pa7"`, [...path, 'pinctrl', i])
     })
-    if (s.dmas !== undefined && !DMAS.test(s.dmas.trim()))
+    if (s.dmas !== undefined && !dtDmasOk(s.dmas))
         diag.error(`dmas "${s.dmas}" is not a list of <...> cell groups`, [...path, 'dmas'])
 }
 

@@ -337,6 +337,30 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   first; they are the board's inputs, so they are not new pins). On STM32 it
   also turns on the PWR wake-up lines.
 
+- `board.nodeBus` are the node-bus ports (`remappr,node-bus-port`), one per
+  inter-node UART; a split keyboard is one device over them. Each has `uart`
+  (the UART's node label), `direction` (`downstream`, the default, or
+  `upstream`: at most one, and none on the coordinator), an optional `detect`
+  pin and `label`, and what turns the UART on: `currentSpeed`, `pinctrl`
+  phandles and raw `dmas` (its DMA controller is turned on too). A port turns
+  on `CONFIG_REMAPPR_NODE_BUS`; `node.role: "coordinator"` also turns on the
+  static main role.
+- `board.radioLink` is the radio chip on SPI (`remappr,spi-link`): `spi` (the
+  bus label), `dataReady`, optional `cs`, `reset` and `spiMaxHz` (8 MHz). It
+  picks the SPI radio backend.
+- `board.radio.channelSeed` are the RF channels (0..100) the dongle seeds its
+  hop map from and a node hunts (`remappr,radio-config`).
+
+  ```jsonc
+  "node": { "role": "coordinator" },
+  "board": {
+    "nodeBus": [{ "uart": "usart2", "currentSpeed": 1000000,
+                  "pinctrl": ["&usart2_tx_pd5", "&usart2_rx_pd6"] }],
+    "radioLink": { "spi": "spi1", "cs": "PD14", "dataReady": "PD15", "reset": "PF12" },
+    "radio": { "channelSeed": [2, 26, 50, 74, 98] }
+  }
+  ```
+
   ```jsonc
   "board": {
     "battery": {

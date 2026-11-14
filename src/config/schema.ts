@@ -925,6 +925,9 @@ export const BoardSchema = z
         battery: z.lazy(() => BoardBatterySchema).optional(),
         statusLeds: z.array(z.lazy(() => BoardStatusLedSchema)).optional(),
         powerOff: z.lazy(() => BoardPowerOffSchema).optional(),
+        nodeBus: z.array(z.lazy(() => BoardNodeBusPortSchema)).optional(),
+        radioLink: z.lazy(() => BoardRadioLinkSchema).optional(),
+        radio: z.lazy(() => BoardRadioSchema).optional(),
         reservedPins: z
             .array(
                 z.object({
@@ -1286,6 +1289,65 @@ export const BoardPowerOffSchema = z
             ),
     })
     .describe('Power-off choices the chip leaves open (remappr,power-off).')
+
+// pattern-check: skip declarative zod schemas mirroring the node-bus and radio bindings
+export const BoardNodeBusPortSchema = z
+    .object({
+        uart: z
+            .string()
+            .min(1)
+            .describe('Node label of the UART/USART the port runs on, e.g. "usart2".'),
+        direction: z
+            .enum(['downstream', 'upstream'])
+            .optional()
+            .describe('upstream faces the main (at most one); default downstream.'),
+        detect: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Presence-detect pin, asserted while a node is plugged in.'),
+        label: z.string().min(1).max(16).optional().describe('Port name for logs.'),
+        currentSpeed: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe("The UART's baud rate (current-speed)."),
+        pinctrl: z
+            .array(z.string().min(1))
+            .optional()
+            .describe('The UART pinctrl phandles, e.g. ["&usart2_tx_pd5", "&usart2_rx_pd6"].'),
+        dmas: z
+            .string()
+            .optional()
+            .describe('The UART tx and rx DMA channels, raw "<...>, <...>" (STM32).'),
+    })
+    .describe('One node-bus port: an inter-node link on a UART (remappr,node-bus-port).')
+
+export const BoardRadioLinkSchema = z
+    .object({
+        spi: z.string().min(1).describe('Node label of the SPI bus to the radio chip.'),
+        cs: z
+            .string()
+            .optional()
+            .describe("Chip select; written as the bus's cs-gpios. Leave out when the bus lists it."),
+        dataReady: z.string().min(1).describe('DATA_READY pin, driven by the radio chip.'),
+        reset: z.string().optional().describe('Reset pin of the radio chip, when wired.'),
+        spiMaxHz: z.number().int().positive().optional().describe('SPI clock, Hz (default 8000000).'),
+    })
+    .describe('The radio chip on SPI (remappr,spi-link): the 2.4 GHz link of a split board.')
+
+export const BoardRadioSchema = z
+    .object({
+        channelSeed: z
+            .array(z.number().int().min(0).max(100))
+            .min(1)
+            .describe(
+                'RF channels (0..100) the dongle seeds its hop map from and a node ' +
+                    'hunts; dongle and node should agree.',
+            ),
+    })
+    .describe('2.4 GHz radio facts (remappr,radio-config).')
 
 // pattern-check: skip declarative zod schemas mirroring TBL_JOYSTICK and the gamepad actions
 const JOYSTICK_AXES = ['x', 'y', 'z', 'rx', 'ry', 'rz'] as const

@@ -785,6 +785,12 @@ export interface ConfigBoard {
     statusLeds?: BoardStatusLed[]
     /** Power-off choices the chip leaves open (remappr,power-off). */
     powerOff?: BoardPowerOff
+    /** Node-bus ports (remappr,node-bus-port), one per inter-node UART. */
+    nodeBus?: BoardNodeBusPort[]
+    /** The radio chip on SPI (remappr,spi-link). */
+    radioLink?: BoardRadioLink
+    /** 2.4 GHz radio facts (remappr,radio-config). */
+    radio?: { channelSeed: number[] }
     /** Pins the board already uses for a bus it owns (console or node-bus
      *  UART, a coprocessor SPI); the generator refuses any other use of one. */
     reservedPins?: { pin: string; use: string }[]
@@ -871,6 +877,32 @@ export interface BoardPowerOff {
     partialWake?: boolean
     /** Input pins that take their wake-up line first. */
     wakeFirst?: string[]
+}
+
+// pattern-check: skip plain data interfaces for the node-bus and radio board fields
+/** One node-bus port on a UART. */
+export interface BoardNodeBusPort {
+    /** Node label of the UART ("usart2"). */
+    uart: string
+    /** upstream faces the main; default downstream. */
+    direction?: 'downstream' | 'upstream'
+    /** Presence-detect pin. */
+    detect?: string
+    label?: string
+    currentSpeed?: number
+    /** The UART's pinctrl phandles. */
+    pinctrl?: string[]
+    /** Raw `<...>, <...>` tx and rx DMA channels. */
+    dmas?: string
+}
+
+/** The radio chip on SPI. */
+export interface BoardRadioLink {
+    spi: string
+    cs?: string
+    dataReady: string
+    reset?: string
+    spiMaxHz?: number
 }
 
 /** A sensor setting's value in a document or JSON config: a boolean (BOOL), a

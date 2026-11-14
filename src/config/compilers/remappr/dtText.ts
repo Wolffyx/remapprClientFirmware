@@ -47,3 +47,27 @@ const STRUCTURAL = /[;{}<>"\r\n]/
 export function dtCellsOk(raw: string): boolean {
     return !STRUCTURAL.test(raw)
 }
+
+const PHANDLE = /^&[A-Za-z_][A-Za-z0-9_]*$/
+const DMAS = /^<[^;{}<>"\r\n]*>(\s*,\s*<[^;{}<>"\r\n]*>)*$/
+
+/** A bare phandle (`&spi1_mosi_pa7`), as a pinctrl entry. */
+export function dtPhandleOk(raw: string): boolean {
+    return PHANDLE.test(raw.trim())
+}
+
+/** A `dmas` value: one or more `<...>` cell groups, comma-separated. */
+export function dtDmasOk(raw: string): boolean {
+    return DMAS.test(raw.trim())
+}
+
+/** Text for inside a devicetree string: printable, no quote or backslash. */
+export function dtString(
+    raw: string,
+    diag: DiagnosticBag,
+    path: DiagnosticPath,
+): string {
+    if (/["\\\x00-\x1f]/.test(raw))
+        diag.error(`"${raw}" cannot be a devicetree string (quote, backslash or control character)`, path)
+    return raw
+}
