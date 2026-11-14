@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "kind": "remappr.keymap",
+  "meta": {
+    "name": "Pointer",
+    "target": "zmk"
+  },
+  "keyboard": {
+    "id": "pointer",
+    "name": "Pointer",
+    "keys": [
+      {
+        "x": 0,
+        "y": 0
+      },
+      {
+        "x": 1,
+        "y": 0
+      }
+    ]
+  },
+  "layers": [
+    {
+      "name": "base",
+      "bindings": [
+        "A",
+        "B"
+      ]
+    }
+  ],
+  "node": {
+    "personality": "mouse",
+    "sensor": {
+      "defaults": {
+        "liftCutoff": "2mm",
+        "angleSnap": true
+      }
+    }
+  },
+  "board": {
+    "controller": "nrf52840dk/nrf52840",
+    "sensor": {
+      "part": "pixart,paw3395",
+      "bus": "arduino_spi",
+      "cs": "P1.12",
+      "motion": "P1.10",
+      "reset": "P1.11"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+if SHIELD_REMAPPR_BENCH14
+
+# The matrix + keymap drivers auto-enable from devicetree; the input
+# subsystem itself must be on.
+config INPUT
+	default y
+
+# WS2812 per-key RGB (chain-length 14) over spi2 + GPDMA.
+config REMAPPR_RGB_LED
+	default y
+config SPI
+	default y
+config WS2812_STRIP_SPI
+	default y
+config DMA
+	default y
+config SPI_STM32_DMA
+	default y
+
+endif # SHIELD_REMAPPR_BENCH14

@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildProjectBundle, getCompiler, parseKeymap } from '../../index'
+import { dtcCheck, dtcToolchain } from './dtcHarness'
 
 // nRF52840 14-key macropad (rows 3/3/4/4), raw SoC gpios, col2row, NVS storage.
 const NRF = parseKeymap(`{
@@ -389,5 +390,21 @@ describe('board-gen ST port-pin labels', () => {
                 (d) => d.level === 'error' && /does not resolve/.test(d.message),
             ),
         ).toHaveLength(2)
+    })
+})
+
+const TC = dtcToolchain()
+
+describe.skipIf(!TC)('every fixture above builds with dtc', () => {
+    it.each([
+        ['nrf52840_test', NRF],
+        ['u5a5_pad', STM],
+        ['glow_pad', RGB],
+        ['glow_u5', STMRGB],
+        ['u5a5_labels', STM_LABELS],
+    ] as const)('%s', (slug, cfg) => {
+        const r = dtcCheck(TC!, overlayOf(cfg, slug))
+        expect(r.log).toBe('')
+        expect(r.ok).toBe(true)
     })
 })
