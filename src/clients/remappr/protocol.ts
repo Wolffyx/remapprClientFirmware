@@ -737,6 +737,9 @@ export const LimitsFeature = {
     macroDefaults: 1 << 3,
     matrixPollPeriod: 1 << 4,
     layerTailV3: 1 << 5,
+    /** Keyboard usages 0x78..0xA7 (international, LANG, keyboard-page
+     *  volume) reach the host; without it a build stops at 0x77. */
+    kbdExt: 1 << 12,
 } as const
 
 export interface Limits {
