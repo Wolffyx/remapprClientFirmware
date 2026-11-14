@@ -45,7 +45,7 @@ export async function setUnicodeMode(
     mode: number,
     targetNode = 0,
 ): Promise<void> {
-    const reply = await rpc.callUniversalPlain(
+    const reply = await rpc.callMutation(
         Namespace.KEYBOARD,
         Cmd.SET_UNICODE_MODE,
         buildUnicodeModeArg(mode),

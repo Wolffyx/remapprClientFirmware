@@ -47,6 +47,7 @@ import {
     serializeKeymap,
 } from '../../config'
 import { buildRemapprBlob } from '../../config/compilers/remappr'
+import { type DeviceCaps, preflightConfigBlob } from '../../config/preflight'
 
 import {
     buildRemapprActionTypes,
@@ -69,7 +70,6 @@ import {
     tapDanceToEntry,
 } from './dynamicBridge'
 import type { RemapprRpc } from './rpc'
-import type { RemapprSession } from './auth'
 import {
     BLOB_ALIGN,
     Cmd,
@@ -78,6 +78,7 @@ import {
     type Limits,
     type LinkLimitKnob,
     Namespace,
+    parseDeviceInfo,
     parseLinkLimits,
     powerCapability,
     Status,
@@ -90,9 +91,6 @@ type ClosedHandler = (reason?: unknown) => void
 
 export interface RemapprServiceDeps {
     rpc: RemapprRpc
-    /** Control-auth session for sealed writes. Omitted for read-only node views,
-     *  which never seal. */
-    session?: RemapprSession
     deviceInfo: DeviceInfo
     /** Decoded active config (source of truth); the editing buffer lowers from it. */
     config: ConfigKeymap
@@ -107,6 +105,14 @@ export interface RemapprServiceDeps {
      *  edit throws and there is no keyTest. Does NOT decide transport ownership —
      *  see `sharesTransport`. */
     readOnly?: boolean
+    /** Why the service is read-only, when it is not the behind-dongle default
+     *  (e.g. the device's config could not be decoded). Every rejected edit
+     *  throws this message, and `capabilities.readOnlyReason` carries it. */
+    readOnlyReason?: string
+    /** The config blob read off the device. commit() carries the tables the
+     *  config does not model (sensor, display, slider, cluster key, per-layer
+     *  RGB, unknown ids) from it into the blob it writes. */
+    deviceBlob?: Uint8Array
     /** True when this service borrows another service's transport (a behind-dongle
      *  node view rides the dongle's RPC), so disconnect() must NOT tear it down.
      *  False/omitted for a service that owns its transport (a direct keyboard or
@@ -187,13 +193,16 @@ export class RemapprKeyboardService
     public readonly limits?: Limits
 
     private readonly rpc: RemapprRpc
-    private readonly session?: RemapprSession
     private readonly readOnly: boolean
+    private readonly readOnlyReason: string
     /** Borrowed transport (node view) — disconnect() must not close it. */
     private readonly sharesTransport: boolean
     /** Decoded config = source of truth; updated only on a successful commit. */
     private config: ConfigKeymap
     private configVersion: number
+    /** The blob the device holds, as far as this service knows: the one read at
+     *  connect, then each one it commits. Source of the carried tables. */
+    private deviceBlob?: Uint8Array
     private readonly sealedChunk: number
 
     private layers: Layer[] = []
@@ -243,8 +252,11 @@ export class RemapprKeyboardService
 
     constructor(deps: RemapprServiceDeps) {
         this.rpc = deps.rpc
-        this.session = deps.session
-        this.readOnly = deps.readOnly ?? false
+        this.readOnly = (deps.readOnly ?? false) || deps.readOnlyReason !== undefined
+        this.readOnlyReason =
+            deps.readOnlyReason ??
+            'Read-only node view: editing a behind-dongle node is not yet ' +
+                'supported (relayed-write is HW-proof-pending).'
         this.sharesTransport = deps.sharesTransport ?? false
         this.kind = deps.kind ?? 'keyboard'
         this.device = deps.device
@@ -257,6 +269,7 @@ export class RemapprKeyboardService
         this.deviceInfo = deps.deviceInfo
         this.config = deps.config
         this.configVersion = deps.configVersion
+        this.deviceBlob = deps.deviceBlob
         this.layouts = deps.layouts
         this.activeLayoutId = deps.activeLayoutId
         this.maxLayers = Math.max(deps.maxLayers, deps.config.layers.length || 1)
@@ -283,6 +296,7 @@ export class RemapprKeyboardService
             persistence: true,
             maxLayers: this.maxLayers,
             readOnly: this.readOnly,
+            ...(deps.readOnlyReason ? { readOnlyReason: deps.readOnlyReason } : {}),
             ...(power ? { power } : {}),
         }
 
@@ -380,12 +394,7 @@ export class RemapprKeyboardService
 
     /** Reject every edit on a read-only (behind-dongle node) view. */
     private assertWritable(): void {
-        if (this.readOnly) {
-            throw new ProtocolError(
-                'Read-only node view: editing a behind-dongle node is not yet ' +
-                    'supported (relayed-write is HW-proof-pending).',
-            )
-        }
+        if (this.readOnly) throw new ProtocolError(this.readOnlyReason)
     }
 
     /* ── editing buffer ─────────────────────────────────────────────────── */
@@ -868,42 +877,101 @@ export class RemapprKeyboardService
         // Fold pending macro / tap-dance / defaults edits into the config the
         // layers raise onto, so a committed blob carries them (and their names).
         const next = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
-        const version = this.configVersion + 1
-        const { blob } = buildRemapprBlob(next, { configVersion: version })
-        const padded = padTo(blob, BLOB_ALIGN)
-
-        await this.writeOk(Cmd.WRITE_CONFIG_BEGIN, undefined, 'WRITE_CONFIG_BEGIN')
-        for (let off = 0; off < padded.length; off += this.sealedChunk) {
-            const slice = padded.subarray(
-                off,
-                Math.min(off + this.sealedChunk, padded.length),
-            )
-            await this.writeOk(Cmd.WRITE_CONFIG_CHUNK, slice, 'WRITE_CONFIG_CHUNK')
-        }
-        const validate = await this.writeCall(Cmd.VALIDATE_CONFIG)
-        if (validate.status !== Status.OK) {
-            await this.writeCall(Cmd.ROLLBACK_CONFIG).catch(() => undefined)
+        const version = this.nextConfigVersion()
+        const { blob, diagnostics } = buildRemapprBlob(next, {
+            configVersion: version,
+            ...(this.deviceBlob ? { carryFrom: this.deviceBlob } : {}),
+        })
+        // An error-level diagnostic means the blob does not say what the user
+        // asked for (e.g. a NONE placeholder for a binding that failed to lower).
+        const errors = diagnostics.filter((d) => d.level === 'error')
+        if (errors.length > 0) {
             throw new ProtocolError(
-                `VALIDATE_CONFIG failed: ${statusName(validate.status)}`,
+                `The config was not saved: ${errors.map((d) => d.message).join('; ')}`,
             )
         }
-        await this.writeOk(Cmd.COMMIT_CONFIG, undefined, 'COMMIT_CONFIG')
+        // Check the padded size, which is what the device stores, before staging
+        // anything: an oversize push fails mid-stream.
+        const padded = padTo(blob, BLOB_ALIGN)
+        const issues = preflightConfigBlob(padded, this.deviceCaps())
+        if (issues.length > 0) {
+            throw new ProtocolError(
+                `The config was not saved: ${issues.map((i) => i.message).join('; ')}`,
+            )
+        }
+
+        try {
+            await this.pushBlob(padded)
+        } catch (e) {
+            // The device may hold another version now (main firmware keeps a
+            // config it failed to activate), so every later commit would hit
+            // ERR_VERSION. Read the active version back before reporting.
+            await this.resyncConfigVersion()
+            throw e
+        }
 
         this.config = next
         this.configVersion = version
+        this.deviceBlob = blob
         this.clearEdits()
         this.markPending(false)
     }
 
-    // pattern-check: skip — sealed-vs-plain fallback inside two existing private
-    // helpers of this service; conditional dispatch, no GoF abstraction.
-    /** A mutating verb: sealed through the §19 session when the device has one,
-     *  plaintext when the firmware advertises no auth (dev/no-auth build — the
-     *  device accepts mutating verbs in the clear there). */
+    /** The version the next commit carries. The firmware refuses 0xFFFFFFFF. */
+    private nextConfigVersion(): number {
+        const version = this.configVersion + 1
+        if (version >= 0xffffffff) {
+            throw new ProtocolError(
+                'The config was not saved: the device config version is exhausted',
+            )
+        }
+        return version
+    }
+
+    /** The capacities preflight checks against; an unknown one is skipped. A
+     *  device with no config store reports 0 and has no keyboard service. */
+    private deviceCaps(): DeviceCaps {
+        const max = this.limits?.maxConfigBytes ?? 0
+        return max > 0 ? { maxConfigBytes: max } : {}
+    }
+
+    /** BEGIN, every CHUNK, VALIDATE, COMMIT. A failure before COMMIT rolls the
+     *  staging back, so the device is not left with a half-written slot. */
+    private async pushBlob(padded: Uint8Array): Promise<void> {
+        await this.writeOk(Cmd.WRITE_CONFIG_BEGIN, undefined, 'WRITE_CONFIG_BEGIN')
+        try {
+            for (let off = 0; off < padded.length; off += this.sealedChunk) {
+                const slice = padded.subarray(
+                    off,
+                    Math.min(off + this.sealedChunk, padded.length),
+                )
+                await this.writeOk(Cmd.WRITE_CONFIG_CHUNK, slice, 'WRITE_CONFIG_CHUNK')
+            }
+            await this.writeOk(Cmd.VALIDATE_CONFIG, undefined, 'VALIDATE_CONFIG')
+        } catch (e) {
+            // Best effort: the staging error is the one worth reporting.
+            await this.writeCall(Cmd.ROLLBACK_CONFIG).catch(() => undefined)
+            throw e
+        }
+        await this.writeOk(Cmd.COMMIT_CONFIG, undefined, 'COMMIT_CONFIG')
+    }
+
+    /** Re-read the active config version after a failed commit. If the read
+     *  fails too, the version is left as it was: the commit error is what the
+     *  caller sees, and the next connect reads the version afresh. */
+    private async resyncConfigVersion(): Promise<void> {
+        const r = await this.rpc.callPlain(Cmd.GET_DEVICE_INFO).catch(() => null)
+        if (!r || r.status !== Status.OK) return
+        const info = parseDeviceInfo(r.data)
+        this.configVersion = info.hasActive ? info.configVersion : 0
+    }
+
+    /** A mutating verb: sealed through the §19 session the RPC holds (and
+     *  re-handshaken once if the device dropped it), plaintext when the
+     *  firmware advertises no auth (dev/no-auth build — the device accepts
+     *  mutating verbs in the clear there). */
     private writeCall(cmd: number, arg?: Uint8Array) {
-        return this.session
-            ? this.rpc.callSealed(this.session, cmd, arg)
-            : this.rpc.callPlain(cmd, arg)
+        return this.rpc.callWrite(cmd, arg)
     }
 
     private async writeOk(

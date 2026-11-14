@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { getRateLimits, setReportRate } from './reportRate'
 import { Cmd, Namespace, Status } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
+import { plainMutations } from './plainRpc.fixture'
 
 function fakeRpc(
     handler: (
@@ -12,7 +13,7 @@ function fakeRpc(
         opts?: { targetNode?: number },
     ) => Promise<UniversalReply>,
 ): RemapprRpc {
-    return { callUniversalPlain: handler } as unknown as RemapprRpc
+    return plainMutations({ callUniversalPlain: handler }) as unknown as RemapprRpc
 }
 
 // 8-byte rate-limits reply: version | supportedMask | u16 usb | u16 radio | u16 current.
