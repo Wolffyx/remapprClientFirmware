@@ -256,6 +256,26 @@ const KIND_BY_CODE = new Map<number, ScreenWidgetKind>(
 const ALIGN_BY_CODE = Object.keys(SCREEN_ALIGN) as ConfigScreenWidget['align'][]
 const FORMAT_BY_CODE = Object.keys(CLOCK_FORMATS) as ConfigScreenWidget['format'][]
 
+/** Whether a widget's text or image lies inside its pool (the device refuses
+ *  one that does not), and its box flags and font are ones this client knows. */
+function widgetFits(
+    kind: ScreenWidgetKind,
+    rec: WidgetRecord,
+    strings: Uint8Array,
+    bitmaps: Uint8Array,
+): boolean {
+    const known = W_INVERT | W_ALIGN_MASK | W_FRAME
+    if (rec.flags & ~known) return false
+    if (rec.font !== SCREEN_FONTS.small && rec.font !== SCREEN_FONTS.large) return false
+    if (kind === 'text') return rec.arg + rec.arg2 <= strings.length
+    if (kind === 'clock') return FORMAT_BY_CODE[rec.source] !== undefined
+    if (kind !== 'image') return true
+    const width = rec.arg2 & 0xff
+    const height = rec.arg2 >> 8
+    const len = Math.ceil(width / 8) * height
+    return width > 0 && height > 0 && rec.arg + len <= bitmaps.length
+}
+
 /** The kind-specific fields of a decoded widget. */
 function kindView(
     kind: ScreenWidgetKind,
@@ -282,7 +302,7 @@ function widgetView(
     bitmaps: Uint8Array,
 ): ConfigScreenWidget | undefined {
     const kind = KIND_BY_CODE.get(rec.kind)
-    if (!kind) return undefined
+    if (!kind || !widgetFits(kind, rec, strings, bitmaps)) return undefined
     const align = ALIGN_BY_CODE[(rec.flags & W_ALIGN_MASK) >> W_ALIGN_SHIFT]
     return {
         kind,
@@ -305,8 +325,10 @@ function readWidget(r: ByteReader): WidgetRecord {
 
 /**
  * TBL_DISPLAY payload in [start, end) -> displays, grouped by part in page
- * order. Returns an error message for a frame too short for its counts or a
- * widget kind this client does not know.
+ * order. Returns an error message for a frame too short for its counts, or
+ * for what this client cannot show in full (an unknown widget kind, flag or
+ * font, a widget past its pool, an unknown page flag): a keymap save then
+ * carries the device's table as read (carry.ts).
  */
 export function readDisplayTable(
     bytes: Uint8Array,
@@ -314,7 +336,7 @@ export function readDisplayTable(
     end: number,
 ): ConfigDisplay[] | string {
     if (end - start < HDR_LEN) return 'display table header truncated'
-    const r = new ByteReader(bytes)
+    const r = new ByteReader(bytes, end)
     r.seek(start)
     const pageCount = r.u8()
     const widgetCount = r.u8()
@@ -333,7 +355,10 @@ export function readDisplayTable(
         const widgets = recs
             .slice(first, first + count)
             .map((rec) => widgetView(rec, strings, bitmaps))
-        if (widgets.some((w) => w === undefined)) return 'unknown widget kind'
+        if (widgets.length !== count || widgets.some((w) => w === undefined)) {
+            return 'display table holds a widget this client cannot show'
+        }
+        if (flags & ~PAGE_DEFAULT) return 'display page flag unknown'
         const page: ConfigScreenPage = {
             ...(flags & PAGE_DEFAULT ? { default: true } : {}),
             widgets: widgets as ConfigScreenWidget[],

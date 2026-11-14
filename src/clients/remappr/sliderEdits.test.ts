@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { parseKeymap, type ConfigKeymap } from '../../config'
 
 import type { RemapprRpc } from './rpc'
+import { plainMutations } from './plainRpc.fixture'
 import { RemapprKeyboardService } from './service'
 
 // As the blob decodes: the base layer's slider set, no keyboard.sliders slots.
@@ -30,12 +31,12 @@ const PLAIN = parseKeymap(`{
     "layers": [{ "name": "base", "bindings": ["A"] }]
 }`)
 
-const stubRpc = {
+const stubRpc = plainMutations({
     onClosed: () => () => undefined,
     subscribeInput: () => () => undefined,
     close: async () => undefined,
     callPlain: async () => ({ status: 0, data: new Uint8Array() }),
-} as unknown as RemapprRpc
+}) as unknown as RemapprRpc
 
 function makeService(
     config: ConfigKeymap,

@@ -7,9 +7,19 @@ import {
     ccmSeal,
     loadOrCreateIdentity,
     RemapprSession,
+    ReplayedReplyError,
     setRemapprIdentityStore,
 } from './auth'
-import { buildRequest, Cmd, SEALED_TAG } from './protocol'
+import {
+    buildRequest,
+    buildUch,
+    Cmd,
+    DIRECT_SEAL_PLAIN,
+    Namespace,
+    SEALED_TAG,
+    UCH_LEN,
+    UNIVERSAL_TAG,
+} from './protocol'
 
 const hex = (s: string): Uint8Array =>
     Uint8Array.from(s.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
@@ -114,8 +124,107 @@ describe('RemapprSession handshake + sealed channel', () => {
         const ack = Uint8Array.of(Cmd.COMMIT_CONFIG, 9, 0, 0, 0, 0)
         const replyCt = ccmSeal(devKey, nonce(1, 0), le32(0), ack)
         const envelope = concat(le32(0), replyCt) // bytes after the 0xE1 tag
-        const opened = session.open(envelope, 0)
+        const opened = session.open(envelope)
         expect(opened).toEqual(ack)
+    })
+
+    // Play the device: derive its session key for a fresh host session.
+    function pair(): { session: RemapprSession; devKey: Uint8Array } {
+        const hostPriv = x25519.utils.randomSecretKey()
+        const hostPub = x25519.getPublicKey(hostPriv)
+        const devPriv = x25519.utils.randomSecretKey()
+        const devPub = x25519.getPublicKey(devPriv)
+        const session = new RemapprSession({ priv: hostPriv, pub: hostPub })
+        session.derive(devPub)
+        const devKey = hkdf(
+            sha256,
+            x25519.getSharedSecret(devPriv, hostPub),
+            concat(devPub, hostPub),
+            INFO,
+            16,
+        )
+        return { session, devKey }
+    }
+    // What the report carries after the tag(s): ctr || ct || tag, zero-padded.
+    const onWire = (env: Uint8Array, room: number): Uint8Array => {
+        const out = new Uint8Array(room)
+        out.set(env)
+        return out
+    }
+
+    it('opens a sealed reply that carries data, at its real length (L3.5)', () => {
+        const { session, devKey } = pair()
+        // A 6-byte header + 10 data bytes; the caller never says how long.
+        const data = Uint8Array.from({ length: 10 }, (_, i) => 0xa0 + i)
+        const resp = concat(Uint8Array.of(Cmd.GET_DEVICE_INFO, 3, 0, 0, 10, 0), data)
+        const env = concat(le32(0), ccmSeal(devKey, nonce(1, 0), le32(0), resp))
+        expect(session.open(onWire(env, 63))).toEqual(resp)
+    })
+
+    it('refuses a replayed sealed reply (device→host counter must rise)', () => {
+        const { session, devKey } = pair()
+        const ack = (ctr: number): Uint8Array =>
+            onWire(
+                concat(
+                    le32(ctr),
+                    ccmSeal(devKey, nonce(1, ctr), le32(ctr), Uint8Array.of(Cmd.COMMIT_CONFIG, 1, 0, 0, 0, 0)),
+                ),
+                63,
+            )
+        const captured = ack(0)
+        expect(session.open(captured)).not.toBeNull()
+        expect(() => session.open(captured)).toThrow(ReplayedReplyError)
+        expect(session.open(ack(1))).not.toBeNull()
+        // A skipped counter is fine (a lost reply); going back is not.
+        expect(session.open(ack(5))).not.toBeNull()
+        expect(() => session.open(ack(4))).toThrow(/replayed/)
+    })
+
+    it('starts the reply counter over on a new handshake', () => {
+        const { session, devKey } = pair()
+        const env = onWire(
+            concat(le32(0), ccmSeal(devKey, nonce(1, 0), le32(0), Uint8Array.of(1, 1, 0, 0, 0, 0))),
+            63,
+        )
+        expect(session.open(env)).not.toBeNull()
+        session.resetCounters()
+        expect(session.open(env)).not.toBeNull()
+    })
+
+    it('returns null for a reply under another key', () => {
+        const { session } = pair()
+        const other = new Uint8Array(16).fill(3)
+        const env = concat(le32(0), ccmSeal(other, nonce(1, 0), le32(0), Uint8Array.of(1, 1, 0, 0, 0, 0)))
+        expect(session.open(onWire(env, 63))).toBeNull()
+    })
+
+    it('seals the direct universal form and opens its reply (L3.1)', () => {
+        const { session, devKey } = pair()
+        const uch = buildUch(Namespace.SENSOR, 9)
+        const frame = session.sealDirect(uch, 0x03, 4, hex('0102'))
+        expect(frame).toHaveLength(64)
+        expect(frame[0]).toBe(UNIVERSAL_TAG)
+        expect(frame[1]).toBe(SEALED_TAG)
+        // The device opens env = frame[2..]: 42 bytes of UCH || inner.
+        const ctr = new DataView(frame.buffer, frame.byteOffset).getUint32(2, true)
+        const pt = ccmOpen(devKey, nonce(0, ctr), frame.subarray(2, 6), frame.subarray(6))
+        expect(pt).not.toBeNull()
+        expect(pt!).toHaveLength(DIRECT_SEAL_PLAIN)
+        expect(pt!.subarray(0, UCH_LEN)).toEqual(uch)
+        expect(pt!.subarray(UCH_LEN, UCH_LEN + 6)).toEqual(buildRequest(0x03, 4, hex('0102')))
+
+        // Reply: [0xE2][0xE1][ctr]AEAD(UCH(RESP) || 6-byte ack)[tag] + zero pad.
+        const respPt = concat(buildUch(Namespace.SENSOR, 9, 0, 0x01), Uint8Array.of(0x03, 4, 0, 0, 0, 0))
+        const reply = onWire(
+            concat(Uint8Array.of(UNIVERSAL_TAG, SEALED_TAG), le32(0), ccmSeal(devKey, nonce(1, 0), le32(0), respPt)),
+            64,
+        )
+        expect(session.openDirect(reply)).toEqual(respPt)
+    })
+
+    it('refuses a direct frame too big for the report', () => {
+        const { session } = pair()
+        expect(() => session.sealDirect(buildUch(1, 1), 1, 1, new Uint8Array(31))).toThrow(/64-byte/)
     })
 
     it('increments the host counter per sealed verb', () => {

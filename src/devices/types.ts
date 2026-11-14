@@ -41,6 +41,8 @@ export type ControlKind =
     | 'sensor'
     | 'encoder'
     | 'axis'
+    /** A screen: it draws, it takes no binding. */
+    | 'display'
 
 /** How a control is drawn. Independent of the kind (a button can be a key, a
  *  round face button, a pill or a mouse half). */
@@ -241,6 +243,9 @@ export interface AxisBinding {
     readonly inv: boolean
 }
 
+/** A screen takes no binding: what it shows is the device's own config. */
+export type DisplayBinding = Readonly<Record<string, never>>
+
 export interface BindingByKind {
     button: ButtonBinding
     wheel: WheelBinding
@@ -250,6 +255,7 @@ export interface BindingByKind {
     sensor: SensorBinding
     encoder: EncoderBinding
     axis: AxisBinding
+    display: DisplayBinding
 }
 
 export type ControlBinding = BindingByKind[ControlKind]

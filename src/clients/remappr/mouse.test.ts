@@ -9,6 +9,7 @@ import {
 } from './mouse'
 import { MouseVerb, Namespace, Status } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
+import { plainMutations } from './plainRpc.fixture'
 
 function fakeRpc(
     handler: (
@@ -18,7 +19,7 @@ function fakeRpc(
         opts?: { targetNode?: number },
     ) => Promise<UniversalReply>,
 ): RemapprRpc {
-    return { callUniversalPlain: handler } as unknown as RemapprRpc
+    return plainMutations({ callUniversalPlain: handler }) as unknown as RemapprRpc
 }
 
 // 12-byte motion-config reply.

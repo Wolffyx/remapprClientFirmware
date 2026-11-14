@@ -30,12 +30,12 @@ describe('HOST namespace', () => {
 
     it('talks HOST through the rpc by key name', async () => {
         const calls: [number, number, number[]][] = []
-        const rpc = {
-            callUniversalPlain: vi.fn(async (ns: number, verb: number, arg?: Uint8Array) => {
-                calls.push([ns, verb, arr(arg ?? new Uint8Array())])
-                return { status: 0, data: verb === 1 ? new Uint8Array([1, 2, 0x01, 0x02]) : new Uint8Array() }
-            }),
-        } as unknown as RemapprRpc
+        const call = vi.fn(async (ns: number, verb: number, arg?: Uint8Array) => {
+            calls.push([ns, verb, arr(arg ?? new Uint8Array())])
+            return { status: 0, data: verb === 1 ? new Uint8Array([1, 2, 0x01, 0x02]) : new Uint8Array() }
+        })
+        // GET_KEYS is a plain read; SET_VALUE and CLEAR mutate (sealed with a session).
+        const rpc = { callUniversalPlain: call, callMutation: call } as unknown as RemapprRpc
         const api = buildHostValuesApi(rpc)
         expect(await api.keys()).toEqual(['time', 'cpu'])
         await api.set('cpu', 37)

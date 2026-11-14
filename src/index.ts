@@ -58,6 +58,7 @@ export type {
     MouseMotionApi,
     NodesApi,
     NodeView,
+    NodeClusterRole,
     RgbApi,
     RoleEvent,
     SensorApi,

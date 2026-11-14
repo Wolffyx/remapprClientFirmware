@@ -124,9 +124,18 @@ export function denormalizeAction(a: CanonAction): Surface {
             }
         }
         case 'layer':
-            return { type: 'layer', mode: a.mode, layer: a.layer }
+            return {
+                type: 'layer',
+                mode: a.mode,
+                layer: a.layer,
+                ...pickDefined(a, ['releaseAfterMs']),
+            }
         case 'sticky_key':
-            return { type: 'sticky_key', key: keyToken(a.key, a._keySrc) }
+            return {
+                type: 'sticky_key',
+                key: keyToken(a.key, a._keySrc),
+                ...pickDefined(a, ['releaseAfterMs']),
+            }
         case 'output':
             return {
                 type: 'output',
@@ -182,11 +191,16 @@ export function denormalizeAction(a: CanonAction): Surface {
                 type: 'auto_shift',
                 key: keyToken(a.key, a._keySrc),
                 mods: [...a.mods],
+                ...pickDefined(a, ['timeoutMs', 'quickTapMs', 'requirePriorIdleMs']),
             }
         case 'layer_mod':
             return { type: 'layer_mod', layer: a.layer, mods: [...a.mods] }
         case 'tap_toggle':
-            return { type: 'tap_toggle', layer: a.layer }
+            return {
+                type: 'tap_toggle',
+                layer: a.layer,
+                ...pickDefined(a, ['tappingTermMs']),
+            }
         case 'set_base_saved':
             return { type: 'set_base_saved', layer: a.layer }
         case 'auto_layer':
@@ -217,6 +231,16 @@ export function denormalizeAction(a: CanonAction): Surface {
             // transparent | none | bootloader | reset | alt_repeat | layer_lock
             return { type: a.type }
     }
+}
+
+/** The fields of `o` among `keys` that are set. */
+function pickDefined<T extends object, K extends keyof T>(
+    o: T,
+    keys: readonly K[],
+): Partial<Pick<T, K>> {
+    const out: Partial<Pick<T, K>> = {}
+    for (const k of keys) if (o[k] !== undefined) out[k] = o[k]
+    return out
 }
 
 const denormalizeEncoder = (
@@ -429,6 +453,7 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                       ...(m.description ? { description: m.description } : {}),
                       ...(m.params !== undefined ? { params: m.params } : {}),
                       steps: m.steps.map(denormalizeMacroStep),
+                      ...(m.private ? { private: true } : {}),
                   })),
               }
             : {}),

@@ -1,0 +1,2 @@
+config SHIELD_POWER_U5
+	def_bool $(shields_list_contains,power_u5)

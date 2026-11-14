@@ -19,10 +19,22 @@ const KIND_BY_PERSONALITY: Readonly<Partial<Record<number, DeviceKind>>> = {
 
 /** The device's kind. The DONGLE role wins (an older dongle reports no
  *  personality at all); an unknown or recovery personality is treated as a
- *  keyboard, as before personalities were reported. */
+ *  keyboard, as before personalities were reported. A recovery image is
+ *  shown read-only (see isRecovery). */
 export function deviceKind(discovery: DiscoveryResult): DeviceKind {
     if (discovery.role === Role.DONGLE) return 'dongle'
     const code = discovery.personality?.personality
     if (code === undefined) return 'keyboard'
     return KIND_BY_PERSONALITY[code] ?? 'keyboard'
 }
+
+/** True for the §G recovery image (personality RECOVERY): it boots when the
+ *  real firmware cannot, and is never edited. */
+export function isRecovery(discovery: DiscoveryResult): boolean {
+    return discovery.personality?.personality === Personality.recovery
+}
+
+/** Why a recovery image is shown read-only. */
+export const RECOVERY_READ_ONLY =
+    'This device is running its recovery image, so it is shown read-only. ' +
+    'Flash the firmware again to edit it.'

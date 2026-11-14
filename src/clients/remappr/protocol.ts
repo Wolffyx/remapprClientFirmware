@@ -34,6 +34,16 @@ export const SEAL_OVERHEAD = 20
  *  but is not yet validated against the firmware relay decoder. */
 export const RELAY_SEAL_PLAIN = 34
 
+/** Universal-sealed DIRECT (§6.3, target 0) AEAD-plaintext size: the host pads
+ *  `UCH(8) || inner` to this so the frame fills the 64-byte report and the
+ *  device derives the plaintext length from `env_len`. Budget: 64 − 1(0xE2) −
+ *  1(0xE1) − 4(ctr) − 16(tag) = 42. Matches control_cli SEAL_PLAIN_DIRECT. */
+export const DIRECT_SEAL_PLAIN = 42
+
+/** An inner response header: cmd, seq, status, pad, data_len u16. The smallest
+ *  plaintext a sealed reply can carry. */
+export const RESP_HDR_LEN = 6
+
 /** Legacy sealed (0xE1) config-chunk size — the firmware's legacy data-plane
  *  figure (the universal-sealed GET_LIMITS value of 16 is a different path).
  *  Config writes ride the legacy sealed path, so they use this. */
@@ -68,21 +78,6 @@ export const Cmd = {
     CONTROL_AUTH_BEGIN: 0x60,
     CONTROL_AUTH_FINISH: 0x61,
 } as const
-
-/** Verbs reachable without a sealed envelope (cmd_open_plaintext, control.c). */
-export const PLAINTEXT_CMDS: ReadonlySet<number> = new Set([
-    Cmd.GET_DEVICE_INFO,
-    Cmd.GET_SCHEMA_VERSION,
-    Cmd.GET_CAPABILITIES,
-    Cmd.READ_CONFIG_CHUNK,
-    Cmd.GET_PROFILE_STATUS,
-    Cmd.GET_LAYER_STATE,
-    Cmd.GET_DIAGNOSTICS,
-    Cmd.GET_RATE_LIMITS, // open read; SET_REPORT_RATE stays sealed/mutating
-    Cmd.GET_UNICODE_MODE, // open read; SET_UNICODE_MODE stays sealed/mutating
-    Cmd.CONTROL_AUTH_BEGIN,
-    Cmd.CONTROL_AUTH_FINISH,
-])
 
 /** enum remappr_control_status. */
 export const Status = {
@@ -123,6 +118,10 @@ export const Cap = {
     AUTH: 1 << 5,
     KEYMAP: 1 << 6,
     PAIRING: 1 << 7,
+    HAPTIC: 1 << 8, // LIGHTING HAPTIC_PULSE handler wired
+    DISPLAY: 1 << 9, // LIGHTING SET_DISPLAY handler wired
+    ERR_COUNTERS: 1 << 10, // GET_ERROR_COUNTERS source wired
+    MOUSE: 1 << 11, // MOUSE-namespace ops wired
     CLUSTER_DIAG: 1 << 12, // GET_CLUSTER_DIAG source wired (§N4b-3)
     UNICODE: 1 << 14, // unicode input-method ops wired (§5.2-E)
     JOYSTICK: 1 << 15, // JOYSTICK-namespace ops wired (input-layout plan §4)
@@ -747,6 +746,27 @@ export const LimitsFeature = {
     macroDefaults: 1 << 3,
     matrixPollPeriod: 1 << 4,
     layerTailV3: 1 << 5,
+    /** Keyboard usages 0x78..0xA7 (international, LANG, keyboard-page
+     *  volume) reach the host; without it a build stops at 0x77. */
+    kbdExt: 1 << 12,
+} as const
+
+/** GET_LIMITS feature_bitmask bits (REMAPPR_FEAT_*, control.h). Bits 0–5 are
+ *  set only where the KEYBOARD namespace is served; firmware before the
+ *  audit-E protocol fixes reported 0x3F on every device and no bit above 5. */
+export const Feature = {
+    HOLD_ON_RELEASE: 1 << 0,
+    CAPS_WORD_IDLE: 1 << 1,
+    STICKY_RELEASE: 1 << 2,
+    MACRO_DEFAULTS: 1 << 3,
+    MATRIX_POLL: 1 << 4,
+    LAYER_TAIL_V3: 1 << 5,
+    TBL_SLIDER: 1 << 6,
+    TBL_DISPLAY: 1 << 7,
+    TBL_POWER: 1 << 8,
+    TBL_SENSOR_V2: 1 << 9,
+    TBL_MOUSE_V3: 1 << 10,
+    UNPAIR_ACTION: 1 << 11,
 } as const
 
 export interface Limits {
@@ -845,6 +865,82 @@ export function parsePersonalityMap(d: Uint8Array): PersonalityMap {
         namespaces,
         hwCaps: dv.getUint32(off, true),
     }
+}
+
+/* ── GET_MANIFEST (COMMON 0x05) ─────────────────────────────────────────── */
+
+/** Manifest verb flags: the verb must be sealed when auth is on / mutates. */
+export const ManifestFlag = {
+    SEAL: 0x01,
+    MUT: 0x02,
+} as const
+
+const MANIFEST_NS_DESC = 1
+const MANIFEST_LIMITS = 2
+
+export interface ManifestVerb {
+    verb: number
+    flags: number
+    minArg: number
+}
+
+export interface ManifestNamespace {
+    namespace: number
+    nsVersion: number
+    verbs: ManifestVerb[]
+}
+
+export interface Manifest {
+    namespaces: ManifestNamespace[]
+    limits?: Limits
+}
+
+function parseNsDesc(v: Uint8Array): ManifestNamespace {
+    if (v.length < 4) throw new Error(`manifest namespace record too short (${v.length} B)`)
+    const dv = new DataView(v.buffer, v.byteOffset, v.byteLength)
+    const count = dv.getUint16(2, true)
+    if (v.length < 4 + count * 4)
+        throw new Error(`manifest namespace 0x${v[0].toString(16)} lists ${count} verbs in ${v.length} B`)
+    const verbs: ManifestVerb[] = []
+    for (let i = 0, off = 4; i < count; i++, off += 4) {
+        verbs.push({ verb: v[off], flags: v[off + 1], minArg: dv.getUint16(off + 2, true) })
+    }
+    return { namespace: v[0], nsVersion: v[1], verbs }
+}
+
+/** GET_MANIFEST reply: a TLV list `{u16 type, u16 len, value}` of one
+ *  namespace record per served namespace, then the GET_LIMITS bytes. Unknown
+ *  TLV types are skipped. */
+export function parseManifest(d: Uint8Array): Manifest {
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const out: Manifest = { namespaces: [] }
+    let off = 0
+    while (off + 4 <= d.length) {
+        const type = dv.getUint16(off, true)
+        const len = dv.getUint16(off + 2, true)
+        const value = d.subarray(off + 4, off + 4 + len)
+        if (value.length < len) throw new Error('manifest TLV runs past the reply')
+        if (type === MANIFEST_NS_DESC) out.namespaces.push(parseNsDesc(value))
+        if (type === MANIFEST_LIMITS) out.limits = parseLimits(value)
+        off += 4 + len
+    }
+    if (off !== d.length) throw new Error('manifest ends inside a TLV header')
+    return out
+}
+
+/** The highest ns_version of each namespace whose layouts this client
+ *  decodes. A device that reports a newer one changed the layout: the client
+ *  must not parse it with the old reader. */
+export const KNOWN_NS_VERSION: Readonly<Record<number, number>> = {
+    [Namespace.COMMON]: 1,
+    [Namespace.KEYBOARD]: 1,
+    [Namespace.MOUSE]: 1,
+    [Namespace.JOYSTICK]: 0, // provisional on the firmware too
+    [Namespace.LIGHTING]: 1,
+    [Namespace.PROFILES]: 1,
+    [Namespace.INPUT]: 1,
+    [Namespace.SENSOR]: 1,
+    [Namespace.HOST]: 1,
 }
 
 /** GET_CONFIG_METADATA reply: a 20-byte RMBC header of the selected slot. */

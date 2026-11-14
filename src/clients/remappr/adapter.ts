@@ -17,7 +17,7 @@ import type { DeviceInfo } from '../../types'
 import { loadOrCreateIdentity, RemapprSession } from './auth'
 import { loadDeviceConfig, makeKeylessConfig } from './configRead'
 import { buildDeviceConfigApi } from './deviceConfig'
-import { deviceKind } from './deviceKind'
+import { deviceKind, isRecovery, RECOVERY_READ_ONLY } from './deviceKind'
 import {
     buildJoystickService,
     buildMouseService,
@@ -145,6 +145,7 @@ function buildDongleService(
               personality: 'dongle',
               name: deviceInfo.name,
               writable: true,
+              maxUnsealedChunk: discovery.limits?.maxUnsealedChunk,
           })
         : undefined
     return new RemapprKeyboardService({
@@ -226,7 +227,7 @@ async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null>
 }
 
 /** Run the §19 control-auth handshake (plaintext BEGIN/FINISH) over the RPC. */
-async function establishSession(rpc: RemapprRpc): Promise<RemapprSession> {
+export async function establishSession(rpc: RemapprRpc): Promise<RemapprSession> {
     const session = new RemapprSession(loadOrCreateIdentity())
     const begin = await rpc.callPlain(Cmd.CONTROL_AUTH_BEGIN)
     if (begin.status !== Status.OK || begin.data.length < 32) {
@@ -306,26 +307,39 @@ export const remapprAdapter: FirmwareAdapter = {
             // takes plaintext writes, so skip the handshake entirely there. A
             // null capBits means the firmware predates GET_CAPABILITIES —
             // assume auth is present (the pre-capability behavior).
-            const session =
-                capBits === null || (capBits & Cap.AUTH) !== 0
-                    ? await establishSession(rpc)
-                    : undefined
+            // The RPC seals every mutation with it from here on, and runs the
+            // handshake again if the device drops the session (ERR_AUTH). A
+            // recovery image is read-only: it needs no session.
+            const recovery = isRecovery(discovery)
+            if (!recovery && (capBits === null || (capBits & Cap.AUTH) !== 0)) {
+                rpc.bindSession({
+                    session: await establishSession(rpc),
+                    renew: () => establishSession(rpc),
+                })
+            }
 
             const loaded = await loadDeviceConfig(rpc, discovery)
             // Its parts (the battery part above all) where it serves SENSOR.
             const sensor = servesSensor(discovery)
-                ? buildSensorApi(rpc, { writable: true })
+                ? buildSensorApi(rpc, { writable: !recovery })
                 : undefined
 
             return new RemapprKeyboardService({
                 rpc,
-                session,
                 deviceInfo,
                 config: loaded.config,
                 configVersion: loaded.configVersion,
                 layouts: loaded.layouts,
                 activeLayoutId: loaded.activeLayoutId,
                 maxLayers: loaded.maxLayers,
+                // A config this client could not decode is never offered for
+                // saving: the placeholder would overwrite the real one.
+                ...(recovery
+                    ? { readOnlyReason: RECOVERY_READ_ONLY }
+                    : loaded.unreadable
+                      ? { readOnlyReason: loaded.unreadable }
+                      : {}),
+                ...(loaded.deviceBlob ? { deviceBlob: loaded.deviceBlob } : {}),
                 limits: discovery.limits,
                 hwCaps: discovery.personality?.hwCaps,
                 sensor,
@@ -351,7 +365,7 @@ export const remapprAdapter: FirmwareAdapter = {
                 // (Cap.UNICODE). The verbs answer ERR_CMD otherwise, and a null
                 // capBits is a firmware that predates them entirely → omit.
                 unicode:
-                    capBits !== null && (capBits & Cap.UNICODE) !== 0
+                    !recovery && capBits !== null && (capBits & Cap.UNICODE) !== 0
                         ? buildUnicodeApi(rpc)
                         : undefined,
             })

@@ -17,8 +17,8 @@ export const BLOB_HEADER_LEN = 20
 // REMAPPR_CLUSTER_PSK_LEN in include/remappr/config_blob.h.
 export const CLUSTER_PSK_LEN = 16
 
-// enum remappr_table_id (config_blob.h). Ids 2(LAYOUT), 8(MOUSE), 9(PROFILE),
-// 10(ALIAS), 11(SECURITY) are reserved — the firmware does not decode them.
+// enum remappr_table_id (config_blob.h). Ids 2(LAYOUT), 9(PROFILE), 10(ALIAS)
+// and 11(SECURITY) are reserved — the firmware does not decode them.
 export const TableId = {
     Layer: 1,
     Layout: 2,
@@ -50,6 +50,8 @@ export const TableId = {
     Joystick: 28, // joystick axes + hat (input-layout plan §4)
     Sensor: 29, // sensor settings (sensor-settings plan §4)
     Power: 30, // idle / sleep / off timeouts (sleep-wake design)
+    // Written from `node.displays` / `layers[].sliders`; a save carries a
+    // device's own table the config could not read (carry.ts).
     Display: 31, // what each display shows (display part design §3)
     Slider: 32, // what each slider does, per layer (slider part design §4b)
 } as const
@@ -201,7 +203,7 @@ export const NameKind = {
     ModMorph: 2,
 } as const
 
-// enum remappr_behavior_type (behavior_table.h) — 39 types, 0..38 (dense). The
+// enum remappr_behavior_type (behavior_table.h) — 40 types, 0..39 (dense). The
 // 16-byte record layout is identical across all types; only `type` and the
 // interpretation of tap/hold/term/quick/prior differ.
 export const BehaviorType = {
@@ -473,7 +475,12 @@ export interface MacroStep {
 
 export interface MacroRecord {
     steps: MacroStep[]
+    /** §17 write-only (REMAPPR_MACRO_FLAG_PRIVATE); needs TBL_MACRO v2. */
+    private?: boolean
 }
+
+/** TBL_MACRO v2 per-macro flags (behavior_table.h REMAPPR_MACRO_FLAG_*). */
+export const MACRO_FLAG_PRIVATE = 1 << 0
 
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_CONDITIONAL layout
 /** One conditional (tri-)layer: while every ifLayer is active, thenLayer is on. */
@@ -911,6 +918,7 @@ export class BlobBuilder {
         return this
     }
 
+
     // pattern-check: skip one more table-emit method on the existing Builder
     /** TBL_PART (id 29): u16 count, then per entry u8 part, u8 id, u8 ch,
      *  u8 reserved, i32 value — matching firmware decode_sensor.c. Version 1
@@ -932,11 +940,19 @@ export class BlobBuilder {
     }
 
     // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_MACRO. v1 unless a macro is private: v2 adds u8 flags + u8 reserved
+     *  after each num_steps (§17), and firmware older than v2 refuses it, so a
+     *  blob without private macros stays v1. */
     macroTable(macros: MacroRecord[]): this {
-        this.tableBegin(TableId.Macro, 1)
+        const v2 = macros.some((m) => m.private)
+        this.tableBegin(TableId.Macro, v2 ? 2 : 1)
         this.w.u16(macros.length)
         for (const m of macros) {
             this.w.u16(m.steps.length)
+            if (v2) {
+                this.w.u8(m.private ? MACRO_FLAG_PRIVATE : 0)
+                this.w.u8(0) // reserved
+            }
             for (const s of m.steps) {
                 this.w.u8(s.op)
                 this.w.u8(0) // pad

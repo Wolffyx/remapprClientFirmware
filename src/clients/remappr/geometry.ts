@@ -33,6 +33,8 @@ interface LayoutFetch {
     /** Position count from GET_KEYMAP_BOUNDS — a single, reliable read even when
      *  the multi-chunk layout can't complete. 0 if bounds itself failed. */
     numPositions: number
+    /** The device's layer capacity from GET_KEYMAP_BOUNDS; 0 if unread. */
+    maxLayers: number
 }
 
 /** Fetch the device's real per-key layout over the universal KEYBOARD verbs.
@@ -50,9 +52,11 @@ async function fetchRealLayout(
         undefined,
         { targetNode, retries: RELAY_READ_RETRIES },
     )
-    if (boundsReply.status !== Status.OK) return { layout: null, numPositions: 0 }
+    if (boundsReply.status !== Status.OK)
+        return { layout: null, numPositions: 0, maxLayers: 0 }
     const bounds = parseKeymapBounds(boundsReply.data)
-    if (bounds.numPositions <= 0) return { layout: null, numPositions: 0 }
+    const maxLayers = bounds.maxLayers
+    if (bounds.numPositions <= 0) return { layout: null, numPositions: 0, maxLayers }
 
     const keys: PhysicalLayoutKey[] = []
     let start = 0
@@ -100,7 +104,7 @@ async function fetchRealLayout(
         keys.length === bounds.numPositions
             ? { id: 0, name: 'Remappr', keys }
             : null
-    return { layout, numPositions: bounds.numPositions }
+    return { layout, numPositions: bounds.numPositions, maxLayers }
 }
 
 /** A plain row-major grid sized to `keyCount`, in centi-units. */
@@ -125,16 +129,19 @@ function syntheticLayout(keyCount: number): PhysicalLayout {
 export async function fetchPhysicalLayouts(
     rpc: RemapprRpc,
     opts: { protoMax: number; fallbackKeyCount: number; targetNode?: number },
-): Promise<{ layouts: PhysicalLayout[]; activeLayoutId: number }> {
+): Promise<{ layouts: PhysicalLayout[]; activeLayoutId: number; maxLayers?: number }> {
+    let layers = 0
     if (opts.protoMax >= 2) {
         let positionCount = 0
         for (let attempt = 0; attempt < LAYOUT_FETCH_ATTEMPTS; attempt++) {
             try {
-                const { layout, numPositions } = await fetchRealLayout(
+                const { layout, numPositions, maxLayers } = await fetchRealLayout(
                     rpc,
                     opts.targetNode ?? 0,
                 )
-                if (layout) return { layouts: [layout], activeLayoutId: 0 }
+                if (maxLayers > 0) layers = maxLayers
+                const known = layers > 0 ? { maxLayers: layers } : {}
+                if (layout) return { layouts: [layout], activeLayoutId: 0, ...known }
                 if (numPositions > 0) positionCount = numPositions
             } catch {
                 /* transient — try the whole fetch again */
@@ -145,11 +152,16 @@ export async function fetchPhysicalLayouts(
         // every key — prefer it over the decoded-blob count, which can be 1 when
         // the config read also truncated on the same flap.
         if (positionCount > 0) {
-            return { layouts: [syntheticLayout(positionCount)], activeLayoutId: 0 }
+            return {
+                layouts: [syntheticLayout(positionCount)],
+                activeLayoutId: 0,
+                ...(layers > 0 ? { maxLayers: layers } : {}),
+            }
         }
     }
     return {
         layouts: [syntheticLayout(opts.fallbackKeyCount)],
         activeLayoutId: 0,
+        ...(layers > 0 ? { maxLayers: layers } : {}),
     }
 }

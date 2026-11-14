@@ -254,6 +254,7 @@ export const NEW_CONTROL: Readonly<
     sensor: { shape: 'sensor', w: 1.4, h: 1.4 },
     encoder: { shape: 'knob', w: 1.4, h: 1.4 },
     axis: { shape: 'wheel', w: 1.4, h: 0.9 },
+    display: { shape: 'screen', w: 2.6, h: 1.3 },
 }
 
 /** The controls of `layout` whose id is in `ids`, in `ids` order. */

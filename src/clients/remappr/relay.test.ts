@@ -12,7 +12,6 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { ccmOpen, ccmSeal, RemapprSession, type RemapprIdentity } from './auth'
 import { establishNodeSession } from './nodes'
 import {
-    buildRequest,
     buildUch,
     Cmd,
     Namespace,
@@ -95,30 +94,47 @@ describe('relay-sealed frame codec (§6.3)', () => {
         expect(u32le(b, 10)).toBe(1)
     })
 
-    it('opens a node reply and enforces the full-UCH bind', () => {
+    // The node seals exactly UCH || inner_resp, with no padding (control.c
+    // uni_dispatch_sealed_scratch); the 64-byte report zero-fills the rest.
+    function nodeReply(key: Uint8Array, uch: Uint8Array, innerResp: Uint8Array, ctr = 0): Uint8Array {
+        const pt = new Uint8Array([...uch, ...innerResp])
+        const ct = ccmSeal(key, nonce(1, ctr), le32(ctr), pt)
+        const frame = new Uint8Array(64)
+        frame.set([UNIVERSAL_TAG, ...uch, SEALED_TAG, ...le32(ctr), ...ct])
+        return frame
+    }
+
+    it('opens a node ack at its real 14-byte length (L3.2)', () => {
         const { session, key } = sessionAndKey()
         const uch = buildUch(Namespace.COMMON, 5, 7, 0x01 /* RESP */)
-        // The node seals its reply device→host: AEAD(pad(UCH || inner_resp, 34)).
-        const innerResp = buildRequest(Cmd.WRITE_CONFIG_CHUNK, 1, new Uint8Array())
-        const pt = new Uint8Array(RELAY_SEAL_PLAIN)
-        pt.set(uch)
-        pt.set(innerResp, uch.length)
-        const ct = ccmSeal(key, nonce(1, 0), le32(0), pt)
-        const reply = new Uint8Array([
-            UNIVERSAL_TAG,
-            ...uch,
-            SEALED_TAG,
-            ...le32(0),
-            ...ct,
-        ])
-
-        const opened = session.openRelay(reply)
+        const ack = Uint8Array.of(Cmd.UNPAIR_RADIO, 1, 0, 0, 0, 0) // 6-byte header
+        const opened = session.openRelay(nodeReply(key, uch, ack))
         expect(opened).not.toBeNull()
+        expect(opened!).toHaveLength(6)
+        expect(parseResponse(opened!).cmd).toBe(Cmd.UNPAIR_RADIO)
+    })
+
+    it('opens a node reply that carries data', () => {
+        const { session, key } = sessionAndKey()
+        const uch = buildUch(Namespace.COMMON, 5, 7, 0x01)
+        const resp = new Uint8Array([Cmd.GET_DEVICE_INFO, 1, 0, 0, 16, 0, ...new Uint8Array(16).fill(0x5a)])
+        const opened = session.openRelay(nodeReply(key, uch, resp))
+        expect(parseResponse(opened!).data).toEqual(new Uint8Array(16).fill(0x5a))
+    })
+
+    it('enforces the full-UCH bind on a node reply', () => {
+        const { session, key } = sessionAndKey()
+        const uch = buildUch(Namespace.COMMON, 5, 7, 0x01 /* RESP */)
+        const ack = Uint8Array.of(Cmd.WRITE_CONFIG_CHUNK, 1, 0, 0, 0, 0)
+        const reply = nodeReply(key, uch, ack)
+        const opened = session.openRelay(reply)
         expect(parseResponse(opened!).cmd).toBe(Cmd.WRITE_CONFIG_CHUNK)
+        // The same reply again is a replay.
+        expect(() => session.openRelay(reply)).toThrow(/replayed/)
 
         // Flip a byte of the cleartext outer UCH → the sealed inner no longer
-        // matches (and the AEAD tag breaks) → rejected.
-        const tampered = reply.slice()
+        // matches → rejected.
+        const tampered = nodeReply(key, uch, ack, 1)
         tampered[1] ^= 0xff
         expect(session.openRelay(tampered)).toBeNull()
     })

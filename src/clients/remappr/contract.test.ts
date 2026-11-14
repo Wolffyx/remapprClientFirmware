@@ -172,6 +172,8 @@ interface FakeRemappr {
     transport: Transport
     pushInput: (inputId: number, pressed: boolean) => void
     getCommitted: () => Uint8Array | null
+    /** True once the host sent CONTROL_AUTH_BEGIN. */
+    sawAuth: () => boolean
 }
 
 function makeFakeRemappr(
@@ -196,6 +198,7 @@ function makeFakeRemappr(
     let devTx = 0
     let staged: number[] = []
     let committed: Uint8Array | null = null
+    let authBegun = false
 
     const onFrame = (frame: Uint8Array): void => {
         const b0 = frame[0]
@@ -210,6 +213,7 @@ function makeFakeRemappr(
             return
         }
         if (b0 === Cmd.CONTROL_AUTH_BEGIN) {
+            authBegun = true
             enqueue(respFrame(b0, frame[1], 0, devPub))
             return
         }
@@ -258,16 +262,15 @@ function makeFakeRemappr(
                     data = keyLayoutChunkBytes(4, start, Math.min(2, 4 - start))
                 }
             }
-            if (data) {
-                enqueue(
-                    uniFrame(
-                        uch.namespace,
-                        uch.requestId,
-                        0,
-                        respFrame(verb, seq, 0, data),
-                    ),
-                )
-            }
+            // A verb the fake does not serve answers ERR_CMD, as the firmware's.
+            enqueue(
+                uniFrame(
+                    uch.namespace,
+                    uch.requestId,
+                    0,
+                    respFrame(verb, seq, data ? 0 : Status.ERR_CMD, data ?? new Uint8Array()),
+                ),
+            )
             return
         }
         if (b0 === SEALED_TAG && devKey) {
@@ -314,6 +317,7 @@ function makeFakeRemappr(
         pushInput: (inputId, pressed) =>
             enqueue(eventFrame(EVT_INPUT, inputEventBytes(pressed, inputId))),
         getCommitted: () => committed,
+        sawAuth: () => authBegun,
     }
 }
 
@@ -595,6 +599,18 @@ describe('RemapprAdapter — mouse connect (lands on the device editor)', () => 
         const svc = await connectFake(fake)
         expect(svc.kind).toBe('mouse')
         expect(svc.motion).toBeUndefined()
+        await svc.disconnect()
+    })
+})
+
+describe('RemapprAdapter — recovery image (L3.16)', () => {
+    it('connects a recovery image read-only, without a handshake', async () => {
+        const fake = makeFakeRemappr({ protoMax: 2, personality: 3 })
+        const svc = await connectFake(fake)
+        expect(svc.kind).toBe('keyboard')
+        expect(svc.capabilities.readOnly).toBe(true)
+        expect(svc.capabilities.readOnlyReason).toMatch(/recovery image/)
+        expect(fake.sawAuth()).toBe(false)
         await svc.disconnect()
     })
 })

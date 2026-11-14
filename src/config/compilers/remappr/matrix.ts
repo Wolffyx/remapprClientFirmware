@@ -41,6 +41,12 @@ const MATRIX_SETTING_IDS: Readonly<Record<MatrixField, number>> =
         }),
     ) as Record<MatrixField, number>
 
+/** The TBL_PART setting ids that hold matrix timing (any part, channel 0):
+ *  a keymap reads them into `defaults` and writes them back. */
+export const MATRIX_TIMING_IDS: ReadonlySet<number> = new Set(
+    Object.values(MATRIX_SETTING_IDS),
+)
+
 /** What the compiler does with a config's matrix timing on one device. */
 export interface MatrixFold {
     /** TBL_PART entries, one per matrix part and set field it lists. */
