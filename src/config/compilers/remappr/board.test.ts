@@ -133,15 +133,11 @@ describe('remappr-board shield compiler', () => {
         expect(ov).toContain('<&gpio1 15 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>')
         expect(ov).toContain('<&gpio0 31 GPIO_ACTIVE_HIGH>')
         expect(ov).toContain('compatible = "input-keymap"')
-        expect(ov).toContain('REMAPPR_MATRIX_KEYMAP(')
-        // Explicit transform wiring → cells match the electrical matrix.
-        expect(ov).toContain('CELL(0, 0)')
-        expect(ov).toContain('CELL(2, 3)')
-        expect(ov).toContain('CELL(3, 3)')
-        // REMAPPR_MATRIX_KEYMAP is a variadic macro → CELL() args MUST be
-        // comma-separated (space-joined cells fail DTC on real hardware).
-        expect(ov).toContain('CELL(0, 0), CELL(0, 1), CELL(0, 2)')
-        expect(ov).toContain('CELL(3, 0), CELL(3, 1), CELL(3, 2), CELL(3, 3)')
+        // One MATRIX_KEY per position (code = base + position); explicit
+        // transform wiring → cells match the electrical matrix.
+        expect(ov).toContain('MATRIX_KEY(0, 0, REMAPPR_KB_POS_BASE + 0)')
+        expect(ov).toContain('MATRIX_KEY(2, 3, REMAPPR_KB_POS_BASE + 9)')
+        expect(ov).toContain('MATRIX_KEY(3, 3, REMAPPR_KB_POS_BASE + 13)')
         expect(ov).toContain('row-size = <4>;')
         expect(ov).toContain('col-size = <4>;')
         expect(ov).toContain('compatible = "remappr,keymap"')

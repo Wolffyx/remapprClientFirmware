@@ -160,22 +160,6 @@ function chunkByRows(tokens: string[], rowCounts: number[]): string {
     return lines.join('\n')
 }
 
-/** Like chunkByRows but COMMA-joins tokens. REMAPPR_MATRIX_KEYMAP is a variadic
- *  FOR_EACH_IDX macro, so its CELL() args must be comma-separated — space-joined
- *  cells parse as a single arg and DTC fails ("expected ')', not '('"). Only the
- *  matrix keymap needs this; placement / layer actions are phandle-array cells
- *  that stay space-separated. */
-function chunkCellsByRows(tokens: string[], rowCounts: number[]): string {
-    const lines: string[] = []
-    let i = 0
-    for (const n of rowCounts) {
-        lines.push('\t\t\t\t' + tokens.slice(i, i + n).join(', '))
-        i += n
-    }
-    if (i < tokens.length) lines.push('\t\t\t\t' + tokens.slice(i).join(', '))
-    return lines.join(',\n')
-}
-
 function emitLayer(
     layer: CanonLayer,
     index: number,
@@ -257,7 +241,13 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     const rowCounts = visualRowCounts(config.keyboard.keys)
     const columns = Math.max(1, ...rowCounts)
 
-    const cellTokens = cells.map(([r, c]) => `CELL(${r}, ${c})`)
+    // One MATRIX_KEY per position, code = REMAPPR_KB_POS_BASE + position. Not
+    // the REMAPPR_MATRIX_KEYMAP(CELL...) macro: it is built on FOR_EACH_IDX,
+    // which Zephyr caps at 64 arguments, so a 65th key was a dtc syntax error
+    // and no TKL or full-size board compiled.
+    const cellTokens = cells.map(
+        ([r, c], i) => `MATRIX_KEY(${r}, ${c}, REMAPPR_KB_POS_BASE + ${i})`,
+    )
     const placementTokens = config.keyboard.keys.map(() => 'KEY()')
 
     // Optional peripheral overlay nodes (empty fragments when unconfigured).
@@ -281,7 +271,6 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         `#include <zephyr/dt-bindings/input/keymap.h>`,
         `#include <dt-bindings/remappr/keys.h>`,
         `#include <dt-bindings/remappr/layout.h>`,
-        `#include <zephyr/sys/util_macro.h>`,
         `#include <remappr/keymap-tokens.dtsi>`,
         `#include <remappr/behavior-tokens.dtsi>`,
         ...rgb.includes,
@@ -308,9 +297,9 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         ``,
         `\t\tkeymap {`,
         `\t\t\tcompatible = "input-keymap";`,
-        `\t\t\tkeymap = <REMAPPR_MATRIX_KEYMAP(`,
-        chunkCellsByRows(cellTokens, rowCounts),
-        `\t\t\t)>;`,
+        `\t\t\tkeymap = <`,
+        chunkByRows(cellTokens, rowCounts),
+        `\t\t\t>;`,
         `\t\t\trow-size = <${rowSize}>;`,
         `\t\t\tcol-size = <${colSize}>;`,
         `\t\t};`,
