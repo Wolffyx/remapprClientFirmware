@@ -372,7 +372,7 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
     "battery": {
       "adc": { "adc": "adc", "channel": 4,
                "setup": { "gain": "ADC_GAIN_1_6", "reference": "ADC_REF_INTERNAL",
-                          "inputPositive": "NRF_SAADC_AIN4" } },
+                          "resolution": 12, "inputPositive": "NRF_SAADC_AIN4" } },
       "divider": { "outputOhms": 10000, "fullOhms": 14000 },
       "charging": "P0.29"
     },
