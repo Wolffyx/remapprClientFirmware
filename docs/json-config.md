@@ -294,6 +294,16 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
     label: one of a known board's (`D4` on a nice!nano), or the SoC's port pin
     — `P0.13` on nRF, `PA3` on STM32, `GP12` on RP2040. A label that does not
     resolve is an error.
+  - `pinMap` gives the board's own labels, so a board no built-in table knows
+    (any firmware board, an Arduino header) needs no host code:
+    `{ "D10": "&arduino_header 16", "ROW0": "&gpio0 2" }`, label → phandle and
+    pin, with the flags from the pin's role. It is looked up before the
+    built-in tables.
+  - The shield builds for any Zephyr board: keyboard_node's `app.overlay`
+    carries the USB HID and control interfaces for a board with no overlay of
+    its own (remappr-firmware with `dts/remappr/keyboard-hid.dtsi`). Build with
+    `--sysbuild ... -- -D<app>_SHIELD=<id>`, so only the app image takes the
+    shield.
   - The matrix wiring comes from `matrix.rows`/`cols`, else
     `keyboard.hardware.kscan` (with its diode direction and debounce), else
     `keyboard.pins`. A keyboard without matrix pins is an error; a mouse,

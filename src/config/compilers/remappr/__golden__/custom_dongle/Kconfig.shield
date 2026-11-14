@@ -1,0 +1,2 @@
+config SHIELD_CUSTOM_DONGLE
+	def_bool $(shields_list_contains,custom_dongle)

@@ -972,6 +972,14 @@ export const BoardSchema = z
         haptic: z.lazy(() => BoardHapticSchema).optional(),
         ledZones: z.array(z.lazy(() => BoardLedZoneSchema)).optional(),
         displays: z.array(z.lazy(() => BoardDisplaySchema)).optional(),
+        pinMap: z
+            .record(z.string().min(1), z.string().min(1))
+            .optional()
+            .describe(
+                "The board's own pin labels: label → phandle and pin, e.g. " +
+                    '{ "D10": "&arduino_header 10", "LED": "&gpio0 13" }. ' +
+                    'Looked up before the built-in board tables.',
+            ),
         reservedPins: z
             .array(
                 z.object({
