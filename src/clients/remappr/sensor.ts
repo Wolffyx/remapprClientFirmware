@@ -28,7 +28,7 @@ import type {
     SensorProcedureStep,
     SensorReading,
 } from '../../service'
-import type { DiscoveryResult } from './discovery'
+import { type DiscoveryResult, servesNamespace } from './discovery'
 import {
     buildSensorRunArg,
     buildSensorSetArg,
@@ -77,8 +77,7 @@ import {
 /** True when the device lists the SENSOR namespace (the verbs are
  *  provisional, so an unlisted namespace is never assumed). */
 export function servesSensor(discovery: DiscoveryResult): boolean {
-    const ns = discovery.personality?.namespaces
-    return !!ns?.some((n) => n.namespace === Namespace.SENSOR)
+    return servesNamespace(discovery, Namespace.SENSOR)
 }
 
 /** One SENSOR verb, to the device itself or (`to`) a node behind the dongle. */

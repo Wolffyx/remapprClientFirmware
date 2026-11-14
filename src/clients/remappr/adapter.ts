@@ -17,7 +17,7 @@ import type { DeviceInfo } from '../../types'
 import { loadOrCreateIdentity, RemapprSession } from './auth'
 import { loadDeviceConfig, makeKeylessConfig } from './configRead'
 import { buildDeviceConfigApi } from './deviceConfig'
-import { deviceKind } from './deviceKind'
+import { deviceKind, isRecovery, RECOVERY_READ_ONLY } from './deviceKind'
 import {
     buildJoystickService,
     buildMouseService,
@@ -143,6 +143,7 @@ function buildDongleService(
               personality: 'dongle',
               name: deviceInfo.name,
               writable: true,
+              maxUnsealedChunk: discovery.limits?.maxUnsealedChunk,
           })
         : undefined
     return new RemapprKeyboardService({
@@ -305,8 +306,10 @@ export const remapprAdapter: FirmwareAdapter = {
             // null capBits means the firmware predates GET_CAPABILITIES —
             // assume auth is present (the pre-capability behavior).
             // The RPC seals every mutation with it from here on, and runs the
-            // handshake again if the device drops the session (ERR_AUTH).
-            if (capBits === null || (capBits & Cap.AUTH) !== 0) {
+            // handshake again if the device drops the session (ERR_AUTH). A
+            // recovery image is read-only: it needs no session.
+            const recovery = isRecovery(discovery)
+            if (!recovery && (capBits === null || (capBits & Cap.AUTH) !== 0)) {
                 rpc.bindSession({
                     session: await establishSession(rpc),
                     renew: () => establishSession(rpc),
@@ -325,13 +328,17 @@ export const remapprAdapter: FirmwareAdapter = {
                 maxLayers: loaded.maxLayers,
                 // A config this client could not decode is never offered for
                 // saving: the placeholder would overwrite the real one.
-                ...(loaded.unreadable ? { readOnlyReason: loaded.unreadable } : {}),
+                ...(recovery
+                    ? { readOnlyReason: RECOVERY_READ_ONLY }
+                    : loaded.unreadable
+                      ? { readOnlyReason: loaded.unreadable }
+                      : {}),
                 ...(loaded.deviceBlob ? { deviceBlob: loaded.deviceBlob } : {}),
                 limits: discovery.limits,
                 hwCaps: discovery.personality?.hwCaps,
                 // Its parts (the battery part above all) where it serves SENSOR.
                 sensor: servesSensor(discovery)
-                    ? buildSensorApi(rpc, { writable: true })
+                    ? buildSensorApi(rpc, { writable: !recovery })
                     : undefined,
                 // A dongle relays to bonded nodes; a direct keyboard returns an
                 // empty roster. Read-only views today (relayed-write HW-pending).
@@ -347,7 +354,7 @@ export const remapprAdapter: FirmwareAdapter = {
                 // (Cap.UNICODE). The verbs answer ERR_CMD otherwise, and a null
                 // capBits is a firmware that predates them entirely → omit.
                 unicode:
-                    capBits !== null && (capBits & Cap.UNICODE) !== 0
+                    !recovery && capBits !== null && (capBits & Cap.UNICODE) !== 0
                         ? buildUnicodeApi(rpc)
                         : undefined,
             })

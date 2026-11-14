@@ -23,7 +23,7 @@ import {
     type CalSuggestion,
 } from './protocol'
 import { once, repeatable, type CallTarget, type RemapprRpc } from './rpc'
-import type { DiscoveryResult } from './discovery'
+import { type DiscoveryResult, servesNamespace } from './discovery'
 import type {
     JoystickApi,
     JoystickAxisFlags,
@@ -53,8 +53,8 @@ const STEPS: Readonly<Record<JoystickCalStep, number>> = {
 /** True when the device lists the JOYSTICK namespace (the verbs are
  *  provisional, so an unlisted namespace is never assumed). */
 export function servesJoystick(discovery: DiscoveryResult): boolean {
-    const ns = discovery.personality?.namespaces
-    return !!ns?.some((n) => n.namespace === Namespace.JOYSTICK)
+    // Provisional (ns_version 0): a newer layout must not be read as v0.
+    return servesNamespace(discovery, Namespace.JOYSTICK)
 }
 
 /** One JOYSTICK verb, to the device itself or (`to`) a node behind the
