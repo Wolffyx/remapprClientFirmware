@@ -130,6 +130,7 @@ const CLASSES: readonly {
     { kind: 'hat', shape: 'hat', name: 'Hat' },
     { kind: 'axis', shape: 'ring', name: 'Axis' },
     { kind: 'axis', shape: 'pill', name: 'Slider' },
+    { kind: 'display', shape: 'screen', name: 'Display' },
 ]
 
 /** enum remappr_input_shape by value; 0 (auto) = the class default. */
@@ -149,6 +150,7 @@ const SHAPES: readonly (ControlShape | null)[] = [
     'sensor',
     'mouseL',
     'mouseR',
+    'screen',
 ]
 
 /** enum remappr_input_form by value; 0 = from the personality. */

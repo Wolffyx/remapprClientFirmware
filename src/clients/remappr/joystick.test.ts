@@ -10,6 +10,7 @@ import {
     Status,
 } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
+import { plainMutations } from './plainRpc.fixture'
 
 function fakeRpc(
     handler: (
@@ -18,7 +19,7 @@ function fakeRpc(
         arg?: Uint8Array,
     ) => Promise<UniversalReply>,
 ): RemapprRpc {
-    return { callUniversalPlain: handler } as unknown as RemapprRpc
+    return plainMutations({ callUniversalPlain: handler }) as unknown as RemapprRpc
 }
 
 // The firmware goldens (tests/control/src/test_control.c
@@ -170,7 +171,7 @@ describe('joystick wire (JOYSTICK namespace)', () => {
 
     it('relays reads and changes to a node behind the dongle', async () => {
         const seen: [number, { targetNode?: number; retries?: number }?][] = []
-        const rpc = {
+        const rpc = plainMutations({
             callUniversalPlain: async (
                 _ns: number,
                 verb: number,
@@ -181,7 +182,7 @@ describe('joystick wire (JOYSTICK namespace)', () => {
                 const data = verb === JoystickVerb.GET_AXIS_STATE ? STATE : SUGGEST
                 return { status: Status.OK, data }
             },
-        } as unknown as RemapprRpc
+        }) as unknown as RemapprRpc
         const api = buildJoystickApi(rpc, { targetNode: 3, writable: true })
         await api.getState()
         await api.calibrate('finish')

@@ -20,7 +20,9 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { unsafe } from '@noble/ciphers/aes.js'
 import {
     buildRequest,
+    DIRECT_SEAL_PLAIN,
     RELAY_SEAL_PLAIN,
+    RESP_HDR_LEN,
     SEAL_PLAIN,
     SEALED_TAG,
     UCH_LEN,
@@ -31,6 +33,7 @@ import {
 const INFO = new TextEncoder().encode('remappr-ctrl-auth session v1')
 const KEY_LEN = 16 // AES-128
 const TAG_LEN = 16
+const CTR_LEN = 4
 const DIR_HOST_TO_DEVICE = 0
 const DIR_DEVICE_TO_HOST = 1
 
@@ -244,13 +247,34 @@ function concat(parts: Uint8Array[]): Uint8Array {
 }
 
 /**
+ * A sealed reply whose device→host counter is not above the last one this
+ * session accepted: a captured reply played back (e.g. an old COMMIT "OK").
+ */
+export class ReplayedReplyError extends Error {
+    constructor(
+        readonly counter: number,
+        readonly last: number,
+    ) {
+        super(`replayed sealed reply (counter ${counter}, last ${last})`)
+        this.name = 'ReplayedReplyError'
+    }
+}
+
+/**
  * One control-auth session. Created with the host identity; the caller drives
  * BEGIN/FINISH over plaintext RPC and feeds the device ephemeral pubkey to
- * `derive()`. After a successful FINISH, call `established()` and seal verbs.
+ * `derive()` (which resets both counters), then seals verbs.
+ *
+ * Replies are opened by trial length: the device seals exactly its response
+ * (no padding) and the report pads it with zeros, so the true ciphertext length
+ * is not on the wire. Each length from the smallest possible reply up is tried;
+ * only the real one passes the 16-byte tag. The device→host counter must rise
+ * strictly within the session, so a replayed reply is refused.
  */
 export class RemapprSession {
     private key: Uint8Array | null = null
     private txCtr = 0
+    private rxLast = -1
 
     constructor(private readonly identity: RemapprIdentity) {}
 
@@ -267,46 +291,61 @@ export class RemapprSession {
         const shared = x25519.getSharedSecret(this.identity.priv, devicePub)
         const salt = concat([devicePub, this.identity.pub]) // device FIRST
         this.key = hkdf(sha256, shared, salt, INFO, KEY_LEN)
+        this.resetCounters()
     }
 
-    /** Counters reset to 0 after a successful FINISH. */
+    /** Both counters reset after a successful FINISH. */
     resetCounters(): void {
         this.txCtr = 0
+        this.rxLast = -1
     }
 
     /** Seal a mutating verb → wire frame `0xE1 || ctr_le32 || ct || tag`. */
     seal(cmd: number, seq: number, arg: Uint8Array): Uint8Array {
-        if (!this.key) throw new Error('remappr session not established')
         const inner = buildRequest(cmd, seq, arg)
-        const padded = new Uint8Array(Math.max(inner.length, SEAL_PLAIN))
-        padded.set(inner)
-        const ctr = this.txCtr++
-        const ctrBytes = le32(ctr)
-        const ct = ccmSeal(this.key, makeNonce(DIR_HOST_TO_DEVICE, ctr), ctrBytes, padded)
-        return concat([Uint8Array.of(SEALED_TAG), ctrBytes, ct])
+        if (inner.length > SEAL_PLAIN)
+            throw new Error('remappr sealed frame exceeds the 64-byte report')
+        return concat([Uint8Array.of(SEALED_TAG), this.envelope(inner, SEAL_PLAIN)])
     }
 
     /**
-     * Open a device reply envelope (the bytes after the 0xE1 tag). The device
-     * seals exactly the inner response (6-byte header + `expectedDataLen`), so
-     * the caller states how many data bytes it expects. Returns the inner
-     * plaintext frame, or null if authentication fails.
+     * Seal a namespace verb for the device itself (§6.3 direct form, target 0):
+     * `[0xE2][0xE1][ctr]AEAD(UCH || inner)[tag]`. There is no cleartext UCH;
+     * the sealed one carries the namespace and request id. `UCH || inner` is
+     * padded to DIRECT_SEAL_PLAIN so the frame fills the report.
      */
-    open(envelope: Uint8Array, expectedDataLen = 0): Uint8Array | null {
-        if (!this.key) throw new Error('remappr session not established')
-        const ctr = new DataView(
-            envelope.buffer,
-            envelope.byteOffset,
-            envelope.byteLength,
-        ).getUint32(0, true)
-        const innerLen = 6 + expectedDataLen
-        const sealed = envelope.subarray(4, 4 + innerLen + TAG_LEN)
-        return ccmOpen(
-            this.key,
-            makeNonce(DIR_DEVICE_TO_HOST, ctr),
-            envelope.subarray(0, 4),
-            sealed,
-        )
+    sealDirect(
+        uch: Uint8Array,
+        cmd: number,
+        seq: number,
+        arg: Uint8Array,
+    ): Uint8Array {
+        const pt = concat([uch, buildRequest(cmd, seq, arg)])
+        if (pt.length > DIRECT_SEAL_PLAIN)
+            throw new Error('remappr sealed frame exceeds the 64-byte report')
+        return concat([
+            Uint8Array.of(UNIVERSAL_TAG, SEALED_TAG),
+            this.envelope(pt, DIRECT_SEAL_PLAIN),
+        ])
+    }
+
+    /**
+     * Open a legacy sealed reply envelope (the bytes after the 0xE1 tag) and
+     * return the inner response frame. Null when no length authenticates;
+     * throws ReplayedReplyError on a replayed counter.
+     */
+    open(envelope: Uint8Array): Uint8Array | null {
+        return this.openEnvelope(envelope, RESP_HDR_LEN)
+    }
+
+    /**
+     * Open a direct sealed universal reply `[0xE2][0xE1][ctr]AEAD(UCH ||
+     * inner)[tag]` and return `UCH || inner` (the caller matches the request
+     * id in the sealed UCH). Null when it does not authenticate.
+     */
+    openDirect(frame: Uint8Array): Uint8Array | null {
+        if (frame[0] !== UNIVERSAL_TAG || frame[1] !== SEALED_TAG) return null
+        return this.openEnvelope(frame.subarray(2), UCH_LEN + RESP_HDR_LEN)
     }
 
     /**
@@ -317,8 +356,7 @@ export class RemapprSession {
      * `UCH || inner` is padded to RELAY_SEAL_PLAIN so the forwarded radio frame is
      * a full 64 bytes and the node derives the matching plaintext length from
      * `env_len`. Same key / per-direction counter / nonce / AAD as the legacy
-     * seal. HW-proof-pending: byte layout per §6.3/§9.1, not yet validated against
-     * the firmware relay decoder (the relay data plane is firmware-gated).
+     * seal.
      */
     sealRelay(
         uch: Uint8Array,
@@ -326,64 +364,74 @@ export class RemapprSession {
         seq: number,
         arg: Uint8Array,
     ): Uint8Array {
-        if (!this.key) throw new Error('remappr session not established')
-        const inner = buildRequest(cmd, seq, arg)
-        if (uch.length + inner.length > RELAY_SEAL_PLAIN)
+        const pt = concat([uch, buildRequest(cmd, seq, arg)])
+        if (pt.length > RELAY_SEAL_PLAIN)
             throw new Error('remappr relay frame exceeds the 64-byte radio budget')
-        const pt = new Uint8Array(RELAY_SEAL_PLAIN)
-        pt.set(uch, 0)
-        pt.set(inner, uch.length)
-        const ctr = this.txCtr++
-        const ctrBytes = le32(ctr)
-        const ct = ccmSeal(
-            this.key,
-            makeNonce(DIR_HOST_TO_DEVICE, ctr),
-            ctrBytes,
-            pt,
-        )
         return concat([
             Uint8Array.of(UNIVERSAL_TAG),
             uch,
             Uint8Array.of(SEALED_TAG),
-            ctrBytes,
-            ct,
+            this.envelope(pt, RELAY_SEAL_PLAIN),
         ])
     }
 
     /**
      * Open a node's relay-sealed reply (§6.3):
-     * `[0xE2][UCH_outer(RESP)][0xE1][ctr]AEAD(UCH_inner || inner_resp)[tag]`. The
-     * reply AEAD-plaintext is the same fixed RELAY_SEAL_PLAIN size. Verifies the
-     * sealed inner UCH equals the cleartext outer (the host half of the §6.3
-     * full-UCH bind) and returns the inner response frame (trailing pad included;
-     * parseResponse trims by its data_len), or null on auth / UCH-mismatch failure.
+     * `[0xE2][UCH_outer(RESP)][0xE1][ctr]AEAD(UCH_inner || inner_resp)[tag]`.
+     * The node seals exactly `UCH || inner_resp` (14 bytes for an ack), so the
+     * length is found by trial like every sealed reply. Verifies the sealed
+     * inner UCH equals the cleartext outer (the host half of the §6.3 full-UCH
+     * bind) and returns the inner response frame, or null on auth /
+     * UCH-mismatch failure.
      */
     openRelay(frame: Uint8Array): Uint8Array | null {
-        if (!this.key) throw new Error('remappr session not established')
         if (frame[0] !== UNIVERSAL_TAG || frame[1 + UCH_LEN] !== SEALED_TAG)
             return null
         const outerUch = frame.subarray(1, 1 + UCH_LEN)
-        const ctrOff = 1 + UCH_LEN + 1
-        const dv = new DataView(
-            frame.buffer,
-            frame.byteOffset,
-            frame.byteLength,
-        )
-        const ctr = dv.getUint32(ctrOff, true)
-        const sealedOff = ctrOff + 4
-        const sealed = frame.subarray(
-            sealedOff,
-            sealedOff + RELAY_SEAL_PLAIN + TAG_LEN,
-        )
-        const pt = ccmOpen(
-            this.key,
-            makeNonce(DIR_DEVICE_TO_HOST, ctr),
-            frame.subarray(ctrOff, ctrOff + 4),
-            sealed,
+        const pt = this.openEnvelope(
+            frame.subarray(1 + UCH_LEN + 1),
+            UCH_LEN + RESP_HDR_LEN,
         )
         if (pt === null) return null
         // §6.3 full-UCH bind: the sealed inner UCH must equal the routed outer.
         if (!equal(pt.subarray(0, UCH_LEN), outerUch)) return null
         return pt.subarray(UCH_LEN)
+    }
+
+    /** `ctr || AEAD(pt zero-padded to padTo) || tag`, host→device. */
+    private envelope(pt: Uint8Array, padTo: number): Uint8Array {
+        if (!this.key) throw new Error('remappr session not established')
+        const padded = new Uint8Array(padTo)
+        padded.set(pt)
+        const ctr = this.txCtr++
+        const ctrBytes = le32(ctr)
+        const ct = ccmSeal(this.key, makeNonce(DIR_HOST_TO_DEVICE, ctr), ctrBytes, padded)
+        return concat([ctrBytes, ct])
+    }
+
+    /**
+     * Authenticate `ctr || ct || tag || zero pad` by trial length, from
+     * `minLen` plaintext bytes up to what the envelope can hold. On success the
+     * counter becomes the new floor and the plaintext is returned.
+     */
+    private openEnvelope(envelope: Uint8Array, minLen: number): Uint8Array | null {
+        if (!this.key) throw new Error('remappr session not established')
+        if (envelope.length < CTR_LEN + minLen + TAG_LEN) return null
+        const ctrBytes = envelope.subarray(0, CTR_LEN)
+        const ctr = new DataView(
+            ctrBytes.buffer,
+            ctrBytes.byteOffset,
+            CTR_LEN,
+        ).getUint32(0, true)
+        if (ctr <= this.rxLast) throw new ReplayedReplyError(ctr, this.rxLast)
+        const nonce = makeNonce(DIR_DEVICE_TO_HOST, ctr)
+        const body = envelope.subarray(CTR_LEN)
+        for (let n = minLen; n + TAG_LEN <= body.length; n++) {
+            const pt = ccmOpen(this.key, nonce, ctrBytes, body.subarray(0, n + TAG_LEN))
+            if (pt === null) continue
+            this.rxLast = ctr
+            return pt
+        }
+        return null
     }
 }

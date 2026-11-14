@@ -56,7 +56,7 @@ interface TrieNode {
 
 const newNode = (): TrieNode => ({ children: new Map() })
 
-function buildTrie(entries: AutocorrectEntry[]): TrieNode {
+function buildTrie(entries: AutocorrectEntry[], maxTypo: number): TrieNode {
     const root = newNode()
 
     for (const { typo, correction } of entries) {
@@ -74,10 +74,10 @@ function buildTrie(entries: AutocorrectEntry[]): TrieNode {
                     `characters the keyboard cannot type (allowed: A-Z a-z 0-9 ' -)`,
             )
         }
-        if (lower.length > AUTOCORRECT_MAX_TYPO) {
+        if (lower.length > maxTypo) {
             throw new Error(
                 `autocorrect: typo ${JSON.stringify(typo)} is longer than the ` +
-                    `${AUTOCORRECT_MAX_TYPO}-character history the firmware keeps, ` +
+                    `${maxTypo}-character history the firmware keeps, ` +
                     `so it could never match`,
             )
         }
@@ -204,11 +204,13 @@ function serialize(root: TrieNode): Uint8Array {
  *
  * Throws on anything the device would reject or silently never match —
  * unsupported characters, a typo longer than the firmware's history, a duplicate
- * typo, or a dictionary too large for 16-bit offsets.
+ * typo, or a dictionary too large for 16-bit offsets. `maxTypo` is the
+ * firmware build's REMAPPR_AUTOCORRECT_MAX_TYPO (a build may change it).
  */
 export function encodeAutocorrectDictionary(
     entries: AutocorrectEntry[],
+    maxTypo: number = AUTOCORRECT_MAX_TYPO,
 ): Uint8Array {
     if (entries.length === 0) return new Uint8Array()
-    return serialize(buildTrie(entries))
+    return serialize(buildTrie(entries, maxTypo))
 }

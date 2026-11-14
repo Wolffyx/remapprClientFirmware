@@ -211,11 +211,34 @@ export const ActionObjectSchema = z.discriminatedUnion('type', [
             type: z.literal('layer'),
             mode: LayerModeSchema,
             layer: z.string(),
+            releaseAfterMs: z
+                .number()
+                .int()
+                .min(0)
+                .max(0xffff)
+                .optional()
+                .describe(
+                    'mode "sticky": release the one-shot layer after this long, ms ' +
+                        '(0/absent = defaults.stickyReleaseDefaultMs).',
+                ),
         })
         .describe('Layer switch (mode picks momentary/toggle/to/sticky).'),
 
     z
-        .object({ type: z.literal('sticky_key'), key: KeycodeSchema })
+        .object({
+            type: z.literal('sticky_key'),
+            key: KeycodeSchema,
+            releaseAfterMs: z
+                .number()
+                .int()
+                .min(0)
+                .max(0xffff)
+                .optional()
+                .describe(
+                    'Release the one-shot after this long, ms (0/absent = ' +
+                        'defaults.stickyReleaseDefaultMs).',
+                ),
+        })
         .describe('One-shot key: applies to the next keypress only.'),
 
     z.object({ type: z.literal('caps_word') }).describe('Caps for one word.'),
@@ -313,6 +336,15 @@ export const ActionObjectSchema = z.discriminatedUnion('type', [
             type: z.literal('auto_shift'),
             key: KeycodeSchema,
             mods: z.array(ModifierSchema),
+            timeoutMs: z
+                .number()
+                .int()
+                .positive()
+                .max(0xffff)
+                .optional()
+                .describe('Hold this long to add the modifiers, ms (absent = the tapping term).'),
+            quickTapMs: z.number().int().min(0).max(0xffff).optional(),
+            requirePriorIdleMs: z.number().int().min(0).max(0xffff).optional(),
         })
         .describe('Tap the key; hold past the term adds the modifiers.'),
     z
@@ -329,7 +361,17 @@ export const ActionObjectSchema = z.discriminatedUnion('type', [
         })
         .describe('Momentary layer with the given modifiers held.'),
     z
-        .object({ type: z.literal('tap_toggle'), layer: z.string() })
+        .object({
+            type: z.literal('tap_toggle'),
+            layer: z.string(),
+            tappingTermMs: z
+                .number()
+                .int()
+                .positive()
+                .max(0xffff)
+                .optional()
+                .describe('Hold past this to make the layer momentary, ms.'),
+        })
         .describe('Tap toggles the layer; hold makes it momentary.'),
     z
         .object({ type: z.literal('set_base_saved'), layer: z.string() })
@@ -436,10 +478,20 @@ export const EncoderBindingSchema = z.object({
 })
 
 export const SliderBindingSchema = z.object({
-    map: z.enum(['volume', 'brightness', 'mouse_wheel', 'custom']),
+    map: z.enum(['volume', 'brightness', 'hue', 'mouse_wheel', 'custom']),
     min: z.number().optional(),
     max: z.number().optional(),
     action: ActionSchema.optional(),
+    downAction: ActionSchema.optional().describe(
+        'map "custom": what a step down fires (absent = nothing).',
+    ),
+    steps: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe('Steps across the travel for volume / mouse_wheel / custom (default 20).'),
 })
 
 export const LayerSchema = z.object({
@@ -508,6 +560,12 @@ export const MacroSchema = z.object({
         .optional()
         .describe('Binding-cells: 0 = plain, 1 = one-param, 2 = two-param.'),
     steps: z.array(MacroStepSchema).min(1),
+    private: z
+        .boolean()
+        .optional()
+        .describe(
+            'Write-only: the device runs it but never returns its steps (e.g. a password).',
+        ),
 })
 
 export const HoldTapDefSchema = z
@@ -569,12 +627,14 @@ export const KeyOverrideSchema = z
 
 export const LeaderSequenceSchema = z
     .object({
-        sequence: z.array(KeycodeSchema).min(1).max(5),
+        // The wire holds up to 255 keys; how many a build captures is its
+        // REMAPPR_BEHAVIOR_LEADER_MAX (5 by default), which the compiler checks.
+        sequence: z.array(KeycodeSchema).min(1).max(255),
         action: ActionSchema,
     })
     .describe(
-        'Leader sequence: the exact 1..5 key sequence that fires `action` ' +
-            'after the leader key opens capture.',
+        'Leader sequence: the exact key sequence (1..5 keys on a default ' +
+            'firmware build) that fires `action` after the leader key opens capture.',
     )
 
 // pattern-check: skip — declarative zod schema for the §F semantic-action DTO
@@ -1138,6 +1198,16 @@ export const DeviceSensorSchema = z
 
 export const NodeSensorSchema = z
     .looseObject({
+        part: z
+            .number()
+            .int()
+            .min(0)
+            .max(255)
+            .optional()
+            .describe(
+                "Which of the device's parts the defaults are for, by part index " +
+                    '(its place among the board parts; default 0).',
+            ),
         defaults: sensorValuesSchema(true)
             .optional()
             .describe(
@@ -1741,6 +1811,72 @@ export const PowerSettingsSchema = z
     )
 
 // pattern-check: skip adding well-known optional fields to an existing zod schema
+const DisplaySourceSchema = z.union([
+    z.enum([
+        'activeLayer',
+        'battery',
+        'charging',
+        'connection',
+        'capsLock',
+        'numLock',
+        'wpm',
+        'deviceName',
+    ]),
+    u8,
+])
+
+const displayBox = {
+    x: u8,
+    y: u8,
+    w: u8.min(1),
+    h: u8.min(1),
+    font: z.enum(['small', 'large']).optional(),
+    align: z.enum(['left', 'centre', 'right']).optional(),
+    invert: z.boolean().optional(),
+    frame: z.boolean().optional(),
+}
+
+export const DisplayWidgetSchema = z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('text'), text: z.string(), ...displayBox }),
+    z.object({ kind: z.literal('value'), source: DisplaySourceSchema, ...displayBox }),
+    z.object({
+        kind: z.literal('bar'),
+        source: DisplaySourceSchema,
+        full: z.number().int().min(1).max(0xffff),
+        ...displayBox,
+    }),
+    z.object({
+        kind: z.literal('image'),
+        width: u8.min(1),
+        height: u8.min(1),
+        bitmap: z
+            .string()
+            .regex(/^([0-9a-fA-F]{2})*$/)
+            .describe('1-bit rows as hex, bit 7 = leftmost, whole bytes per row.'),
+        ...displayBox,
+    }),
+    z.object({
+        kind: z.literal('clock'),
+        format: z.enum(['hm', 'hms', 'date']),
+        ...displayBox,
+    }),
+    z.object({ kind: z.literal('rect'), ...displayBox }),
+])
+
+export const DisplaySchema = z
+    .object({
+        pages: z.array(
+            z.object({
+                part: u8.describe('The DISPLAY part the page is drawn on, by part index.'),
+                default: z.boolean().optional(),
+                widgets: z.array(DisplayWidgetSchema),
+            }),
+        ),
+    })
+    .describe(
+        "What the node's displays show (TBL_DISPLAY); an empty page list clears them.",
+    )
+
 export const NodeSchema = z
     .looseObject({
         personality: z
@@ -1754,6 +1890,7 @@ export const NodeSchema = z
         radio: RadioSettingsSchema.optional(),
         power: PowerSettingsSchema.optional(),
         sensor: NodeSensorSchema.optional(),
+        display: DisplaySchema.optional(),
     })
     .describe(
         'Per-personality node configuration; a dongle has a limited surface, a ' +

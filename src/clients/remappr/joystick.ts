@@ -23,7 +23,7 @@ import {
     type CalSuggestion,
 } from './protocol'
 import { once, repeatable, type CallTarget, type RemapprRpc } from './rpc'
-import type { DiscoveryResult } from './discovery'
+import { type DiscoveryResult, servesNamespace } from './discovery'
 import type {
     JoystickApi,
     JoystickAxisFlags,
@@ -53,8 +53,8 @@ const STEPS: Readonly<Record<JoystickCalStep, number>> = {
 /** True when the device lists the JOYSTICK namespace (the verbs are
  *  provisional, so an unlisted namespace is never assumed). */
 export function servesJoystick(discovery: DiscoveryResult): boolean {
-    const ns = discovery.personality?.namespaces
-    return !!ns?.some((n) => n.namespace === Namespace.JOYSTICK)
+    // Provisional (ns_version 0): a newer layout must not be read as v0.
+    return servesNamespace(discovery, Namespace.JOYSTICK)
 }
 
 /** One JOYSTICK verb, to the device itself or (`to`) a node behind the
@@ -67,6 +67,20 @@ async function call(
     to?: CallTarget,
 ): Promise<Uint8Array> {
     const reply = await rpc.callUniversalPlain(Namespace.JOYSTICK, verb, arg, to)
+    if (reply.status !== Status.OK)
+        throw new Error(`${name} → ${statusName(reply.status)}`)
+    return reply.data
+}
+
+/** One mutating JOYSTICK verb: sealed (§19) when the RPC holds a session. */
+async function mutate(
+    rpc: RemapprRpc,
+    verb: number,
+    name: string,
+    arg?: Uint8Array,
+    to?: CallTarget,
+): Promise<Uint8Array> {
+    const reply = await rpc.callMutation(Namespace.JOYSTICK, verb, arg, to)
     if (reply.status !== Status.OK)
         throw new Error(`${name} → ${statusName(reply.status)}`)
     return reply.data
@@ -115,7 +129,7 @@ export async function calibrate(
     input?: number,
     targetNode = 0,
 ): Promise<CalSuggestion[]> {
-    const data = await call(
+    const data = await mutate(
         rpc,
         JoystickVerb.CALIBRATE,
         'CALIBRATE',
@@ -137,7 +151,7 @@ export async function setAxisMap(
     const bits =
         (flags.invert ? JoyAxisFlag.INVERT : 0) |
         (flags.radial ? JoyAxisFlag.RADIAL : 0)
-    await call(
+    await mutate(
         rpc,
         JoystickVerb.SET_AXIS_MAP,
         'SET_AXIS_MAP',
@@ -153,7 +167,7 @@ export async function setDeadzone(
     zones: { inner: number; outer: number },
     targetNode = 0,
 ): Promise<void> {
-    await call(
+    await mutate(
         rpc,
         JoystickVerb.SET_DEADZONE,
         'SET_DEADZONE',
