@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { Cmd, Namespace, Status } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
 import { buildUnicodeApi } from './unicodeView'
+import { plainMutations } from './plainRpc.fixture'
 
 /** GET_UNICODE_MODE reply: {u8 mode, u8 supported bitmask}. */
 function modeBytes(mode: number, supported: number): Uint8Array {
@@ -22,7 +23,7 @@ function makeRpc(
 ): FakeRpc {
     const state: FakeRpc = { calls: [], rpc: undefined as unknown as RemapprRpc }
 
-    state.rpc = {
+    state.rpc = plainMutations({
         async callUniversalPlain(
             namespace: number,
             verb: number,
@@ -44,7 +45,7 @@ function makeRpc(
                 }
             return { status: Status.ERR_CMD, data: new Uint8Array() }
         },
-    } as unknown as RemapprRpc
+    }) as unknown as RemapprRpc
 
     return state
 }

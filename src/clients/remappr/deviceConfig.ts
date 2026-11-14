@@ -45,8 +45,16 @@ type DevicePersonality = ConfigDevice['personality']
 /** One universal request report: 64 − 0xE2 tag − UCH − 4-byte inner header
  *  leaves 51 bytes of arg, floored to the flash write block (the store writes
  *  each chunk straight to flash). */
-const WRITE_CHUNK =
-    Math.floor((64 - 1 - UCH_LEN - 4) / BLOB_ALIGN) * BLOB_ALIGN
+const WRITE_ROOM = Math.floor((64 - 1 - UCH_LEN - 4) / BLOB_ALIGN) * BLOB_ALIGN
+
+/** The write chunk: the device's max_unsealed_chunk (GET_LIMITS) when it
+ *  reported one, never more than one request frame holds, floored to the
+ *  flash block. */
+function writeChunk(maxUnsealedChunk?: number): number {
+    if (!maxUnsealedChunk || maxUnsealedChunk <= 0) return WRITE_ROOM
+    const floored = Math.floor(Math.min(maxUnsealedChunk, WRITE_ROOM) / BLOB_ALIGN) * BLOB_ALIGN
+    return Math.max(floored, BLOB_ALIGN)
+}
 
 /** Tries at a push to a node behind the dongle. The link can lose a request
  *  or the reply to it (a chunk then may or may not be staged, a COMMIT may or
@@ -96,14 +104,15 @@ function configCall(rpc: RemapprRpc, node: number): ConfigCall {
 async function pushOnce(
     call: ConfigCall,
     blob: Uint8Array,
+    chunkLen: number,
 ): Promise<Refusal | null> {
     const begin = await call(Cmd.WRITE_CONFIG_BEGIN)
     if (begin.status !== Status.OK)
         return { step: 'WRITE_CONFIG_BEGIN', status: begin.status }
-    for (let off = 0; off < blob.length; off += WRITE_CHUNK) {
+    for (let off = 0; off < blob.length; off += chunkLen) {
         const chunk = await call(
             Cmd.WRITE_CONFIG_CHUNK,
-            blob.subarray(off, Math.min(off + WRITE_CHUNK, blob.length)),
+            blob.subarray(off, Math.min(off + chunkLen, blob.length)),
         )
         if (chunk.status !== Status.OK)
             return { step: 'WRITE_CONFIG_CHUNK', status: chunk.status }
@@ -143,6 +152,8 @@ export interface DeviceConfigTarget {
      *  serves them: `write` leaves out a sensor setting the device would
      *  refuse (it validates TBL_SENSOR strictly). */
     sensors?: () => Promise<readonly SensorInfo[]>
+    /** GET_LIMITS max_unsealed_chunk: the read and write chunk size. */
+    maxUnsealedChunk?: number
 }
 
 /** A document with no settings: every field on the device's default. */
@@ -198,6 +209,7 @@ export function buildDeviceConfigApi(
         const blob = await readConfigBlob(rpc, info.hasActive, {
             targetNode: node,
             universal: true,
+            maxUnsealedChunk: target.maxUnsealedChunk,
         })
         if (blob.length === 0) {
             return {
@@ -206,7 +218,11 @@ export function buildDeviceConfigApi(
                 stored: false,
             }
         }
-        const decoded = decodeRemapprDeviceBlob(blob)
+        // A joystick's axis shaping sits on its AXES parts, a mouse's settings
+        // on its pointer part: the device's part list places both.
+        const sensors =
+            target.personality === 'dongle' ? undefined : await target.sensors?.()
+        const decoded = decodeRemapprDeviceBlob(blob, { sensors })
         // A stored config this client cannot read is refused rather than shown
         // as defaults: saving over it would drop settings nobody saw.
         if (decoded.code !== DecodeCode.OK) {
@@ -248,7 +264,7 @@ export function buildDeviceConfigApi(
     async function push(blob: Uint8Array, version: number): Promise<void> {
         const attempts = node ? RELAY_PUSH_ATTEMPTS : 1
         for (let attempt = 1; ; attempt++) {
-            const refused = await pushOnce(call, blob)
+            const refused = await pushOnce(call, blob, writeChunk(target.maxUnsealedChunk))
             if (refused === null) return
             if (refused.step === 'COMMIT_CONFIG' && (await committed(version))) return
             if (refused.status !== Status.ERR_STATE || attempt >= attempts)
@@ -276,7 +292,10 @@ export function buildDeviceConfigApi(
         // that does not move it forward, and another tool may have pushed since.
         const info = await deviceInfo()
         const version = (info.hasActive ? info.configVersion : 0) + 1
-        const sensors = parsed.data.sensor ? await target.sensors?.() : undefined
+        const sensors =
+            parsed.data.sensor || parsed.data.joystick
+                ? await target.sensors?.()
+                : undefined
         const blob = padToAlign(
             buildRemapprDeviceBlob(parsed.data, { configVersion: version, sensors }),
         )

@@ -7,6 +7,7 @@ import { parseKeymap } from '../../config'
 
 import type { RemapprRpc } from './rpc'
 import { RemapprKeyboardService, type RemapprServiceDeps } from './service'
+import { plainMutations } from './plainRpc.fixture'
 
 // v2 dict form (down-migrates to canonical pools): one custom hold-tap + one
 // mod-morph def, plus a two-key base layer.
@@ -25,14 +26,14 @@ const CONFIG = parseKeymap(`{
         "keepMods": ["LShift"] } }
 }`)
 
-const stubRpc = {
+const stubRpc = plainMutations({
     onClosed: () => () => undefined,
     subscribeInput: () => () => undefined,
     close: async () => undefined,
     // discardChanges fires a ROLLBACK_CONFIG (plaintext, no session) and ignores
     // the result — answer OK so the rollback resolves.
     callPlain: async () => ({ status: 0, data: new Uint8Array() }),
-} as unknown as RemapprRpc
+}) as unknown as RemapprRpc
 
 function makeService(readOnly = false): RemapprKeyboardService {
     const deps: RemapprServiceDeps = {
