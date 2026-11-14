@@ -12,7 +12,6 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { ccmOpen, ccmSeal, RemapprSession, type RemapprIdentity } from './auth'
 import { establishNodeSession } from './nodes'
 import {
-    buildRequest,
     buildUch,
     Cmd,
     Namespace,
