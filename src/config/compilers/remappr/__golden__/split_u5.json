@@ -30,7 +30,6 @@
       "cs": "PD14",
       "dataReady": "PD15",
       "reset": "PF12"
-    },
-    "radio": { "channelSeed": [2, 26, 50, 74, 98, 14, 38, 62, 86] }
+    }
   }
 }

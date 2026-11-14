@@ -87,7 +87,7 @@ describe('board.buttons', () => {
 
 describe('board.sliders', () => {
     it('emits remappr,slider on its ADC channel', () => {
-        const adc = { adc: 'adc', channel: 6, setup: { gain: 'ADC_GAIN_1_6', reference: 'ADC_REF_INTERNAL', inputPositive: 'NRF_SAADC_AIN6' } }
+        const adc = { adc: 'adc', channel: 6, setup: { gain: 'ADC_GAIN_1_6', reference: 'ADC_REF_INTERNAL', inputPositive: 'NRF_SAADC_AIN6', resolution: 12 } }
         const r = compile(pad({ sliders: [{ adc, function: 'rgb-brightness', pollMs: 30 }] }))
         expect(errors(r)).toEqual([])
         const o = overlayOf(r)

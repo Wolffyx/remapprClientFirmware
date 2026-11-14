@@ -431,7 +431,7 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         emitPowerOff(config, book),
         emitNodeBus(config, book, diag),
         emitRadioLink(config, book, diag),
-        emitRadioConfig(config),
+        emitRadioConfig(config, diag),
         emitButtons(config, origin, book, diag),
         emitSliders(config, adc),
     ]
