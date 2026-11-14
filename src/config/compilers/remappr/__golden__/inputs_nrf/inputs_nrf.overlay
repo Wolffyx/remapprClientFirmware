@@ -80,7 +80,9 @@
 			zephyr,code = <INPUT_KEY_ENTER>;
 		};
 	};
+};
 
+/ {
 	/* One engine position per button, after the matrix keys'. */
 	button_0_key {
 		compatible = "remappr,extra-input";

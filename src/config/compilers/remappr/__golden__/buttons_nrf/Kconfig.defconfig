@@ -1,0 +1,8 @@
+if SHIELD_BUTTONS_NRF
+
+# The matrix + keymap drivers auto-enable from devicetree; the input
+# subsystem itself must be on.
+config INPUT
+	default y
+
+endif # SHIELD_BUTTONS_NRF

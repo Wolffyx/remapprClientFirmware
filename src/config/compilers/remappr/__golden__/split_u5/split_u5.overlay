@@ -90,11 +90,3 @@
 		reset-gpios = <&gpiof 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 	};
 };
-
-/ {
-	radio_config: radio-config {
-		compatible = "remappr,radio-config";
-		/* RF channels 2, 26, 50, 74, 98, 14, 38, 62, 86 */
-		channel-seed = [02 1a 32 4a 62 0e 26 3e 56];
-	};
-};

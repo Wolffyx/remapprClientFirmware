@@ -19,6 +19,8 @@ import {
     existsSync,
     mkdirSync,
     mkdtempSync,
+    readdirSync,
+    readFileSync,
     rmSync,
     writeFileSync,
 } from 'node:fs'
@@ -218,4 +220,54 @@ export function dtcCheck(tc: DtcToolchain, overlay: string): DtcResult {
     } finally {
         rmSync(dir, { recursive: true, force: true })
     }
+}
+
+// ---- the node labels the firmware reads ------------------------------------
+//
+// Most firmware code finds its nodes by compatible, but some reads one node by
+// label (`DT_NODELABEL(remappr_radio)`). A shield that gives that node another
+// label compiles, passes dtc and the binding check, and is silently ignored.
+// The firmware's own board overlays say which label goes with which
+// compatible; the C sources say which of those labels are read.
+
+/** `label: name { compatible = "x"` in devicetree text, as [label, compat]. */
+const LABELED_NODE =
+    /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[A-Za-z0-9_,.+-]+(?:@[0-9a-fA-F]+)?\s*\{\s*compatible\s*=\s*"([^"]+)"/g
+
+const labeledNodes = (dts: string): [string, string][] =>
+    [...dts.matchAll(LABELED_NODE)].map((m) => [m[1], m[2]])
+
+function filesUnder(dir: string, ext: RegExp): string[] {
+    if (!existsSync(dir)) return []
+    return readdirSync(dir, { recursive: true, encoding: 'utf8' })
+        .filter((f) => ext.test(f))
+        .map((f) => join(dir, f))
+}
+
+let labelCache: Map<string, string> | undefined
+
+/** compatible → the label the firmware reads that node by, for every node a
+ *  firmware overlay labels and firmware C code reads with DT_NODELABEL. */
+export function firmwareNodeLabels(tc: DtcToolchain): Map<string, string> {
+    if (labelCache) return labelCache
+    const read = new Set<string>()
+    for (const d of ['app', 'subsys', 'lib', 'drivers'])
+        for (const f of filesUnder(join(tc.firmware, d), /\.[ch]$/))
+            for (const m of readFileSync(f, 'utf8').matchAll(/DT_NODELABEL\(\s*(\w+)\s*\)/g))
+                read.add(m[1])
+    const out = new Map<string, string>()
+    for (const f of filesUnder(join(tc.firmware, 'app'), /\.(overlay|dtsi)$/))
+        for (const [label, compat] of labeledNodes(readFileSync(f, 'utf8')))
+            if (read.has(label)) out.set(compat, label)
+    labelCache = out
+    return out
+}
+
+/** Nodes of a shield whose label is not the one the firmware reads for their
+ *  compatible, as "compat: got x, firmware reads y". */
+export function labelCheck(tc: DtcToolchain, overlay: string): string[] {
+    const want = firmwareNodeLabels(tc)
+    return labeledNodes(overlay)
+        .filter(([label, compat]) => want.has(compat) && want.get(compat) !== label)
+        .map(([label, compat]) => `${compat}: got ${label}, firmware reads ${want.get(compat)}`)
 }
