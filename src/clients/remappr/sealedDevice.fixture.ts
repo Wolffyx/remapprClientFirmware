@@ -78,6 +78,11 @@ export class SealedDevice {
     /** Before the next direct sealed reply, send a sealed one for another
      *  request id (a late answer to an earlier request). */
     staleNext = false
+    /** Before the next legacy sealed reply, send a sealed one for an earlier
+     *  cmd/seq. */
+    staleLegacyNext = false
+    /** Flip a ciphertext bit in the next sealed reply. */
+    corruptNext = false
 
     private readonly devPriv = x25519.utils.randomSecretKey()
     private key: Uint8Array | null = null
@@ -162,6 +167,13 @@ export class SealedDevice {
     }
 
     private sendSealed(frame: Uint8Array): void {
+        if (this.corruptNext) {
+            this.corruptNext = false
+            const bad = Uint8Array.from(frame)
+            bad[frame[0] === SEALED_TAG ? 5 : 6] ^= 0x01
+            this.enqueue(bad)
+            return
+        }
         if (this.replayNext && this.lastSealed) {
             this.replayNext = false
             this.enqueue(this.lastSealed)
@@ -191,6 +203,11 @@ export class SealedDevice {
         if (!pt) return this.enqueue(bare())
         const { cmd, seq, arg } = this.inner(pt)
         this.served.push({ form: 'legacy-sealed', cmd })
+        if (this.staleLegacyNext) {
+            this.staleLegacyNext = false
+            const old = resp(Cmd.GET_DEVICE_INFO, (seq + 255) & 0xff, { status: Status.OK, data: new Uint8Array() })
+            this.enqueue(Uint8Array.from([SEALED_TAG, ...this.seal(old)]))
+        }
         const out = resp(cmd, seq, this.opts.serve(undefined, cmd, arg))
         this.sendSealed(Uint8Array.from([SEALED_TAG, ...this.seal(out)]))
     }

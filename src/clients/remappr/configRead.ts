@@ -24,14 +24,25 @@ import {
 import { type RemapprRpc, RELAY_READ_RETRIES } from './rpc'
 
 // Direct legacy frame: 64 − 6-byte response header = 58 blob bytes per reply.
-// The RELAYED universal path adds a 0xE2 tag + 8-byte UCH, so a reply only fits
-// 64 − 1 − 8 − 6 = 49 bytes before it FRAGments — and the dongle does not forward
-// a FRAG chain, so the app hangs on the missing continuation (Remappr RPC timeout
-// after 2000 ms on "open node"). Request ≤48 (the advertised max_unsealed_chunk)
-// over the relay so every chunk is a single frame; the device caps to the actual
-// blob length and the loop advances by what it returns.
+// A universal reply adds a 0xE2 tag + 8-byte UCH, so it only fits
+// 64 − 1 − 8 − 6 = 49 bytes before it FRAGments. The dongle does forward a FRAG
+// chain, but over the radio one lost fragment costs the whole chunk again, so
+// the universal path asks for the device's max_unsealed_chunk (GET_LIMITS; 48
+// on every firmware so far) and each reply stays one frame, as control_cli
+// `pull` does. The device caps to the blob length and the loop advances by what
+// it returns.
 const READ_CHUNK_WANT_DIRECT = 58
-const READ_CHUNK_WANT_RELAY = 48
+/** The universal read chunk without GET_LIMITS (the firmware's
+ *  max_unsealed_chunk), and the most one unfragmented reply carries. */
+export const UNIVERSAL_CHUNK_DEFAULT = 48
+const UNIVERSAL_CHUNK_ONE_FRAME = 64 - 1 - 8 - 6
+
+/** The universal chunk to use: the device's max_unsealed_chunk when it
+ *  reported one, never more than one unfragmented frame holds. */
+export function universalChunk(maxUnsealedChunk?: number): number {
+    if (!maxUnsealedChunk || maxUnsealedChunk <= 0) return UNIVERSAL_CHUNK_DEFAULT
+    return Math.min(maxUnsealedChunk, UNIVERSAL_CHUNK_ONE_FRAME)
+}
 
 /**
  * Read the full active blob over the plaintext READ_CONFIG_CHUNK loop. With
@@ -45,7 +56,7 @@ const READ_CHUNK_WANT_RELAY = 48
 export async function readConfigBlob(
     rpc: RemapprRpc,
     hasActive: boolean,
-    opts: { targetNode?: number; universal?: boolean } = {},
+    opts: { targetNode?: number; universal?: boolean; maxUnsealedChunk?: number } = {},
 ): Promise<Uint8Array> {
     if (!hasActive) return new Uint8Array()
     const target = opts.targetNode ?? 0
@@ -53,7 +64,7 @@ export async function readConfigBlob(
     const chunks: Uint8Array[] = []
     let offset = 0
     let total = 0
-    const want = legacy ? READ_CHUNK_WANT_DIRECT : READ_CHUNK_WANT_RELAY
+    const want = legacy ? READ_CHUNK_WANT_DIRECT : universalChunk(opts.maxUnsealedChunk)
     for (let guard = 0; ; guard++) {
         if (guard >= MAX_READ_CHUNKS) {
             throw new ProtocolError(
@@ -177,6 +188,7 @@ export async function loadDeviceConfig(
     const target = opts.targetNode ?? 0
     const blob = await readConfigBlob(rpc, discovery.deviceInfo.hasActive, {
         targetNode: target,
+        maxUnsealedChunk: discovery.limits?.maxUnsealedChunk,
     })
     const decoded =
         blob.length > 0
@@ -204,9 +216,13 @@ export async function loadDeviceConfig(
 
     if (!config) config = defaultConfig(geometry.layouts[0]?.keys.length ?? 0)
 
-    const maxLayers = discovery.personality
-        ? Math.max(config.layers.length, 16)
-        : Math.max(config.layers.length, 8)
+    // The device's own capacity (GET_KEYMAP_BOUNDS); the old guesses only for
+    // a device that did not answer it.
+    const maxLayers =
+        geometry.maxLayers ??
+        (discovery.personality
+            ? Math.max(config.layers.length, 16)
+            : Math.max(config.layers.length, 8))
 
     return {
         config,

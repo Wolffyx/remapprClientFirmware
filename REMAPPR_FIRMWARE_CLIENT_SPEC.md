@@ -186,7 +186,8 @@ offset  size  field
 | 0x07 | DONGLE | §4.5 |
 | 0x08 | RADIO | — |
 | 0x09 | INPUT | 0x01 `GET_INPUT_LAYOUT` (§4.2) |
-| 0x0A | SENSOR | §4.6 (provisional, manifest `ns_version` 0) |
+| 0x0A | SENSOR | §4.6 (manifest `ns_version` 1) |
+| 0x0B | HOST | 0x01 `GET_KEYS`, 0x02 `SET_VALUE`, 0x03 `CLEAR` (§3.3.1) |
 
 COMMON verbs that exist only on the universal route: 0x04
 `GET_PERSONALITY_MAP`, 0x05 `GET_MANIFEST`, 0x06 `GET_LIMITS`, 0x07
@@ -198,6 +199,32 @@ COMMON verbs that exist only on the universal route: 0x04
 > personality map (§3.8) is not served. The client never assumes the
 > provisional JOYSTICK or SENSOR namespace, or INPUT; it does assume MOUSE on a
 > mouse that predates the list.
+
+> **Gate on `ns_version`.** Where the COMMON verb mask lists `GET_MANIFEST`
+> (bit 5), discovery reads it. The reply is a TLV list `{u16 type, u16 len,
+> value}`: one NS_DESC (type 1: `u8 ns, u8 ns_version, u16 verb_count,
+> verb_count × {u8 verb, u8 flags (SEAL 0x01, MUT 0x02), u16 min_arg}`) per
+> served namespace, then the GET_LIMITS bytes (type 2). A namespace whose
+> `ns_version` is newer than the client decodes (`KNOWN_NS_VERSION`: JOYSTICK
+> 0, every other 1) is treated as absent (`servesNamespace`), not misread.
+
+#### 3.3.1 HOST — host values
+
+The host pushes values the device's screens draw (`host.ts`):
+
+| Verb | Arg | Reply |
+|---|---|---|
+| 0x01 `GET_KEYS` | — | `u8 ver (= 1), u8 n, n × u8 key`: the keys the screens show |
+| 0x02 `SET_VALUE` (mutating) | `u8 key, u8 type, u8 off, u8 total, data[≤ 20]` | — |
+| 0x03 `CLEAR` (mutating) | — | — |
+
+Types: INT 0 (i32), TEXT 1 (UTF-8, ≤ 64 bytes, sent in in-order 20-byte
+pieces), TIME 2 (u32 local seconds since 1970). Keys: TIME 0x01, CPU 0x02,
+RAM 0x03, MEDIA_TITLE 0x04, MEDIA_ARTIST 0x05, VOLUME 0x06, NOTIFICATION 0x07,
+user text 0x10–0x1F; the device stores keys up to 0x3F. INT and TEXT expire
+without a refresh (5 s by default), TIME after 24 h. A full store is
+ERR_STATE. The SET and CLEAR verbs ride `callMutation`, so they are sealed on
+an auth-on device.
 
 ### 3.4 Legacy command set
 
@@ -298,8 +325,9 @@ HAPTIC 14, BATTERY 15, FLASH_STORAGE 16, ANALOG_AXES 17, HID_GAMEPAD 24.
 `0` means *not reported* (older firmware), not *nothing*.
 
 **`GET_CAPABILITIES`** Cap bits (u32, legacy, keyboards): CONFIG 0, PROFILES 1,
-RGB 2, LAYERS 3, DIAGNOSTICS 4, AUTH 5, KEYMAP 6, PAIRING 7, MOUSE 11,
-CLUSTER_DIAG 12, UNICODE 14, JOYSTICK 15, SENSOR 16.
+RGB 2, LAYERS 3, DIAGNOSTICS 4, AUTH 5, KEYMAP 6, PAIRING 7, HAPTIC 8,
+DISPLAY 9, ERR_COUNTERS 10, MOUSE 11, CLUSTER_DIAG 12, UNICODE 14, JOYSTICK 15,
+SENSOR 16.
 
 > **Two bit 15s.** `hw_caps` bit 15 is BATTERY; Cap bit 15 is JOYSTICK. They are
 > different words.
@@ -316,6 +344,18 @@ u8  max_outstanding
 u8  supports_frag
 [u32 feature_bitmask]
 ```
+
+`feature_bitmask` (`Feature`): HOLD_ON_RELEASE 0, CAPS_WORD_IDLE 1,
+STICKY_RELEASE 2, MACRO_DEFAULTS 3, MATRIX_POLL 4, LAYER_TAIL_V3 5,
+TBL_SLIDER 6, TBL_DISPLAY 7, TBL_POWER 8, TBL_SENSOR_V2 9, TBL_MOUSE_V3 10,
+UNPAIR_ACTION 11. Bits 6–11 and the per-device word (bits 0–5 only where
+KEYBOARD is served) come with the firmware audit-E protocol fixes; older
+firmware reports 0x3F everywhere.
+
+`max_unsealed_chunk` sizes every universal config read and write the client
+makes (`universalChunk`; 48 without GET_LIMITS), capped so a read reply stays
+one frame: the dongle forwards FRAG chains, but over the radio one lost
+fragment costs the whole chunk again.
 
 ### 3.10 Config push
 
@@ -347,6 +387,9 @@ The adapter derives one `DeviceKind` from discovery:
 1. role DONGLE → `dongle`;
 2. personality 1 → `keyboard`, 2 → `mouse`, 4 → `dongle`, 5 → `joystick`;
 3. anything else, or no personality map → `keyboard`.
+
+Personality 3 (the recovery image) is a `keyboard` shown read-only: no
+handshake, no sealed writes, no unicode or sensor writes (`isRecovery`).
 
 ### 4.2 Input layout — INPUT `GET_INPUT_LAYOUT` (0x01)
 
