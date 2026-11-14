@@ -50,6 +50,9 @@ export const TableId = {
     Joystick: 28, // joystick axes + hat (input-layout plan §4)
     Sensor: 29, // sensor settings (sensor-settings plan §4)
     Power: 30, // idle / sleep / off timeouts (sleep-wake design)
+    // Not written by the compiler; a save carries them from the device (carry.ts).
+    Display: 31, // what each display shows (display part design §3)
+    Slider: 32, // what each slider does, per layer (slider part design §4b)
 } as const
 
 /** enum remappr_personality (firmware include/remappr/role.h). */

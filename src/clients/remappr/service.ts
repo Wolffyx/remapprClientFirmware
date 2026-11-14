@@ -113,6 +113,10 @@ export interface RemapprServiceDeps {
      *  (e.g. the device's config could not be decoded). Every rejected edit
      *  throws this message, and `capabilities.readOnlyReason` carries it. */
     readOnlyReason?: string
+    /** The config blob read off the device. commit() carries the tables the
+     *  config does not model (sensor, display, slider, cluster key, per-layer
+     *  RGB, unknown ids) from it into the blob it writes. */
+    deviceBlob?: Uint8Array
     /** True when this service borrows another service's transport (a behind-dongle
      *  node view rides the dongle's RPC), so disconnect() must NOT tear it down.
      *  False/omitted for a service that owns its transport (a direct keyboard or
@@ -201,6 +205,9 @@ export class RemapprKeyboardService
     /** Decoded config = source of truth; updated only on a successful commit. */
     private config: ConfigKeymap
     private configVersion: number
+    /** The blob the device holds, as far as this service knows: the one read at
+     *  connect, then each one it commits. Source of the carried tables. */
+    private deviceBlob?: Uint8Array
     private readonly sealedChunk: number
 
     private layers: Layer[] = []
@@ -268,6 +275,7 @@ export class RemapprKeyboardService
         this.deviceInfo = deps.deviceInfo
         this.config = deps.config
         this.configVersion = deps.configVersion
+        this.deviceBlob = deps.deviceBlob
         this.layouts = deps.layouts
         this.activeLayoutId = deps.activeLayoutId
         this.maxLayers = Math.max(deps.maxLayers, deps.config.layers.length || 1)
@@ -876,7 +884,10 @@ export class RemapprKeyboardService
         // layers raise onto, so a committed blob carries them (and their names).
         const next = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
         const version = this.nextConfigVersion()
-        const { blob, diagnostics } = buildRemapprBlob(next, { configVersion: version })
+        const { blob, diagnostics } = buildRemapprBlob(next, {
+            configVersion: version,
+            ...(this.deviceBlob ? { carryFrom: this.deviceBlob } : {}),
+        })
         // An error-level diagnostic means the blob does not say what the user
         // asked for (e.g. a NONE placeholder for a binding that failed to lower).
         const errors = diagnostics.filter((d) => d.level === 'error')
@@ -907,6 +918,7 @@ export class RemapprKeyboardService
 
         this.config = next
         this.configVersion = version
+        this.deviceBlob = blob
         this.clearEdits()
         this.markPending(false)
     }

@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest'
 
 import { type ConfigKeymap, parseKeymap } from '../../config'
 import { buildRemapprBlob } from '../../config/compilers/remappr'
+import { TableId } from '../../config/compilers/remappr/blobWriter'
+import { assembleBlob, keymapCore, tableOf } from '../../config/__tests__/blobFixtures'
+
+import { loadDeviceConfig } from './configRead'
 
 import { FakeConfigDevice, type FakeConfigDeviceOpts } from './fakeConfigDevice.fixture'
 import { Cmd, type Limits } from './protocol'
@@ -103,5 +107,49 @@ describe('commit preflight (L3.9)', () => {
         await expect(svc.commit()).rejects.toThrow(/no HID usage for key "not_a_key"/)
         expect(dev.log).not.toContain(Cmd.WRITE_CONFIG_BEGIN)
         expect(dev.active).toEqual(ACTIVE)
+    })
+})
+
+describe('commit keeps the tables the config does not model (L3.7)', () => {
+    it('a save of a device config keeps its sensor and display tables', async () => {
+        const sensor = {
+            id: TableId.Sensor,
+            version: 1,
+            payload: [1, 0, 0, 0x21, 3, 0, 0x10, 0, 0, 0],
+        }
+        const display = { id: TableId.Display, version: 1, payload: [0, 0, 0, 0, 0, 0, 0, 0] }
+        const device = assembleBlob([...keymapCore(), sensor, display], { configVersion: 7 })
+        const dev = new FakeConfigDevice({ active: device })
+        const loaded = await loadDeviceConfig(dev.rpc, {
+            protoMax: 1,
+            deviceInfo: {
+                protoMin: 1,
+                protoMax: 1,
+                schemaVersion: 1,
+                fwMajor: 0,
+                fwMinor: 0,
+                fwPatch: 0,
+                hwRev: 0,
+                hasActive: true,
+                configVersion: 7,
+            },
+        })
+        const svc = new RemapprKeyboardService({
+            rpc: dev.rpc,
+            deviceInfo: { name: 'CommitTest', firmware: 'remappr' },
+            config: loaded.config,
+            configVersion: loaded.configVersion,
+            layouts: loaded.layouts,
+            activeLayoutId: loaded.activeLayoutId,
+            maxLayers: loaded.maxLayers,
+            ...(loaded.deviceBlob ? { deviceBlob: loaded.deviceBlob } : {}),
+        })
+        await svc.commit()
+        expect(dev.version).toBe(8)
+        expect(tableOf(dev.active!, TableId.Sensor)).toEqual(sensor)
+        expect(tableOf(dev.active!, TableId.Display)).toEqual(display)
+        // and a second save still has them (carried from the blob it wrote)
+        await svc.commit()
+        expect(tableOf(dev.active!, TableId.Sensor)).toEqual(sensor)
     })
 })

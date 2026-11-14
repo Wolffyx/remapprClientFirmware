@@ -71,6 +71,7 @@ import {
     type PosholdRecord,
 } from './blobWriter'
 import { encodeAutocorrectDictionary } from './autocorrect'
+import { carryUnmodeledTables } from './carry'
 import { powerRecord } from './power'
 import { radioRecord } from './radio'
 import { mouseRecord } from './mouse'
@@ -1567,10 +1568,19 @@ function exportConfigVersion(config: ConfigKeymap): number {
  */
 export function buildRemapprBlob(
     config: ConfigKeymap,
-    opts: { configVersion: number },
+    opts: {
+        configVersion: number
+        /** The blob read off the device. Its tables the config does not model
+         *  (and the compile does not write) are carried over byte for byte, so
+         *  a save does not drop them; one that cannot be carried is an error. */
+        carryFrom?: Uint8Array
+    },
 ): { blob: Uint8Array; diagnostics: readonly Diagnostic[] } {
     const diag = new DiagnosticBag()
-    const blob = encodeBlob(config, diag, opts.configVersion)
+    const compiled = encodeBlob(config, diag, opts.configVersion)
+    const blob = opts.carryFrom
+        ? carryUnmodeledTables(compiled, opts.carryFrom, diag)
+        : compiled
     return { blob, diagnostics: diag.all }
 }
 

@@ -1083,9 +1083,8 @@ const rgbHex = (r: number, g: number, b: number): string =>
 
 // TBL_RGB (id 7): 8-byte header { u8 mode, u8 flags(bit0=perLayer), u8 num_layers,
 // u8 pad, u16 num_positions, u16 pad } + RGB888 colors row-major [layer][pos].
-// Returns a sparse position→"#rrggbb" map from layer 0 (black/off omitted), or
-// undefined for an effects-only (mode 0) / empty / truncated table. A per-layer
-// table is collapsed to layer 0 with a diagnostic (per-layer authoring is Phase 4c).
+// Returns a sparse position→"#rrggbb" map (black/off omitted), or undefined for
+// an effects-only (mode 0) / empty / truncated / per-layer table.
 function readRgb(
     bytes: Uint8Array,
     t: TableFrame,
@@ -1111,10 +1110,13 @@ function readRgb(
         diag.error('rgb color data truncated')
         return undefined
     }
-    if (perLayer && layers > 1)
-        diag.warn(
-            'per-layer RGB decoded as layer 0 only (per-layer authoring is Phase 4c)',
-        )
+    // The config holds one color map, so a per-layer table stays out of it and
+    // a save carries the table as read (compilers/remappr/carry.ts) instead of
+    // flattening it to layer 0.
+    if (perLayer) {
+        diag.warn('per-layer RGB is kept as read; it is not editable here yet')
+        return undefined
+    }
     const out: Record<number, string> = {}
     for (let pos = 0; pos < positions; pos++) {
         const rr = r.u8()

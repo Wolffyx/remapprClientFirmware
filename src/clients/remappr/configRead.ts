@@ -158,6 +158,9 @@ export interface LoadedConfig {
      *  `config` is then a placeholder, so saving it would overwrite the real
      *  one: the service built from it must be read-only. */
     unreadable?: string
+    /** The blob as read, when it decoded: commit carries the tables the config
+     *  does not model from it, so a save does not drop them. */
+    deviceBlob?: Uint8Array
 }
 
 /**
@@ -212,5 +215,6 @@ export async function loadDeviceConfig(
         activeLayoutId: geometry.activeLayoutId,
         maxLayers,
         ...(unreadable ? { unreadable } : {}),
+        ...(decoded.code === DecodeCode.OK ? { deviceBlob: blob } : {}),
     }
 }
