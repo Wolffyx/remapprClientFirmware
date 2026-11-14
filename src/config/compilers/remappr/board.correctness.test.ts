@@ -206,3 +206,109 @@ describe('L1.5 board.controller and hardware.kscan are read', () => {
         expect(errorsOf(res).some((m) => /direct/.test(m))).toBe(true)
     })
 })
+
+const ROWS1 = ['&gpio0 4 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)']
+const COLS2 = ['&gpio0 5 GPIO_ACTIVE_HIGH', '&gpio0 6 GPIO_ACTIVE_HIGH']
+
+describe('L1.4 errors for a build that cannot work; no matrix without pins', () => {
+    it('is an error when a keyboard has no matrix pins', () => {
+        const res = compile(pad({}))
+        expect(errorsOf(res).some((m) => /no matrix pins/.test(m))).toBe(true)
+    })
+
+    it('is an error when only one side of the matrix has pins', () => {
+        const res = compile(pad({ matrix: { rows: ROWS1 } }))
+        expect(errorsOf(res).some((m) => /no column pins/.test(m))).toBe(true)
+    })
+
+    it('emits no kbd-matrix (and no keymap scanning it) for a pin-less mouse', () => {
+        const json = JSON.parse(pad({}))
+        json.node = { personality: 'mouse' }
+        const res = compile(JSON.stringify(json))
+        const ov = overlayOf(res)
+        expect(ov).not.toContain('remappr,kbd-matrix')
+        expect(ov).not.toContain('scan = <&kbd_matrix>')
+        expect(errorsOf(res)).toEqual([])
+    })
+
+    it.skipIf(!TC)('a pin-less mouse shield still compiles with dtc', () => {
+        const json = JSON.parse(pad({}))
+        json.node = { personality: 'mouse' }
+        const r = dtcCheck(TC!, overlayOf(compile(JSON.stringify(json))))
+        expect(r.log).toBe('')
+    })
+})
+
+describe('L1.6 cells, duplicates and reserved pins are validated', () => {
+    const withMap = (map: number[][]): string =>
+        pad(
+            { matrix: { rows: ROWS1, cols: COLS2 } },
+            { hardware: { transform: { rows: 2, columns: 3, map } } },
+        )
+
+    it('is an error when a cell is past the row or column GPIO count', () => {
+        const errs = errorsOf(compile(withMap([[0, 0], [1, 2]])))
+        expect(errs.some((m) => /on row 1, .*has 1 row GPIO/.test(m))).toBe(true)
+        expect(errs.some((m) => /on column 2, .*has 2 column GPIO/.test(m))).toBe(true)
+    })
+
+    it('is an error when two keys share a cell', () => {
+        const errs = errorsOf(compile(withMap([[0, 1], [0, 1]])))
+        expect(errs.some((m) => /keys 0 and 1 .*cell \(0, 1\)/.test(m))).toBe(true)
+    })
+
+    it('is an error when a row pin is also a column pin', () => {
+        const res = compile(
+            pad({ matrix: { rows: ['PA3'], cols: ['PA4', '&gpioa 3 GPIO_ACTIVE_HIGH'] } }),
+        )
+        expect(errorsOf(res).some((m) => /&gpioa 3 is used twice/.test(m))).toBe(true)
+    })
+
+    it('is an error when an encoder or sensor pin reuses a matrix pin', () => {
+        const res = compile(
+            pad({
+                matrix: { rows: ['PA3'], cols: ['PA4', 'PA5'] },
+                encoders: [{ a: 'PA4', b: 'PB0' }],
+                sensor: { part: 'pixart,paw3395', bus: 'spi1', motion: 'PA5' },
+            }),
+        )
+        const errs = errorsOf(res)
+        expect(errs.some((m) => /&gpioa 4 is used twice.*board\.encoders\.0\.a/.test(m))).toBe(true)
+        expect(errs.some((m) => /&gpioa 5 is used twice.*board\.sensor\.motion/.test(m))).toBe(true)
+    })
+
+    it('is an error when a pin collides with one the board reserves', () => {
+        const res = compile(
+            pad({
+                matrix: { rows: ['PA9'], cols: ['PA4', 'PA5'] },
+                reservedPins: [{ pin: 'PA9', use: 'console UART TX' }],
+            }),
+        )
+        expect(
+            errorsOf(res).some((m) => /&gpioa 9 is reserved for console UART TX/.test(m)),
+        ).toBe(true)
+    })
+})
+
+describe('L1.10 encoder and slider keys get no fake matrix cell', () => {
+    const elementPad = (key: Record<string, unknown>): string => {
+        const json = JSON.parse(pad({ matrix: { rows: ROWS1, cols: COLS2 } }))
+        delete json.keyboard.hardware
+        json.keyboard.keys = [
+            { x: 0, y: 0, matrix: [0, 0] },
+            { x: 1, y: 0, ...key },
+        ]
+        return JSON.stringify(json)
+    }
+
+    it('is an error for an encoder key with no wiring of its own', () => {
+        const res = compile(elementPad({ element: 'encoder' }))
+        expect(errorsOf(res).some((m) => /key 1 is an encoder/.test(m))).toBe(true)
+    })
+
+    it('takes an encoder key with an explicit cell as its matrix switch', () => {
+        const res = compile(elementPad({ element: 'encoder', matrix: [0, 1] }))
+        expect(errorsOf(res)).toEqual([])
+        expect(overlayOf(res)).toContain('MATRIX_KEY(0, 1, REMAPPR_KB_POS_BASE + 1)')
+    })
+})

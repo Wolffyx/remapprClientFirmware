@@ -11,7 +11,11 @@
 // port-pin label form is valid, so `PA3` on an nRF board is an error rather
 // than a pin on a port that does not exist.
 import { resolveController } from '../../controller'
-import type { DiagnosticBag, DiagnosticPath } from '../../diagnostics'
+import {
+    type DiagnosticBag,
+    type DiagnosticPath,
+    formatPath,
+} from '../../diagnostics'
 import {
     resolveNrfPin,
     resolveRpPin,
@@ -88,29 +92,83 @@ export function resolvePinCore(
     )
 }
 
-/** Resolves every pin of one shield, and reports the ones that do not resolve
- *  as errors: a label written verbatim into devicetree never builds. */
+/** The phandle + pin of a raw spec or resolved core, flags dropped, as one
+ *  comparable key: "&gpioa 3 GPIO_ACTIVE_LOW" → "&gpioa 3". */
+const identity = (spec: string): string =>
+    spec.trim().split(/\s+/).slice(0, 2).join(' ').toLowerCase()
+
+interface Claim {
+    path: DiagnosticPath
+    /** Set for a pin the board reserves, with what it is for. */
+    reservedFor?: string
+}
+
+/** Resolves every pin of one shield and keeps a ledger of them. A label that
+ *  does not resolve is an error (written verbatim into devicetree it never
+ *  builds), and so is a pin used twice or one the board reserves for a bus it
+ *  already owns (`board.reservedPins`). Pins on a board's nexus
+ *  (`&pro_micro 4`) only compare with the same nexus. */
 export class PinBook {
+    private readonly claims = new Map<string, Claim>()
+
     constructor(
         readonly target: BoardTarget,
         private readonly diag: DiagnosticBag,
     ) {}
 
+    /** Record the board's reserved pins; call before any `spec`. */
+    reserve(pins: readonly { pin: string; use: string }[]): void {
+        pins.forEach((r, i) => {
+            const path = ['board', 'reservedPins', i, 'pin']
+            const core = this.core(r.pin.trim(), path)
+            if (core) this.claims.set(identity(core), { path, reservedFor: r.use })
+        })
+    }
+
+    /** Record a pin the shield uses without writing it (the WS2812 data pin,
+     *  which the SPI pinctrl carries). Unresolved labels are skipped. */
+    claim(raw: string, path: DiagnosticPath): void {
+        const s = raw.trim()
+        const core = s.startsWith('&') ? s : resolvePinCore(s, this.target)
+        if (core) this.take(core, path)
+    }
+
     /** The text inside `<...>` for one pin: a raw `&`-spec verbatim, or the
      *  resolved core with `flags`. An unresolved label is an error and comes
-     *  back as written. */
+     *  back as written; a pin already taken is an error too. */
     spec(raw: string, flags: string, path: DiagnosticPath): string {
         const s = raw.trim()
+        const core = this.core(s, path)
+        if (!core) return s
+        this.take(core, path)
+        return s.startsWith('&') ? s : `${core} ${flags}`
+    }
+
+    private take(core: string, path: DiagnosticPath): void {
+        const id = identity(core)
+        const prior = this.claims.get(id)
+        if (!prior) {
+            this.claims.set(id, { path })
+            return
+        }
+        const why = prior.reservedFor
+            ? `is reserved for ${prior.reservedFor} (${formatPath(prior.path)})`
+            : `is used twice: ${formatPath(prior.path)} and ${formatPath(path)}`
+        this.diag.error(`pin ${id} ${why}`, path)
+    }
+
+    /** A raw `&`-spec as is, a label's resolved core, or null (an error). */
+    private core(s: string, path: DiagnosticPath): string | null {
         if (s.startsWith('&')) return s
         const core = resolvePinCore(s, this.target)
-        if (core) return `${core} ${flags}`
+        if (core) return core
         this.diag.error(
-            `GPIO "${raw}" does not resolve on ${this.describe()}: give ` +
+            `GPIO "${s}" does not resolve on ${this.describe()}: give ` +
                 `${FORM_HINT[this.target.soc]}, a label of a known board, or a ` +
                 `raw "&gpioN pin FLAGS" spec`,
             path,
         )
-        return s
+        return null
     }
 
     private describe(): string {

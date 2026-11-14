@@ -776,6 +776,9 @@ export interface ConfigBoard {
     /** A motion sensor on SPI (opt-in; emits its node with the product's
      *  sensor defaults from node.sensor). */
     sensor?: BoardSensor
+    /** Pins the board already uses for a bus it owns (console or node-bus
+     *  UART, a coprocessor SPI); the generator refuses any other use of one. */
+    reservedPins?: { pin: string; use: string }[]
     [k: string]: unknown
 }
 

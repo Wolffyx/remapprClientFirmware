@@ -897,6 +897,19 @@ export const BoardSchema = z
         split: z.boolean().optional(),
         storage: z.enum(['zms', 'nvs']).optional(),
         sensor: z.lazy(() => BoardSensorSchema).optional(),
+        reservedPins: z
+            .array(
+                z.object({
+                    pin: z.string().min(1),
+                    use: z.string().min(1),
+                }),
+            )
+            .optional()
+            .describe(
+                'Pins the board already uses (console or node-bus UART, a ' +
+                    'coprocessor SPI): the generator refuses a key, encoder or ' +
+                    'sensor on one.',
+            ),
     })
     .describe(
         'Build-time board definition for the DT/Kconfig generator (never in the blob).',
