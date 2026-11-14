@@ -279,16 +279,40 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   no list of them lives here.
 - `firmware.<target>` namespaces settings so every registered firmware target's
   knobs are reachable. _(consumed per-target in a later phase)_
-- `board` feeds the DT/Kconfig generator; `controller` accepts a known Zephyr
-  board id or a custom board on any Zephyr-supported SoC. The `remappr-board`
-  compiler emits a Zephyr shield from it — `boards/shields/<id>/<id>.overlay`
+- `board` feeds the DT/Kconfig generator. The `remappr-board` compiler emits
+  a Zephyr shield from it — `boards/shields/<id>/<id>.overlay`
   (`remappr,kbd-matrix` + `input-keymap` + `remappr,keymap`) plus
   `Kconfig.shield`/`Kconfig.defconfig` (defaults `CONFIG_INPUT` + the settings
-  backend from `storage`). `matrix.rows`/`cols` take raw `&gpioN pin FLAGS`
-  specs (or friendly labels on a known controller); the matrix cells prefer an
-  explicit `keyboard.hardware.transform` and warn when derived from geometry.
-  Get it via `getCompiler('remappr-board')` or `buildProjectBundle(config,
-  'remappr-board')`.
+  backend from `storage`). Get it via `getCompiler('remappr-board')` or
+  `buildProjectBundle(config, 'remappr-board')`. Anything that would give a
+  shield that does not build is an error, not a warning.
+  - `controller` is a Zephyr board id (`"nrf52840dk/nrf52840"`,
+    `"nucleo_u5a5zj_q"`) or a custom board `{ "custom": true, "soc", "name" }`;
+    it falls back to `keyboard.controller.board`. Its SoC decides which pin
+    labels resolve.
+  - Every pin (matrix, encoder, sensor) is a raw `&gpioN pin FLAGS` spec or a
+    label: one of a known board's (`D4` on a nice!nano), or the SoC's port pin
+    — `P0.13` on nRF, `PA3` on STM32, `GP12` on RP2040. A label that does not
+    resolve is an error.
+  - The matrix wiring comes from `matrix.rows`/`cols`, else
+    `keyboard.hardware.kscan` (with its diode direction and debounce), else
+    `keyboard.pins`. A keyboard without matrix pins is an error; a mouse,
+    joystick or dongle without them gets no matrix and no default keymap.
+    Direct-pin wiring is not generated yet.
+  - The cells prefer `keyboard.hardware.transform` or per-key `matrix`, and
+    warn when derived from geometry. A cell past the GPIO counts, two keys on
+    one cell, a pin used twice, or a pin listed in `reservedPins`
+    (`[{ "pin": "PA9", "use": "console UART TX" }]`) is an error. An encoder
+    or slider key needs a cell of its own (its push switch); off-matrix inputs
+    are not generated yet.
+  - Each key is placed at its own position, size and rotation (whole
+    key-units and degrees; fractional values are rounded, with a warning).
+  - `maxLayers` (1..32) is how many layers the app may fill without a reflash;
+    default the authored layers, at least 4.
+  - `encoders` are `gpio-qdec` nodes: `a`, `b`, `steps`, `axis`.
+  - A `keyboard.hardware.ws2812` strip goes on an nRF SPIM, or on an STM32 SPI
+    with `ws2812.stm32` (its pinctrl and GPDMA). The bit frames follow
+    `spiMaxFrequency`; a chain over 64 LEDs raises `CONFIG_REMAPPR_RGB_LED_MAX`.
 - `board.sensor` puts a motion sensor on an SPI bus of the board: `part` is its
   devicetree compatible, `bus` the bus's node label, `motion` (and optionally
   `cs`, `reset`) its pins, as raw `&gpioN pin FLAGS` specs or friendly labels;
