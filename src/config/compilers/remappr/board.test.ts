@@ -365,11 +365,11 @@ describe('board-gen ST port-pin labels', () => {
         // no per-board table — and must not warn as if it were unresolved.
         const out = getCompiler('remappr-board')!.compile(STM_LABELS)
         expect(
-            out.diagnostics.filter((d) => /unresolved GPIO/.test(d.message)),
+            out.diagnostics.filter((d) => /does not resolve/.test(d.message)),
         ).toHaveLength(0)
     })
 
-    it('leaves a label that is not a port-pin alone, with a warning', () => {
+    it('refuses a label that is not a port-pin, as an error', () => {
         const odd = parseKeymap(`{
             "schemaVersion": 1, "kind": "remappr.keymap",
             "meta": { "name": "Odd", "target": "zmk" },
@@ -379,8 +379,11 @@ describe('board-gen ST port-pin labels', () => {
             "board": { "matrix": { "rows": ["PZ3"], "cols": ["PA99"] } }
         }`)
         const out = getCompiler('remappr-board')!.compile(odd)
+        // Written verbatim it would never build, so it is an error.
         expect(
-            out.diagnostics.filter((d) => /unresolved GPIO/.test(d.message)),
+            out.diagnostics.filter(
+                (d) => d.level === 'error' && /does not resolve/.test(d.message),
+            ),
         ).toHaveLength(2)
     })
 })

@@ -15,22 +15,17 @@ import type { ExportedFile } from '../../../types'
 import { HID_USAGE_BY_CANONICAL } from '../../../catalog/entries'
 import { type KeymapCompiler, registerCompiler, runCompile } from '../../compiler'
 import type { DiagnosticBag } from '../../diagnostics'
-import { resolveController } from '../../controller'
 import { matrixDims, resolveKeyMatrix } from '../../matrix'
-import {
-    gpioSpec,
-    type PinRole,
-    resolveStPin,
-    resolveZmkPin,
-} from '../../pinmaps'
+import { type PinRole, ROLE_FLAGS } from '../../pinmaps'
 import type {
     CanonAction,
     CanonGeometry,
     CanonLayer,
     ConfigKeymap,
-    DiodeDirection,
 } from '../../types'
 import { emitEncoders, emitRgb, emitSensor } from './boardHardware'
+import { matrixWiring, type SourcedPin } from './boardMatrix'
+import { boardTarget, PinBook } from './boardPins'
 
 /** HID Usage Page 0x07 (Keyboard/Keypad) — the only page a `&key` action emits. */
 const HID_PAGE_KEYBOARD = 7
@@ -63,45 +58,16 @@ function visualRowCounts(keys: CanonGeometry[]): number[] {
     return counts.length ? counts : [keys.length]
 }
 
-/** Resolve one GPIO entry to a devicetree spec (inside `<...>`). A raw `&`-spec
- *  passes through verbatim; a friendly label resolves against the controller's
- *  pin table, then — for ST parts, where the silkscreen name IS the mapping —
- *  against the generic port-pin form; else it emits unchanged with a diagnostic.
- *
- *  The ST fallback is not board-specific on purpose: it is what makes a generated
- *  STM32 shield buildable at all. Before it, `rows: ["PE11"]` emitted
- *  `row-gpios = <PE11>` — not valid devicetree. */
-function resolveGpio(
-    raw: string,
-    role: PinRole,
-    board: string | undefined,
-    diag: DiagnosticBag,
-    path: (string | number)[],
-): string {
-    const s = raw.trim()
-    if (s.startsWith('&')) return s
-    const core = (board ? resolveZmkPin(board, s) : null) ?? resolveStPin(s)
-    if (core) return gpioSpec(core, role)
-    diag.warn(
-        `unresolved GPIO label "${raw}" — emitting verbatim; set board.controller ` +
-            `to a known board or provide a raw "&gpioN pin FLAGS" spec`,
-        path,
-    )
-    return s
-}
-
 /** A `row-gpios`/`col-gpios` property with one `<spec>` per line. */
 function gpioProp(
     name: string,
-    specs: string[],
+    pins: SourcedPin[],
     role: PinRole,
-    board: string | undefined,
-    diag: DiagnosticBag,
-    path: (string | number)[],
+    book: PinBook,
 ): string[] {
-    if (specs.length === 0) return []
-    const rows = specs.map(
-        (s, i) => `\t\t\t<${resolveGpio(s, role, board, diag, [...path, i])}>`,
+    if (pins.length === 0) return []
+    const rows = pins.map(
+        (p) => `\t\t\t<${book.spec(p.raw, ROLE_FLAGS[role], p.path)}>`,
     )
     return [`\t\t${name} =`, `${rows.join(',\n')};`]
 }
@@ -200,19 +166,22 @@ function storageDefconfig(config: ConfigKeymap): string[] {
 function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     const slug = shieldSlug(config)
     const SHIELD = slug.toUpperCase()
-    const ctrl = resolveController(config)
     const board = config.board
+    const target = boardTarget(config, diag)
+    const book = new PinBook(target, diag)
 
-    const diode: DiodeDirection =
-        board?.matrix?.diode ??
-        config.keyboard.matrix?.diodeDirection ??
-        'col2row'
+    const wiring = matrixWiring(config, diag) ?? {
+        diode: 'col2row' as const,
+        rows: [],
+        cols: [],
+    }
+    const diode = wiring.diode
     // col2row: rows are inputs, columns strobe outputs (and vice-versa).
     const rowRole: PinRole = diode === 'col2row' ? 'input' : 'output'
     const colRole: PinRole = diode === 'col2row' ? 'output' : 'input'
 
-    const rowGpios = board?.matrix?.rows ?? config.keyboard.pins?.rows ?? []
-    const colGpios = board?.matrix?.cols ?? config.keyboard.pins?.cols ?? []
+    const rowGpios = wiring.rows
+    const colGpios = wiring.cols
     if (rowGpios.length === 0 && colGpios.length === 0)
         diag.warn(
             `no matrix pins — set board.matrix.rows/cols (or keyboard.pins) to a ` +
@@ -251,9 +220,9 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     const placementTokens = config.keyboard.keys.map(() => 'KEY()')
 
     // Optional peripheral overlay nodes (empty fragments when unconfigured).
-    const rgb = emitRgb(config, ctrl.board, diag)
-    const enc = emitEncoders(config, ctrl.board, diag)
-    const sensor = emitSensor(config, ctrl.board, diag)
+    const rgb = emitRgb(config, target.board, diag)
+    const enc = emitEncoders(config, book, diag)
+    const sensor = emitSensor(config, book, diag)
 
     const overlay: string[] = [
         `/*`,
@@ -284,16 +253,14 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         ...(board?.matrix?.pollMs
             ? [`\t\tpoll-period-ms = <${board.matrix.pollMs}>;`]
             : []),
-        ...gpioProp('row-gpios', rowGpios, rowRole, ctrl.board, diag, [
-            'board',
-            'matrix',
-            'rows',
-        ]),
-        ...gpioProp('col-gpios', colGpios, colRole, ctrl.board, diag, [
-            'board',
-            'matrix',
-            'cols',
-        ]),
+        ...(wiring.debouncePressMs !== undefined
+            ? [`\t\tdebounce-press-ms = <${wiring.debouncePressMs}>;`]
+            : []),
+        ...(wiring.debounceReleaseMs !== undefined
+            ? [`\t\tdebounce-release-ms = <${wiring.debounceReleaseMs}>;`]
+            : []),
+        ...gpioProp('row-gpios', rowGpios, rowRole, book),
+        ...gpioProp('col-gpios', colGpios, colRole, book),
         ``,
         `\t\tkeymap {`,
         `\t\t\tcompatible = "input-keymap";`,

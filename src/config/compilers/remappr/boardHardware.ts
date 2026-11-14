@@ -21,9 +21,10 @@ import {
     sensorWireValue,
 } from '../../../clients/remappr/sensorRegistry'
 import type { DiagnosticBag } from '../../diagnostics'
-import { gpioSpec, resolveStPin, resolveZmkPin } from '../../pinmaps'
+import { ROLE_FLAGS } from '../../pinmaps'
 import type { CanonWs2812, ConfigKeymap, ConfigSensorValue } from '../../types'
 import { emitWs2812 } from '../zmk/hardware'
+import type { PinBook } from './boardPins'
 
 /** A peripheral's contribution to the shield: header `#include`s, top-level DT
  *  blocks (appended after the main `/ {}`), and Kconfig.defconfig lines. */
@@ -34,28 +35,6 @@ export interface PeripheralFragment {
 }
 
 const EMPTY: PeripheralFragment = { includes: [], nodes: [], kconfig: [] }
-
-/** Resolve an encoder phase/GPIO to a devicetree spec: a raw `&`-spec passes
- *  through verbatim; a friendly label resolves on a known controller board with
- *  the `direct` role (PULL_UP | ACTIVE_LOW — what a quadrature encoder wants),
- *  else emits unchanged with a diagnostic. */
-function resolveEncoderPin(
-    raw: string,
-    board: string | undefined,
-    diag: DiagnosticBag,
-    path: (string | number)[],
-): string {
-    const s = raw.trim()
-    if (s.startsWith('&')) return s
-    const core = board ? resolveZmkPin(board, s) : null
-    if (core) return gpioSpec(core, 'direct')
-    diag.warn(
-        `unresolved encoder GPIO "${raw}" — emitting verbatim; set ` +
-            `board.controller to a known board or give a raw "&gpioN pin FLAGS" spec`,
-        path,
-    )
-    return s
-}
 
 // pattern-check: skip — no GoF pattern; private DT-string emitters, mirrors emitWs2812 soc branching
 /** WS2812 wire order → `color-mapping` LED_COLOR_ID_* token list. */
@@ -196,7 +175,7 @@ export function emitRgb(
  *  No encoders → empty fragment. */
 export function emitEncoders(
     config: ConfigKeymap,
-    board: string | undefined,
+    book: PinBook,
     diag: DiagnosticBag,
 ): PeripheralFragment {
     const encoders = config.board?.encoders
@@ -209,18 +188,11 @@ export function emitEncoders(
     )
     const nodes: string[] = [`/ {`]
     encoders.forEach((enc, i) => {
-        const a = resolveEncoderPin(enc.a, board, diag, [
-            'board',
-            'encoders',
-            i,
-            'a',
-        ])
-        const b = resolveEncoderPin(enc.b, board, diag, [
-            'board',
-            'encoders',
-            i,
-            'b',
-        ])
+        // A quadrature encoder wires to ground: PULL_UP | ACTIVE_LOW.
+        const phase = (k: 'a' | 'b'): string =>
+            book.spec(enc[k], ROLE_FLAGS.direct, ['board', 'encoders', i, k])
+        const a = phase('a')
+        const b = phase('b')
         nodes.push(
             `\tqdec_${i}: qdec_${i} {`,
             `\t\tcompatible = "gpio-qdec";`,
@@ -245,28 +217,6 @@ export function emitEncoders(
             `\tdefault y`,
         ],
     }
-}
-
-/** A sensor pin as a devicetree spec: a raw `&`-spec verbatim, a friendly
- *  label (a known controller board's, or an ST port pin) with `flags`, else
- *  verbatim with a diagnostic. */
-function resolveSensorPin(
-    raw: string,
-    board: string | undefined,
-    flags: string,
-    diag: DiagnosticBag,
-    path: (string | number)[],
-): string {
-    const s = raw.trim()
-    if (s.startsWith('&')) return s
-    const core = resolveZmkPin(board, s) ?? resolveStPin(s)
-    if (core) return `${core} ${flags}`
-    diag.warn(
-        `unresolved sensor GPIO "${raw}" — emitting verbatim; set ` +
-            `board.controller to a known board or give a raw "&gpioN pin FLAGS" spec`,
-        path,
-    )
-    return s
 }
 
 /** A setting value as a devicetree cell (negative ones in parentheses). */
@@ -303,14 +253,14 @@ function settingDefaults(
  *  No sensor → empty fragment. */
 export function emitSensor(
     config: ConfigKeymap,
-    board: string | undefined,
+    book: PinBook,
     diag: DiagnosticBag,
 ): PeripheralFragment {
     const sensor = config.board?.sensor
     if (!sensor) return EMPTY
     const path = (k: string): (string | number)[] => ['board', 'sensor', k]
     const pin = (k: 'cs' | 'motion' | 'reset', flags: string): string =>
-        resolveSensorPin(sensor[k] ?? '', board, flags, diag, path(k))
+        book.spec(sensor[k] ?? '', flags, path(k))
     const defaults = settingDefaults(config.node?.sensor?.defaults ?? {}, diag)
     const unit = sensor.part.split(',').pop() || 'sensor'
     const nodes = [
