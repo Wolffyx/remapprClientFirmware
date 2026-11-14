@@ -101,6 +101,7 @@ const DEFAULTS: DefaultFactories = {
         curve: 'linear',
         inv: false,
     }),
+    display: () => ({}),
 }
 
 /** The binding a control of `kind` has before anything is assigned. */

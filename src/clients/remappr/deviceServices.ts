@@ -9,7 +9,7 @@
 // RPC it borrows or owns, and the short-id every call is addressed to.
 import type { DeviceInfo } from '../../types'
 import { buildDeviceConfigApi } from './deviceConfig'
-import type { DiscoveryResult } from './discovery'
+import { type DiscoveryResult, servesNamespace } from './discovery'
 import { readInputLayout } from './inputLayout'
 import { buildJoystickApi, servesJoystick } from './joystick'
 import { buildMouseMotionApi } from './mouse'
@@ -45,7 +45,7 @@ export function hasConfigStore(discovery: DiscoveryResult): boolean {
  *  (firmware that predates the list serves it unconditionally). */
 export function servesMouse(discovery: DiscoveryResult): boolean {
     const ns = discovery.personality?.namespaces
-    return !ns?.length || ns.some((n) => n.namespace === Namespace.MOUSE)
+    return !ns?.length || servesNamespace(discovery, Namespace.MOUSE)
 }
 
 /** The device's SENSOR API when it serves one: its part list places a mouse's
@@ -77,6 +77,7 @@ export async function buildMouseService(
                   targetNode,
                   name: deviceInfo.name,
                   writable: true,
+                  maxUnsealedChunk: discovery.limits?.maxUnsealedChunk,
                   ...(sensor ? { sensors: () => sensor.getSensors() } : {}),
               })
             : undefined,
@@ -117,6 +118,7 @@ export async function buildJoystickService(
                   targetNode,
                   name: deviceInfo.name,
                   writable: true,
+                  maxUnsealedChunk: discovery.limits?.maxUnsealedChunk,
                   ...(sensor ? { sensors: () => sensor.getSensors() } : {}),
               })
             : undefined,

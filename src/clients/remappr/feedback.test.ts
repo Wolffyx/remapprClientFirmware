@@ -10,6 +10,7 @@ import {
     Status,
 } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
+import { plainMutations } from './plainRpc.fixture'
 
 function fakeRpc(
     handler: (
@@ -19,7 +20,7 @@ function fakeRpc(
         opts?: { targetNode?: number },
     ) => Promise<UniversalReply>,
 ): RemapprRpc {
-    return { callUniversalPlain: handler } as unknown as RemapprRpc
+    return plainMutations({ callUniversalPlain: handler }) as unknown as RemapprRpc
 }
 
 describe('output feedback (LIGHTING namespace)', () => {

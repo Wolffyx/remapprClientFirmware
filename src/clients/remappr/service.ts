@@ -70,7 +70,6 @@ import {
     tapDanceToEntry,
 } from './dynamicBridge'
 import type { RemapprRpc } from './rpc'
-import type { RemapprSession } from './auth'
 import {
     BLOB_ALIGN,
     Cmd,
@@ -92,9 +91,6 @@ type ClosedHandler = (reason?: unknown) => void
 
 export interface RemapprServiceDeps {
     rpc: RemapprRpc
-    /** Control-auth session for sealed writes. Omitted for read-only node views,
-     *  which never seal. */
-    session?: RemapprSession
     deviceInfo: DeviceInfo
     /** Decoded active config (source of truth); the editing buffer lowers from it. */
     config: ConfigKeymap
@@ -197,7 +193,6 @@ export class RemapprKeyboardService
     public readonly limits?: Limits
 
     private readonly rpc: RemapprRpc
-    private readonly session?: RemapprSession
     private readonly readOnly: boolean
     private readonly readOnlyReason: string
     /** Borrowed transport (node view) — disconnect() must not close it. */
@@ -257,7 +252,6 @@ export class RemapprKeyboardService
 
     constructor(deps: RemapprServiceDeps) {
         this.rpc = deps.rpc
-        this.session = deps.session
         this.readOnly = (deps.readOnly ?? false) || deps.readOnlyReason !== undefined
         this.readOnlyReason =
             deps.readOnlyReason ??
@@ -972,15 +966,12 @@ export class RemapprKeyboardService
         this.configVersion = info.hasActive ? info.configVersion : 0
     }
 
-    // pattern-check: skip — sealed-vs-plain fallback inside two existing private
-    // helpers of this service; conditional dispatch, no GoF abstraction.
-    /** A mutating verb: sealed through the §19 session when the device has one,
-     *  plaintext when the firmware advertises no auth (dev/no-auth build — the
-     *  device accepts mutating verbs in the clear there). */
+    /** A mutating verb: sealed through the §19 session the RPC holds (and
+     *  re-handshaken once if the device dropped it), plaintext when the
+     *  firmware advertises no auth (dev/no-auth build — the device accepts
+     *  mutating verbs in the clear there). */
     private writeCall(cmd: number, arg?: Uint8Array) {
-        return this.session
-            ? this.rpc.callSealed(this.session, cmd, arg)
-            : this.rpc.callPlain(cmd, arg)
+        return this.rpc.callWrite(cmd, arg)
     }
 
     private async writeOk(

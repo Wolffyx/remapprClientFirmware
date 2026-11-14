@@ -34,6 +34,16 @@ export const SEAL_OVERHEAD = 20
  *  but is not yet validated against the firmware relay decoder. */
 export const RELAY_SEAL_PLAIN = 34
 
+/** Universal-sealed DIRECT (§6.3, target 0) AEAD-plaintext size: the host pads
+ *  `UCH(8) || inner` to this so the frame fills the 64-byte report and the
+ *  device derives the plaintext length from `env_len`. Budget: 64 − 1(0xE2) −
+ *  1(0xE1) − 4(ctr) − 16(tag) = 42. Matches control_cli SEAL_PLAIN_DIRECT. */
+export const DIRECT_SEAL_PLAIN = 42
+
+/** An inner response header: cmd, seq, status, pad, data_len u16. The smallest
+ *  plaintext a sealed reply can carry. */
+export const RESP_HDR_LEN = 6
+
 /** Legacy sealed (0xE1) config-chunk size — the firmware's legacy data-plane
  *  figure (the universal-sealed GET_LIMITS value of 16 is a different path).
  *  Config writes ride the legacy sealed path, so they use this. */
@@ -68,21 +78,6 @@ export const Cmd = {
     CONTROL_AUTH_BEGIN: 0x60,
     CONTROL_AUTH_FINISH: 0x61,
 } as const
-
-/** Verbs reachable without a sealed envelope (cmd_open_plaintext, control.c). */
-export const PLAINTEXT_CMDS: ReadonlySet<number> = new Set([
-    Cmd.GET_DEVICE_INFO,
-    Cmd.GET_SCHEMA_VERSION,
-    Cmd.GET_CAPABILITIES,
-    Cmd.READ_CONFIG_CHUNK,
-    Cmd.GET_PROFILE_STATUS,
-    Cmd.GET_LAYER_STATE,
-    Cmd.GET_DIAGNOSTICS,
-    Cmd.GET_RATE_LIMITS, // open read; SET_REPORT_RATE stays sealed/mutating
-    Cmd.GET_UNICODE_MODE, // open read; SET_UNICODE_MODE stays sealed/mutating
-    Cmd.CONTROL_AUTH_BEGIN,
-    Cmd.CONTROL_AUTH_FINISH,
-])
 
 /** enum remappr_control_status. */
 export const Status = {
@@ -123,6 +118,10 @@ export const Cap = {
     AUTH: 1 << 5,
     KEYMAP: 1 << 6,
     PAIRING: 1 << 7,
+    HAPTIC: 1 << 8, // LIGHTING HAPTIC_PULSE handler wired
+    DISPLAY: 1 << 9, // LIGHTING SET_DISPLAY handler wired
+    ERR_COUNTERS: 1 << 10, // GET_ERROR_COUNTERS source wired
+    MOUSE: 1 << 11, // MOUSE-namespace ops wired
     CLUSTER_DIAG: 1 << 12, // GET_CLUSTER_DIAG source wired (§N4b-3)
     UNICODE: 1 << 14, // unicode input-method ops wired (§5.2-E)
     JOYSTICK: 1 << 15, // JOYSTICK-namespace ops wired (input-layout plan §4)
@@ -202,6 +201,9 @@ export const Namespace = {
      *  (sensor-settings plan §3). Provisional (ns_version 0): served only when
      *  the personality map lists it. */
     SENSOR: 0x0a,
+    /** Host-pushed values (clock, CPU, media, text) that a device's screens
+     *  show (include/remappr/host_values.h). Served only when listed. */
+    HOST: 0x0b,
 } as const
 
 export const UchFlag = {
@@ -331,6 +333,7 @@ export const InputClass = {
     HAT: 7,
     AXIS: 8,
     SLIDER: 9,
+    DISPLAY: 10,
 } as const
 
 /** Draw hint (enum remappr_input_shape); 0 = the class default. Append-only.
@@ -351,6 +354,7 @@ export const InputShape = {
     SENSOR: 12,
     MOUSE_LEFT: 13,
     MOUSE_RIGHT: 14,
+    SCREEN: 15,
 } as const
 
 /** Device form (enum remappr_input_form); 0 = derive it from the personality. */
@@ -742,6 +746,24 @@ export const LimitsFeature = {
     kbdExt: 1 << 12,
 } as const
 
+/** GET_LIMITS feature_bitmask bits (REMAPPR_FEAT_*, control.h). Bits 0–5 are
+ *  set only where the KEYBOARD namespace is served; firmware before the
+ *  audit-E protocol fixes reported 0x3F on every device and no bit above 5. */
+export const Feature = {
+    HOLD_ON_RELEASE: 1 << 0,
+    CAPS_WORD_IDLE: 1 << 1,
+    STICKY_RELEASE: 1 << 2,
+    MACRO_DEFAULTS: 1 << 3,
+    MATRIX_POLL: 1 << 4,
+    LAYER_TAIL_V3: 1 << 5,
+    TBL_SLIDER: 1 << 6,
+    TBL_DISPLAY: 1 << 7,
+    TBL_POWER: 1 << 8,
+    TBL_SENSOR_V2: 1 << 9,
+    TBL_MOUSE_V3: 1 << 10,
+    UNPAIR_ACTION: 1 << 11,
+} as const
+
 export interface Limits {
     maxUnsealedChunk: number
     maxSealedChunk: number // universal-sealed; legacy 0xE1 path uses 32
@@ -836,6 +858,172 @@ export function parsePersonalityMap(d: Uint8Array): PersonalityMap {
         namespaces,
         hwCaps: dv.getUint32(off, true),
     }
+}
+
+/* ── GET_MANIFEST (COMMON 0x05) ─────────────────────────────────────────── */
+
+/** Manifest verb flags: the verb must be sealed when auth is on / mutates. */
+export const ManifestFlag = {
+    SEAL: 0x01,
+    MUT: 0x02,
+} as const
+
+const MANIFEST_NS_DESC = 1
+const MANIFEST_LIMITS = 2
+
+export interface ManifestVerb {
+    verb: number
+    flags: number
+    minArg: number
+}
+
+export interface ManifestNamespace {
+    namespace: number
+    nsVersion: number
+    verbs: ManifestVerb[]
+}
+
+export interface Manifest {
+    namespaces: ManifestNamespace[]
+    limits?: Limits
+}
+
+function parseNsDesc(v: Uint8Array): ManifestNamespace {
+    if (v.length < 4) throw new Error(`manifest namespace record too short (${v.length} B)`)
+    const dv = new DataView(v.buffer, v.byteOffset, v.byteLength)
+    const count = dv.getUint16(2, true)
+    if (v.length < 4 + count * 4)
+        throw new Error(`manifest namespace 0x${v[0].toString(16)} lists ${count} verbs in ${v.length} B`)
+    const verbs: ManifestVerb[] = []
+    for (let i = 0, off = 4; i < count; i++, off += 4) {
+        verbs.push({ verb: v[off], flags: v[off + 1], minArg: dv.getUint16(off + 2, true) })
+    }
+    return { namespace: v[0], nsVersion: v[1], verbs }
+}
+
+/** GET_MANIFEST reply: a TLV list `{u16 type, u16 len, value}` of one
+ *  namespace record per served namespace, then the GET_LIMITS bytes. Unknown
+ *  TLV types are skipped. */
+export function parseManifest(d: Uint8Array): Manifest {
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const out: Manifest = { namespaces: [] }
+    let off = 0
+    while (off + 4 <= d.length) {
+        const type = dv.getUint16(off, true)
+        const len = dv.getUint16(off + 2, true)
+        const value = d.subarray(off + 4, off + 4 + len)
+        if (value.length < len) throw new Error('manifest TLV runs past the reply')
+        if (type === MANIFEST_NS_DESC) out.namespaces.push(parseNsDesc(value))
+        if (type === MANIFEST_LIMITS) out.limits = parseLimits(value)
+        off += 4 + len
+    }
+    if (off !== d.length) throw new Error('manifest ends inside a TLV header')
+    return out
+}
+
+/** The highest ns_version of each namespace whose layouts this client
+ *  decodes. A device that reports a newer one changed the layout: the client
+ *  must not parse it with the old reader. */
+export const KNOWN_NS_VERSION: Readonly<Record<number, number>> = {
+    [Namespace.COMMON]: 1,
+    [Namespace.KEYBOARD]: 1,
+    [Namespace.MOUSE]: 1,
+    [Namespace.JOYSTICK]: 0, // provisional on the firmware too
+    [Namespace.LIGHTING]: 1,
+    [Namespace.PROFILES]: 1,
+    [Namespace.INPUT]: 1,
+    [Namespace.SENSOR]: 1,
+    [Namespace.HOST]: 1,
+}
+
+/* ── HOST namespace (0x0B) ──────────────────────────────────────────────── */
+
+/** enum remappr_host_verb (host_values.h). */
+export const HostVerb = {
+    /** → `u8 ver(=1), u8 n, n × u8 key`: the keys the device's screens show. */
+    GET_KEYS: 0x01,
+    /** `u8 key, u8 type, u8 off, u8 total, data` (mutating). */
+    SET_VALUE: 0x02,
+    /** Drop every stored value (mutating). */
+    CLEAR: 0x03,
+} as const
+
+/** Value types (REMAPPR_HOST_TYPE_*). */
+export const HostType = {
+    /** i32 (percentages, counts). */
+    INT: 0,
+    /** UTF-8, up to HOST_TEXT_MAX bytes, sent in pieces. */
+    TEXT: 1,
+    /** u32 local seconds since 1970. */
+    TIME: 2,
+} as const
+
+/** Well-known keys (REMAPPR_HOST_KEY_*); 0x10..0x1F are user text slots. */
+export const HostKey = {
+    TIME: 0x01,
+    CPU: 0x02,
+    RAM: 0x03,
+    MEDIA_TITLE: 0x04,
+    MEDIA_ARTIST: 0x05,
+    VOLUME: 0x06,
+    NOTIFICATION: 0x07,
+    USER_FIRST: 0x10,
+    USER_LAST: 0x1f,
+} as const
+
+/** Most data bytes one SET_VALUE carries (REMAPPR_HOST_DATA_MAX). */
+export const HOST_DATA_MAX = 20
+/** Longest TEXT value (REMAPPR_HOST_TEXT_MAX). */
+export const HOST_TEXT_MAX = 64
+/** Highest key the device stores (REMAPPR_HOST_KEY_MAX). */
+export const HOST_KEY_MAX = 0x3f
+
+function hostKeyCheck(key: number): void {
+    if (!Number.isInteger(key) || key < 1 || key > HOST_KEY_MAX)
+        throw new Error(`host value key ${key} out of range (1..${HOST_KEY_MAX})`)
+}
+
+/** SET_VALUE arg for an INT (i32) or TIME (u32) value. */
+export function buildHostNumberArg(key: number, type: number, value: number): Uint8Array {
+    hostKeyCheck(key)
+    if (type !== HostType.INT && type !== HostType.TIME)
+        throw new Error(`host value type ${type} is not a number`)
+    const out = new Uint8Array(8)
+    out.set([key, type, 0, 4])
+    const dv = new DataView(out.buffer)
+    if (type === HostType.INT) dv.setInt32(4, value, true)
+    else dv.setUint32(4, value >>> 0, true)
+    return out
+}
+
+/** SET_VALUE args for a TEXT value: the UTF-8 bytes (truncated to
+ *  HOST_TEXT_MAX on a character boundary) in HOST_DATA_MAX pieces, in order.
+ *  An empty text is one piece with total 0. */
+export function buildHostTextArgs(key: number, text: string): Uint8Array[] {
+    hostKeyCheck(key)
+    let raw = new TextEncoder().encode(text)
+    if (raw.length > HOST_TEXT_MAX) {
+        let end = HOST_TEXT_MAX
+        while (end > 0 && (raw[end] & 0xc0) === 0x80) end-- // no split character
+        raw = raw.subarray(0, end)
+    }
+    const pieces: Uint8Array[] = []
+    for (let off = 0; off === 0 || off < raw.length; off += HOST_DATA_MAX) {
+        const piece = raw.subarray(off, Math.min(off + HOST_DATA_MAX, raw.length))
+        const arg = new Uint8Array(4 + piece.length)
+        arg.set([key, HostType.TEXT, off, raw.length])
+        arg.set(piece, 4)
+        pieces.push(arg)
+    }
+    return pieces
+}
+
+/** GET_KEYS reply → the keys the device's screens show. */
+export function parseHostKeys(d: Uint8Array): number[] {
+    if (d.length < 2) throw new Error(`host keys reply too short (${d.length} B)`)
+    if (d[0] !== 1) throw new Error(`host keys reply version ${d[0]} not supported`)
+    if (d.length < 2 + d[1]) throw new Error(`host keys reply lists ${d[1]} keys in ${d.length} B`)
+    return [...d.subarray(2, 2 + d[1])]
 }
 
 /** GET_CONFIG_METADATA reply: a 20-byte RMBC header of the selected slot. */

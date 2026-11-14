@@ -8,6 +8,7 @@ import { parseKeymap } from '../../config'
 
 import type { RemapprRpc } from './rpc'
 import { RemapprKeyboardService, type RemapprServiceDeps } from './service'
+import { plainMutations } from './plainRpc.fixture'
 
 // Four named layers so tri-layers reference real names; one seed conditional —
 // the classic raise + lower → adjust.
@@ -27,14 +28,14 @@ const CONFIG = parseKeymap(`{
     ]
 }`)
 
-const stubRpc = {
+const stubRpc = plainMutations({
     onClosed: () => () => undefined,
     subscribeInput: () => () => undefined,
     close: async () => undefined,
     // discardChanges fires a ROLLBACK_CONFIG (plaintext, no session) and ignores
     // the result — answer OK so the rollback resolves.
     callPlain: async () => ({ status: 0, data: new Uint8Array() }),
-} as unknown as RemapprRpc
+}) as unknown as RemapprRpc
 
 function makeService(readOnly = false): RemapprKeyboardService {
     const deps: RemapprServiceDeps = {

@@ -46,7 +46,7 @@ export async function setReportRate(
     hz: number,
     targetNode = 0,
 ): Promise<number> {
-    const reply = await rpc.callUniversalPlain(
+    const reply = await rpc.callMutation(
         Namespace.COMMON,
         Cmd.SET_REPORT_RATE,
         buildReportRateArg(hz),
