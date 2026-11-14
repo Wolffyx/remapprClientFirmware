@@ -47,6 +47,7 @@ import {
     serializeKeymap,
 } from '../../config'
 import { buildRemapprBlob } from '../../config/compilers/remappr'
+import { type DeviceCaps, preflightConfigBlob } from '../../config/preflight'
 
 import {
     buildRemapprActionTypes,
@@ -78,6 +79,7 @@ import {
     type Limits,
     type LinkLimitKnob,
     Namespace,
+    parseDeviceInfo,
     parseLinkLimits,
     powerCapability,
     Status,
@@ -873,31 +875,89 @@ export class RemapprKeyboardService
         // Fold pending macro / tap-dance / defaults edits into the config the
         // layers raise onto, so a committed blob carries them (and their names).
         const next = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
-        const version = this.configVersion + 1
-        const { blob } = buildRemapprBlob(next, { configVersion: version })
-        const padded = padTo(blob, BLOB_ALIGN)
-
-        await this.writeOk(Cmd.WRITE_CONFIG_BEGIN, undefined, 'WRITE_CONFIG_BEGIN')
-        for (let off = 0; off < padded.length; off += this.sealedChunk) {
-            const slice = padded.subarray(
-                off,
-                Math.min(off + this.sealedChunk, padded.length),
-            )
-            await this.writeOk(Cmd.WRITE_CONFIG_CHUNK, slice, 'WRITE_CONFIG_CHUNK')
-        }
-        const validate = await this.writeCall(Cmd.VALIDATE_CONFIG)
-        if (validate.status !== Status.OK) {
-            await this.writeCall(Cmd.ROLLBACK_CONFIG).catch(() => undefined)
+        const version = this.nextConfigVersion()
+        const { blob, diagnostics } = buildRemapprBlob(next, { configVersion: version })
+        // An error-level diagnostic means the blob does not say what the user
+        // asked for (e.g. a NONE placeholder for a binding that failed to lower).
+        const errors = diagnostics.filter((d) => d.level === 'error')
+        if (errors.length > 0) {
             throw new ProtocolError(
-                `VALIDATE_CONFIG failed: ${statusName(validate.status)}`,
+                `The config was not saved: ${errors.map((d) => d.message).join('; ')}`,
             )
         }
-        await this.writeOk(Cmd.COMMIT_CONFIG, undefined, 'COMMIT_CONFIG')
+        // Check the padded size, which is what the device stores, before staging
+        // anything: an oversize push fails mid-stream.
+        const padded = padTo(blob, BLOB_ALIGN)
+        const issues = preflightConfigBlob(padded, this.deviceCaps())
+        if (issues.length > 0) {
+            throw new ProtocolError(
+                `The config was not saved: ${issues.map((i) => i.message).join('; ')}`,
+            )
+        }
+
+        try {
+            await this.pushBlob(padded)
+        } catch (e) {
+            // The device may hold another version now (main firmware keeps a
+            // config it failed to activate), so every later commit would hit
+            // ERR_VERSION. Read the active version back before reporting.
+            await this.resyncConfigVersion()
+            throw e
+        }
 
         this.config = next
         this.configVersion = version
         this.clearEdits()
         this.markPending(false)
+    }
+
+    /** The version the next commit carries. The firmware refuses 0xFFFFFFFF. */
+    private nextConfigVersion(): number {
+        const version = this.configVersion + 1
+        if (version >= 0xffffffff) {
+            throw new ProtocolError(
+                'The config was not saved: the device config version is exhausted',
+            )
+        }
+        return version
+    }
+
+    /** The capacities preflight checks against; an unknown one is skipped. A
+     *  device with no config store reports 0 and has no keyboard service. */
+    private deviceCaps(): DeviceCaps {
+        const max = this.limits?.maxConfigBytes ?? 0
+        return max > 0 ? { maxConfigBytes: max } : {}
+    }
+
+    /** BEGIN, every CHUNK, VALIDATE, COMMIT. A failure before COMMIT rolls the
+     *  staging back, so the device is not left with a half-written slot. */
+    private async pushBlob(padded: Uint8Array): Promise<void> {
+        await this.writeOk(Cmd.WRITE_CONFIG_BEGIN, undefined, 'WRITE_CONFIG_BEGIN')
+        try {
+            for (let off = 0; off < padded.length; off += this.sealedChunk) {
+                const slice = padded.subarray(
+                    off,
+                    Math.min(off + this.sealedChunk, padded.length),
+                )
+                await this.writeOk(Cmd.WRITE_CONFIG_CHUNK, slice, 'WRITE_CONFIG_CHUNK')
+            }
+            await this.writeOk(Cmd.VALIDATE_CONFIG, undefined, 'VALIDATE_CONFIG')
+        } catch (e) {
+            // Best effort: the staging error is the one worth reporting.
+            await this.writeCall(Cmd.ROLLBACK_CONFIG).catch(() => undefined)
+            throw e
+        }
+        await this.writeOk(Cmd.COMMIT_CONFIG, undefined, 'COMMIT_CONFIG')
+    }
+
+    /** Re-read the active config version after a failed commit. If the read
+     *  fails too, the version is left as it was: the commit error is what the
+     *  caller sees, and the next connect reads the version afresh. */
+    private async resyncConfigVersion(): Promise<void> {
+        const r = await this.rpc.callPlain(Cmd.GET_DEVICE_INFO).catch(() => null)
+        if (!r || r.status !== Status.OK) return
+        const info = parseDeviceInfo(r.data)
+        this.configVersion = info.hasActive ? info.configVersion : 0
     }
 
     // pattern-check: skip — sealed-vs-plain fallback inside two existing private

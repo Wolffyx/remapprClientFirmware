@@ -1,0 +1,107 @@
+// L3.8 / L3.9: commit() checks the blob before it stages anything, rolls a
+// failed staging back, and re-reads the device's config version after a failed
+// commit so the next one is not refused with ERR_VERSION.
+import { describe, expect, it } from 'vitest'
+
+import { type ConfigKeymap, parseKeymap } from '../../config'
+import { buildRemapprBlob } from '../../config/compilers/remappr'
+
+import { FakeConfigDevice, type FakeConfigDeviceOpts } from './fakeConfigDevice.fixture'
+import { Cmd, type Limits } from './protocol'
+import { RemapprKeyboardService } from './service'
+
+const CONFIG = parseKeymap(`{
+    "version": 2, "kind": "remappr.keymap",
+    "meta": { "name": "CommitTest" },
+    "keyboard": { "id": "ct", "name": "CommitTest",
+        "keys": [{"x":0,"y":0},{"x":1,"y":0},{"x":2,"y":0}] },
+    "layers": [{ "name": "base", "keys": ["A", "B", "C"] }]
+}`)
+const ACTIVE = buildRemapprBlob(CONFIG, { configVersion: 4 }).blob
+
+const limits = (maxConfigBytes: number): Limits => ({
+    maxUnsealedChunk: 48,
+    maxSealedChunk: 16,
+    transportFrameCap: 64,
+    blobAlign: 16,
+    maxConfigBytes,
+    maxOutstandingRequests: 1,
+    supportsFragmentation: true,
+    featureBitmask: 0,
+})
+
+function setup(
+    opts: FakeConfigDeviceOpts = {},
+    extra: { limits?: Limits; config?: ConfigKeymap } = {},
+): { dev: FakeConfigDevice; svc: RemapprKeyboardService } {
+    const dev = new FakeConfigDevice({ active: ACTIVE, ...opts })
+    const svc = new RemapprKeyboardService({
+        rpc: dev.rpc,
+        deviceInfo: { name: 'CommitTest', firmware: 'remappr' },
+        config: extra.config ?? CONFIG,
+        configVersion: dev.version,
+        layouts: [],
+        activeLayoutId: 0,
+        maxLayers: 8,
+        ...(extra.limits ? { limits: extra.limits } : {}),
+    })
+    return { dev, svc }
+}
+
+describe('commit after a failed COMMIT (L3.8)', () => {
+    it('resyncs the version when the device kept the config it failed to activate', async () => {
+        const { dev, svc } = setup({ activateFails: 'keep' })
+        await expect(svc.commit()).rejects.toThrow(/ERR_ACTIVATE/)
+        expect(dev.version).toBe(5) // main firmware: N+1 stays active
+        await svc.commit() // without the resync this is ERR_VERSION
+        expect(dev.version).toBe(6)
+    })
+
+    it('keeps working when the device reverted the failed commit', async () => {
+        const { dev, svc } = setup({ activateFails: 'revert' })
+        await expect(svc.commit()).rejects.toThrow(/ERR_ACTIVATE/)
+        expect(dev.version).toBe(4)
+        await svc.commit()
+        expect(dev.version).toBe(5)
+    })
+})
+
+describe('commit preflight (L3.9)', () => {
+    it('refuses a padded blob over the device capacity before staging', async () => {
+        // A capacity between the raw and the padded length: checking the raw
+        // length would let this through and fail mid-stream.
+        const raw = buildRemapprBlob(CONFIG, { configVersion: 5 }).blob.length
+        expect(raw % 16).not.toBe(0)
+        const { dev, svc } = setup({ capacity: raw }, { limits: limits(raw) })
+        await expect(svc.commit()).rejects.toThrow(/stores at most/)
+        expect(dev.log).not.toContain(Cmd.WRITE_CONFIG_BEGIN)
+        expect(dev.version).toBe(4)
+    })
+
+    it('rolls the staging back when a chunk fails mid-stream', async () => {
+        const { dev, svc } = setup({ capacity: 32 }) // no limits: no preflight
+        await expect(svc.commit()).rejects.toThrow(/WRITE_CONFIG_CHUNK failed/)
+        expect(dev.log).toContain(Cmd.ROLLBACK_CONFIG)
+        expect(dev.staged).toBeNull()
+    })
+
+    it('refuses to commit when the compiler reported errors', async () => {
+        const broken: ConfigKeymap = {
+            ...CONFIG,
+            layers: [
+                {
+                    name: 'base',
+                    bindings: [
+                        { type: 'key_press', key: 'not_a_key' },
+                        { type: 'key_press', key: 'B' },
+                        { type: 'key_press', key: 'C' },
+                    ],
+                },
+            ],
+        }
+        const { dev, svc } = setup({}, { config: broken })
+        await expect(svc.commit()).rejects.toThrow(/no HID usage for key "not_a_key"/)
+        expect(dev.log).not.toContain(Cmd.WRITE_CONFIG_BEGIN)
+        expect(dev.active).toEqual(ACTIVE)
+    })
+})

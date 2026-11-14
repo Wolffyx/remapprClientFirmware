@@ -16,8 +16,9 @@ export interface FakeConfigDeviceOpts {
     readEofAt?: number
     /** Staging capacity (GET_LIMITS max_config_bytes); a CHUNK past it fails. */
     capacity?: number
-    /** COMMIT answers ERR_ACTIVATE. `keep` = main firmware (the new config and
-     *  its version stay active); `revert` = intl-keys (the previous stays). */
+    /** The first COMMIT answers ERR_ACTIVATE. `keep` = main firmware (the new
+     *  config and its version stay active); `revert` = intl-keys (the previous
+     *  stays). Later COMMITs succeed. */
     activateFails?: 'keep' | 'revert'
 }
 
@@ -31,6 +32,7 @@ const u32At = (b: Uint8Array, off: number): number =>
 export class FakeConfigDevice {
     active: Uint8Array | undefined
     staged: number[] | null = null
+    private commits = 0
     /** Every command the host sent, in order. */
     readonly log: number[] = []
     readonly rpc: RemapprRpc
@@ -122,9 +124,10 @@ export class FakeConfigDevice {
         if (!this.staged) return err(Status.ERR_STATE)
         const blob = Uint8Array.from(this.staged)
         this.staged = null
-        if (this.opts.activateFails === 'revert') return err(Status.ERR_ACTIVATE)
+        const fails = this.commits++ === 0 ? this.opts.activateFails : undefined
+        if (fails === 'revert') return err(Status.ERR_ACTIVATE)
         this.active = blob
-        if (this.opts.activateFails === 'keep') return err(Status.ERR_ACTIVATE)
+        if (fails === 'keep') return err(Status.ERR_ACTIVATE)
         return ok()
     }
 }
