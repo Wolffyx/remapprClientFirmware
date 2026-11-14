@@ -28,7 +28,7 @@ import type {
     SensorProcedureStep,
     SensorReading,
 } from '../../service'
-import type { DiscoveryResult } from './discovery'
+import { type DiscoveryResult, servesNamespace } from './discovery'
 import {
     buildSensorRunArg,
     buildSensorSetArg,
@@ -77,8 +77,7 @@ import {
 /** True when the device lists the SENSOR namespace (the verbs are
  *  provisional, so an unlisted namespace is never assumed). */
 export function servesSensor(discovery: DiscoveryResult): boolean {
-    const ns = discovery.personality?.namespaces
-    return !!ns?.some((n) => n.namespace === Namespace.SENSOR)
+    return servesNamespace(discovery, Namespace.SENSOR)
 }
 
 /** One SENSOR verb, to the device itself or (`to`) a node behind the dongle. */
@@ -90,6 +89,20 @@ async function call(
     to?: CallTarget,
 ): Promise<Uint8Array> {
     const reply = await rpc.callUniversalPlain(Namespace.SENSOR, verb, arg, to)
+    if (reply.status !== Status.OK)
+        throw new Error(`${name} → ${statusName(reply.status)}`)
+    return reply.data
+}
+
+/** One mutating SENSOR verb: sealed (§19) when the RPC holds a session. */
+async function mutate(
+    rpc: RemapprRpc,
+    verb: number,
+    name: string,
+    arg: Uint8Array,
+    to?: CallTarget,
+): Promise<Uint8Array> {
+    const reply = await rpc.callMutation(Namespace.SENSOR, verb, arg, to)
     if (reply.status !== Status.OK)
         throw new Error(`${name} → ${statusName(reply.status)}`)
     return reply.data
@@ -265,7 +278,7 @@ export async function setSensorSetting(
     opts: SensorCallOpts = {},
 ): Promise<number> {
     return parseSensorApplied(
-        await call(
+        await mutate(
             rpc,
             SensorVerb.SET_SETTING,
             'SET_SETTING',
@@ -287,7 +300,7 @@ export async function runSensorProcedure(
     opts: SensorCallOpts = {},
 ): Promise<SensorStatusRecord> {
     return parseSensorStatus(
-        await call(
+        await mutate(
             rpc,
             SensorVerb.RUN_PROCEDURE,
             'RUN_PROCEDURE',
