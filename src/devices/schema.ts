@@ -21,6 +21,7 @@ export const CONTROL_KINDS = [
     'sensor',
     'encoder',
     'axis',
+    'display',
 ] as const satisfies readonly ControlKind[]
 
 export const CONTROL_SHAPES = [
@@ -38,6 +39,7 @@ export const CONTROL_SHAPES = [
     'sensor',
     'mouseL',
     'mouseR',
+    'screen',
 ] as const satisfies readonly ControlShape[]
 
 export const DEVICE_FORMS = [
