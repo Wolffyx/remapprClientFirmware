@@ -35,6 +35,8 @@ export interface BoardTarget {
     /** Zephyr board id (a custom board's name), when known. */
     board?: string
     soc: Soc
+    /** board.pinMap, keys upper-cased: the board's own pin labels. */
+    pinMap?: Record<string, string>
 }
 
 /** SoC families by the names their boards and parts carry. Order matters:
@@ -55,6 +57,39 @@ export function boardTarget(
     config: ConfigKeymap,
     diag: DiagnosticBag,
 ): BoardTarget {
+    const base = boardOnly(config, diag)
+    const pinMap = pinMapOf(config, diag)
+    return pinMap ? { ...base, pinMap } : base
+}
+
+/** A pin map value: a phandle and one pin cell (`&gpio0 4`,
+ *  `&arduino_header 10`). The flags come from the pin's role. */
+const PIN_CORE = /^&[A-Za-z_][A-Za-z0-9_]*\s+(\d+|[A-Z][A-Z0-9_]*|\([^;{}<>"\r\n]*\))$/
+
+/** board.pinMap, checked, with its keys upper-cased like every label. */
+function pinMapOf(
+    config: ConfigKeymap,
+    diag: DiagnosticBag,
+): Record<string, string> | undefined {
+    const map = config.board?.pinMap
+    if (!map) return undefined
+    const out: Record<string, string> = {}
+    for (const [label, core] of Object.entries(map)) {
+        const v = core.trim()
+        if (!PIN_CORE.test(v)) {
+            diag.error(
+                `pinMap "${label}" is "${core}": give a phandle and a pin, like ` +
+                    `"&gpio0 4" or "&arduino_header 10" (the flags come from the role)`,
+                ['board', 'pinMap', label],
+            )
+            continue
+        }
+        out[label.trim().toUpperCase()] = v.replace(/\s+/, ' ')
+    }
+    return out
+}
+
+function boardOnly(config: ConfigKeymap, diag: DiagnosticBag): BoardTarget {
     const fromKeyboard = resolveController(config).board
     const c = config.board?.controller
     if (c === undefined || c === '')
@@ -85,14 +120,16 @@ const FORM_HINT: Record<Soc, string> = {
     unknown: 'a port pin ("PA3", "P0.13")',
 }
 
-/** A label's phandle+pin core: a known board's pin table, then the SoC's
- *  port-pin form. Null when neither knows it. */
+/** A label's phandle+pin core: the JSON's board.pinMap, then a known
+ *  board's pin table, then the SoC's port-pin form. Null when none knows it. */
 export function resolvePinCore(
     label: string,
     target: BoardTarget,
 ): string | null {
     return (
-        resolveZmkPin(target.board, label) ?? LABEL_FORMS[target.soc](label)
+        target.pinMap?.[label.trim().toUpperCase()] ??
+        resolveZmkPin(target.board, label) ??
+        LABEL_FORMS[target.soc](label)
     )
 }
 
@@ -177,8 +214,8 @@ export class PinBook {
         if (core) return core
         this.diag.error(
             `GPIO "${s}" does not resolve on ${this.describe()}: give ` +
-                `${FORM_HINT[this.target.soc]}, a label of a known board, or a ` +
-                `raw "&gpioN pin FLAGS" spec`,
+                `${FORM_HINT[this.target.soc]}, a label in board.pinMap or of a ` +
+                `known board, or a raw "&gpioN pin FLAGS" spec`,
             path,
         )
         return null

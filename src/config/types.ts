@@ -926,6 +926,9 @@ export interface ConfigBoard {
     ledZones?: BoardLedZone[]
     /** Display parts (remappr,display). */
     displays?: BoardDisplay[]
+    /** The board's own pin labels: label → phandle and pin ("&gpio0 4",
+     *  "&arduino_header 10"), looked up before the built-in tables. */
+    pinMap?: Record<string, string>
     /** Pins the board already uses for a bus it owns (console or node-bus
      *  UART, a coprocessor SPI); the generator refuses any other use of one. */
     reservedPins?: { pin: string; use: string }[]
