@@ -95,6 +95,9 @@ export interface Capabilities {
      *  relayed-write path is HW-proof-pending. The UI gates editing affordances
      *  on this — never on a firmware name. */
     readOnly?: boolean
+    /** Why `readOnly` is set, when the reason is worth showing: e.g. the
+     *  device's config could not be decoded, so saving would overwrite it. */
+    readOnlyReason?: string
     /** This is a demo / simulated device, not real hardware: it was never
      *  discovered on a bus, so anything keyed to a physical device (preview
      *  snapshots, pinning a compile target, a real switch matrix) must skip it.

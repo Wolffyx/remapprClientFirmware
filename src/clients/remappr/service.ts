@@ -107,6 +107,10 @@ export interface RemapprServiceDeps {
      *  edit throws and there is no keyTest. Does NOT decide transport ownership —
      *  see `sharesTransport`. */
     readOnly?: boolean
+    /** Why the service is read-only, when it is not the behind-dongle default
+     *  (e.g. the device's config could not be decoded). Every rejected edit
+     *  throws this message, and `capabilities.readOnlyReason` carries it. */
+    readOnlyReason?: string
     /** True when this service borrows another service's transport (a behind-dongle
      *  node view rides the dongle's RPC), so disconnect() must NOT tear it down.
      *  False/omitted for a service that owns its transport (a direct keyboard or
@@ -189,6 +193,7 @@ export class RemapprKeyboardService
     private readonly rpc: RemapprRpc
     private readonly session?: RemapprSession
     private readonly readOnly: boolean
+    private readonly readOnlyReason: string
     /** Borrowed transport (node view) — disconnect() must not close it. */
     private readonly sharesTransport: boolean
     /** Decoded config = source of truth; updated only on a successful commit. */
@@ -244,7 +249,11 @@ export class RemapprKeyboardService
     constructor(deps: RemapprServiceDeps) {
         this.rpc = deps.rpc
         this.session = deps.session
-        this.readOnly = deps.readOnly ?? false
+        this.readOnly = (deps.readOnly ?? false) || deps.readOnlyReason !== undefined
+        this.readOnlyReason =
+            deps.readOnlyReason ??
+            'Read-only node view: editing a behind-dongle node is not yet ' +
+                'supported (relayed-write is HW-proof-pending).'
         this.sharesTransport = deps.sharesTransport ?? false
         this.kind = deps.kind ?? 'keyboard'
         this.device = deps.device
@@ -283,6 +292,7 @@ export class RemapprKeyboardService
             persistence: true,
             maxLayers: this.maxLayers,
             readOnly: this.readOnly,
+            ...(deps.readOnlyReason ? { readOnlyReason: deps.readOnlyReason } : {}),
             ...(power ? { power } : {}),
         }
 
@@ -380,12 +390,7 @@ export class RemapprKeyboardService
 
     /** Reject every edit on a read-only (behind-dongle node) view. */
     private assertWritable(): void {
-        if (this.readOnly) {
-            throw new ProtocolError(
-                'Read-only node view: editing a behind-dongle node is not yet ' +
-                    'supported (relayed-write is HW-proof-pending).',
-            )
-        }
+        if (this.readOnly) throw new ProtocolError(this.readOnlyReason)
     }
 
     /* ── editing buffer ─────────────────────────────────────────────────── */

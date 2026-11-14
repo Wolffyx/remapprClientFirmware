@@ -320,6 +320,9 @@ export const remapprAdapter: FirmwareAdapter = {
                 layouts: loaded.layouts,
                 activeLayoutId: loaded.activeLayoutId,
                 maxLayers: loaded.maxLayers,
+                // A config this client could not decode is never offered for
+                // saving: the placeholder would overwrite the real one.
+                ...(loaded.unreadable ? { readOnlyReason: loaded.unreadable } : {}),
                 limits: discovery.limits,
                 hwCaps: discovery.personality?.hwCaps,
                 // Its parts (the battery part above all) where it serves SENSOR.
