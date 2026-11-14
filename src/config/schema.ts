@@ -1159,7 +1159,15 @@ export const BoardAdcChannelSchema = z
                 inputPositive: DtToken.optional().describe(
                     'zephyr,input-positive, e.g. "NRF_SAADC_AIN4"; required on nRF.',
                 ),
-                resolution: z.number().int().min(1).max(24).optional(),
+                resolution: z
+                    .number()
+                    .int()
+                    .min(1)
+                    .max(24)
+                    .describe(
+                        'zephyr,resolution in bits, e.g. 12. Required: without it ' +
+                            'the channel setup fails and the channel is never read.',
+                    ),
                 oversampling: z.number().int().min(0).max(8).optional(),
             })
             .optional()
@@ -1195,6 +1203,13 @@ export const BoardBatterySchema = z
             .min(1)
             .optional()
             .describe('Charger status pin, active while charging.'),
+        chargingActiveHigh: z
+            .boolean()
+            .optional()
+            .describe(
+                'The charger drives the status pin high while charging. Default: ' +
+                    'active low with a pull-up (an open-drain CHRG output).',
+            ),
         ocvCurve: z
             .array(
                 z.tuple([
@@ -1209,6 +1224,12 @@ export const BoardBatterySchema = z
             ),
     })
     .superRefine((b, ctx) => {
+        if (b.chargingActiveHigh !== undefined && !b.charging)
+            ctx.addIssue({
+                code: 'custom',
+                path: ['chargingActiveHigh'],
+                message: 'chargingActiveHigh goes with charging',
+            })
         if (!b.adc === !b.fuelGauge)
             ctx.addIssue({
                 code: 'custom',
