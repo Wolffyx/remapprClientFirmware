@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { getCompiler, parseKeymap } from '../../index'
-import { dtcCheck, dtcToolchain } from './dtcHarness'
+import { dtcCheck, dtcToolchain, labelCheck } from './dtcHarness'
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), '__golden__')
 const TC = dtcToolchain()
@@ -46,6 +46,11 @@ describe.each(BOARDS)('golden shield %s', (name) => {
         const r = dtcCheck(TC!, String(overlay.content))
         expect(r.log).toBe('')
         expect(r.ok).toBe(true)
+    })
+
+    it.skipIf(!TC)('labels the nodes the firmware reads by label as it reads them', () => {
+        const overlay = res.files.find((f) => f.filename.endsWith('.overlay'))!
+        expect(labelCheck(TC!, String(overlay.content))).toEqual([])
     })
 })
 

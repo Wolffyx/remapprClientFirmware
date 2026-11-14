@@ -44,6 +44,7 @@ const ADC4 = {
         gain: 'ADC_GAIN_1_6',
         reference: 'ADC_REF_INTERNAL',
         inputPositive: 'NRF_SAADC_AIN4',
+        resolution: 12,
     },
 }
 
@@ -81,9 +82,31 @@ describe('board.battery', () => {
     })
 
     it('needs the analog input on an nRF SAADC channel', () => {
-        const setup = { gain: 'ADC_GAIN_1_6', reference: 'ADC_REF_INTERNAL' }
+        const setup = { gain: 'ADC_GAIN_1_6', reference: 'ADC_REF_INTERNAL', resolution: 12 }
         const r = compile(pad({ battery: { adc: { adc: 'adc', channel: 4, setup } } }))
         expect(errors(r).join()).toMatch(/inputPositive/)
+    })
+
+    it('needs the resolution with a setup: Zephyr refuses a 0-bit channel', () => {
+        const { resolution: _drop, ...setup } = ADC4.setup
+        expect(() =>
+            compile(pad({ battery: { adc: { ...ADC4, setup } } })),
+        ).toThrow(/resolution/)
+        expect(overlayOf(compile(pad({ battery: { adc: ADC4 } })))).toContain(
+            'zephyr,resolution = <12>;',
+        )
+    })
+
+    it('reads the charger pin active low with a pull-up, or active high', () => {
+        const low = overlayOf(compile(pad({ battery: { adc: ADC4, charging: 'P0.29' } })))
+        expect(low).toContain('charging-gpios = <&gpio0 29 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;')
+        const high = overlayOf(
+            compile(pad({ battery: { adc: ADC4, charging: 'P0.29', chargingActiveHigh: true } })),
+        )
+        expect(high).toContain('charging-gpios = <&gpio0 29 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;')
+        expect(() =>
+            compile(pad({ battery: { adc: ADC4, chargingActiveHigh: true } })),
+        ).toThrow(/goes with charging/)
     })
 
     it('refuses a charging pin the matrix uses', () => {

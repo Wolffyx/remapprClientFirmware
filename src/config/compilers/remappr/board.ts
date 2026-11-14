@@ -37,7 +37,13 @@ import {
 } from './boardMatrix'
 import { boardTarget, PinBook } from './boardPins'
 import { emitNodeBus, emitRadioConfig, emitRadioLink } from './boardLink'
-import { emitButtons, emitSliders, matrixKeyCount } from './boardInputs'
+import {
+    buttonCodes,
+    emitButtonPositions,
+    emitButtons,
+    emitSliders,
+    matrixKeyCount,
+} from './boardInputs'
 import { emitDisplays, emitHaptic, emitLedZones } from './boardOutput'
 import { layoutOrigin, type Origin, placementTokens } from './boardPlacement'
 import { emitBattery, emitPowerOff, emitStatusLeds } from './boardPower'
@@ -390,17 +396,24 @@ function maxLayers(config: ConfigKeymap, diag: DiagnosticBag): number {
 
 /** The `remappr,keymap` node: placement, layer capacity and the default
  *  layers, scanning the matrix node. */
+/** How the keymap node's positions are read: from the kbd_matrix scan, or
+ *  (a board whose keys are all buttons) from these off-matrix input codes. */
+type KeymapSource = { scan: true } | { extraCodes: string[] }
+
 function keymapNode(
     config: ConfigKeymap,
-    rowCounts: number[],
-    origin: Origin,
+    layout: { rowCounts: number[]; origin: Origin },
+    source: KeymapSource,
     diag: DiagnosticBag,
 ): string[] {
+    const { rowCounts, origin } = layout
     const placement = placementTokens(config.keyboard.keys, diag, origin)
     return [
         `\tremappr_keymap: remappr-keymap {`,
         `\t\tcompatible = "remappr,keymap";`,
-        `\t\tscan = <&kbd_matrix>;`,
+        ...('scan' in source
+            ? [`\t\tscan = <&kbd_matrix>;`]
+            : [`\t\textra-input-codes = <${source.extraCodes.join(' ')}>;`]),
         `\t\tcolumns = <${Math.max(1, ...rowCounts)}>;`,
         `\t\trows = <${rowCounts.join(' ')}>;`,
         `\t\tmax-layers = <${maxLayers(config, diag)}>;`,
@@ -426,12 +439,21 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     const mx = matrixView(config, m)
     const rowCounts = visualRowCounts(mx.keyboard.keys)
     const wiring = m > 0 ? planMatrix(mx, diag) : null
+    const codes = buttonCodes(config, diag)
+    const buttonsOnly = m === 0 && codes.length > 0
     const keyNodes = wiring
         ? [
               ...matrixNode(mx, wiring, book, rowCounts, diag),
-              ...keymapNode(mx, rowCounts, origin, diag),
+              ...keymapNode(mx, { rowCounts, origin }, { scan: true }, diag),
           ]
-        : []
+        : buttonsOnly
+          ? keymapNode(
+                config,
+                { rowCounts: visualRowCounts(config.keyboard.keys), origin },
+                { extraCodes: codes },
+                diag,
+            )
+          : []
 
     // Optional peripheral overlay nodes (empty fragments when unconfigured).
     const adc = new AdcBook(target.soc, diag)
@@ -444,8 +466,9 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         emitPowerOff(config, book),
         emitNodeBus(config, book, diag),
         emitRadioLink(config, book, diag),
-        emitRadioConfig(config),
-        emitButtons(config, origin, book, diag),
+        emitRadioConfig(config, diag),
+        emitButtons(config, codes, book),
+        ...(buttonsOnly ? [] : [emitButtonPositions(config, codes, origin, diag)]),
         emitSliders(config, adc),
         emitHaptic(config, diag),
         emitLedZones(config, diag),

@@ -6,6 +6,10 @@
 //                     position and the key's rect in the drawn layout.
 //   • board.sliders → remappr,slider on an ADC channel.
 //
+// A board whose keys are all buttons has no matrix: its keymap node has no
+// scan and lists the button codes as extra-input-codes, so the layers and
+// max-layers still reach the firmware (the buttons-only form it supports).
+//
 // The firmware puts extra-input positions after the keymap's, in node order,
 // and the config's positions are the keyboard.keys indices. So the button
 // keys must be the last keys, in board.buttons order: then key i is engine
@@ -75,59 +79,76 @@ function rectOf(
     return [rect, `\t\trot = <${rot < 0 ? `(${rot})` : rot}>;`]
 }
 
-/** gpio-keys + remappr,extra-input from board.buttons. */
-export function emitButtons(
-    config: ConfigKeymap,
-    origin: Origin,
-    book: PinBook,
-    diag: DiagnosticBag,
-): PeripheralFragment {
-    const buttons = config.board?.buttons
-    if (!buttons || buttons.length === 0) return EMPTY
-    const codes = new Map<string, number>()
+/** Each button's input code: its own, else the next of F13..F24. Two
+ *  buttons on one code, or a thirteenth with none, is an error (and gets ""). */
+export function buttonCodes(config: ConfigKeymap, diag: DiagnosticBag): string[] {
+    const seen = new Map<string, number>()
     let nextDefault = 0
-    const keys: string[] = []
-    const extra: string[] = []
-    buttons.forEach((b, i) => {
-        const path = ['board', 'buttons', i]
+    return (config.board?.buttons ?? []).map((b, i) => {
+        const path = ['board', 'buttons', i, 'code']
         const code = b.code ?? DEFAULT_CODES[nextDefault++]
         if (!code) {
-            diag.error(`more than 12 buttons: give each one a code`, [...path, 'code'])
-            return
+            diag.error(`more than 12 buttons: give each one a code`, path)
+            return ''
         }
-        const prior = codes.get(code)
+        const prior = seen.get(code)
         if (prior !== undefined)
-            diag.error(`buttons ${prior} and ${i} both report ${code}`, [...path, 'code'])
-        codes.set(code, i)
-        const pin = book.spec(b.pin, ROLE_FLAGS.direct, [...path, 'pin'])
-        keys.push(
-            `\t\tbutton_${i} {`,
-            `\t\t\tgpios = <${pin}>;`,
-            `\t\t\tzephyr,code = <${code}>;`,
-            `\t\t};`,
-        )
+            diag.error(`buttons ${prior} and ${i} both report ${code}`, path)
+        seen.set(code, i)
+        return code
+    })
+}
+
+/** The gpio-keys node that reads board.buttons: a pin and a code each. */
+export function emitButtons(
+    config: ConfigKeymap,
+    codes: string[],
+    book: PinBook,
+): PeripheralFragment {
+    const buttons = config.board?.buttons ?? []
+    if (buttons.length === 0) return EMPTY
+    const keys = buttons.flatMap((b, i) =>
+        codes[i]
+            ? [
+                  `\t\tbutton_${i} {`,
+                  `\t\t\tgpios = <${book.spec(b.pin, ROLE_FLAGS.direct, ['board', 'buttons', i, 'pin'])}>;`,
+                  `\t\t\tzephyr,code = <${codes[i]}>;`,
+                  `\t\t};`,
+              ]
+            : [],
+    )
+    return {
+        includes: [],
+        nodes: [`/ {`, `\tremappr_buttons {`, `\t\tcompatible = "gpio-keys";`, ...keys, `\t};`, `};`],
+        kconfig: [],
+    }
+}
+
+/** A remappr,extra-input node per button: its engine position after the
+ *  matrix keys', and its key's rect in the drawn layout. A board with no
+ *  matrix keys lists the codes on its keymap node instead. */
+export function emitButtonPositions(
+    config: ConfigKeymap,
+    codes: string[],
+    origin: Origin,
+    diag: DiagnosticBag,
+): PeripheralFragment {
+    const buttons = config.board?.buttons ?? []
+    if (buttons.length === 0) return EMPTY
+    const extra = buttons.flatMap((b, i) => {
+        if (!codes[i]) return []
         const k = config.keyboard.keys[b.key]
-        extra.push(
+        return [
             `\tbutton_${i}_key {`,
             `\t\tcompatible = "remappr,extra-input";`,
-            `\t\tinput-code = <${code}>;`,
+            `\t\tinput-code = <${codes[i]}>;`,
             ...(k ? rectOf(k, origin, diag, ['keyboard', 'keys', b.key]) : []),
             `\t};`,
-        )
+        ]
     })
     return {
         includes: [],
-        nodes: [
-            `/ {`,
-            `\tremappr_buttons {`,
-            `\t\tcompatible = "gpio-keys";`,
-            ...keys,
-            `\t};`,
-            ``,
-            `\t/* One engine position per button, after the matrix keys'. */`,
-            ...extra,
-            `};`,
-        ],
+        nodes: [`/ {`, `\t/* One engine position per button, after the matrix keys'. */`, ...extra, `};`],
         kconfig: [],
     }
 }

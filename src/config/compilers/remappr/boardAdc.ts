@@ -65,9 +65,7 @@ export class AdcBook {
             ...(s.inputPositive !== undefined
                 ? [`\t\tzephyr,input-positive = <${cellOf(s.inputPositive)}>;`]
                 : []),
-            ...(s.resolution !== undefined
-                ? [`\t\tzephyr,resolution = <${s.resolution}>;`]
-                : []),
+            `\t\tzephyr,resolution = <${s.resolution}>;`,
             ...(s.oversampling !== undefined
                 ? [`\t\tzephyr,oversampling = <${s.oversampling}>;`]
                 : []),

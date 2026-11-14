@@ -40,6 +40,44 @@ const overlayOf = (r: CompileResult): string =>
 const errors = (r: CompileResult): string[] =>
     r.diagnostics.filter((d) => d.level === 'error').map((d) => d.message)
 
+/** A board whose keys are all buttons: no matrix. */
+function buttonsOnly(layers = 1): string {
+    const keys = [{ x: 0, y: 0 }, { x: 1, y: 0 }]
+    return JSON.stringify({
+        schemaVersion: 1,
+        kind: 'remappr.keymap',
+        meta: { name: 'Pad', target: 'zmk' },
+        keyboard: { id: 'pad', name: 'Pad', keys },
+        layers: Array.from({ length: layers }, (_, i) => ({ name: `l${i}`, bindings: ['A', 'B'] })),
+        board: {
+            controller: 'nrf52840dk/nrf52840',
+            buttons: [
+                { key: 0, pin: 'P1.01' },
+                { key: 1, pin: 'P1.02', code: 'INPUT_KEY_ENTER' },
+            ],
+        },
+    })
+}
+
+describe('a board of buttons only', () => {
+    it('gets a keymap with no scan: the codes, layers and max-layers', () => {
+        const r = compile(buttonsOnly(3))
+        expect(errors(r)).toEqual([])
+        const o = overlayOf(r)
+        expect(o).toContain('remappr_keymap: remappr-keymap {')
+        expect(o).not.toContain('scan =')
+        expect(o).not.toContain('kbd-matrix')
+        expect(o).toContain('extra-input-codes = <INPUT_KEY_F13 INPUT_KEY_ENTER>;')
+        expect(o).toMatch(/max-layers = <\d+>;/)
+        expect(o.match(/\bKEY\(&/g)?.length).toBe(2)
+        expect(o).toContain('layer_2')
+        expect(o).toContain('columns = <2>;')
+        expect(o).toContain('rows = <2>;')
+        expect(o).not.toContain('remappr,extra-input')
+        expect(o).toContain('zephyr,code = <INPUT_KEY_ENTER>;')
+    })
+})
+
 describe('board.buttons', () => {
     const BTN = [{ x: 3, y: 0 }, { x: 4, y: 0, w: 2 }]
 
@@ -87,7 +125,7 @@ describe('board.buttons', () => {
 
 describe('board.sliders', () => {
     it('emits remappr,slider on its ADC channel', () => {
-        const adc = { adc: 'adc', channel: 6, setup: { gain: 'ADC_GAIN_1_6', reference: 'ADC_REF_INTERNAL', inputPositive: 'NRF_SAADC_AIN6' } }
+        const adc = { adc: 'adc', channel: 6, setup: { gain: 'ADC_GAIN_1_6', reference: 'ADC_REF_INTERNAL', inputPositive: 'NRF_SAADC_AIN6', resolution: 12 } }
         const r = compile(pad({ sliders: [{ adc, function: 'rgb-brightness', pollMs: 30 }] }))
         expect(errors(r)).toEqual([])
         const o = overlayOf(r)
@@ -129,6 +167,12 @@ describe('board.sensor.cpi and qdec timings', () => {
 })
 
 describe.skipIf(!TC)('input shields pass dtc and the binding check', () => {
+    it('a board of buttons only', () => {
+        const d = dtcCheck(TC!, overlayOf(compile(buttonsOnly(2))))
+        expect(d.log).toBe('')
+        expect(d.ok).toBe(true)
+    })
+
     it('with buttons, a slider, an encoder and a mouse node', () => {
         const r = compile(
             pad(

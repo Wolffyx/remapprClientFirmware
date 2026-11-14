@@ -23,6 +23,10 @@ const EMPTY: PeripheralFragment = { includes: [], nodes: [], kconfig: [] }
  *  port and pin only. */
 const NO_FLAGS = '0'
 
+/** A charger status pin: an open-drain CHRG output by default. */
+const chargingFlags = (activeHigh: boolean | undefined): string =>
+    activeHigh ? '(GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)' : '(GPIO_PULL_UP | GPIO_ACTIVE_LOW)'
+
 /** `remappr,battery` from board.battery. */
 export function emitBattery(
     config: ConfigKeymap,
@@ -46,7 +50,7 @@ export function emitBattery(
         : [`\t\tfuel-gauge = <&${dtLabel(b.fuelGauge!, diag, [...path, 'fuelGauge'])}>;`]
     const charging = b.charging
         ? [
-              `\t\tcharging-gpios = <${book.spec(b.charging, '(GPIO_PULL_UP | GPIO_ACTIVE_LOW)', [...path, 'charging'])}>;`,
+              `\t\tcharging-gpios = <${book.spec(b.charging, chargingFlags(b.chargingActiveHigh), [...path, 'charging'])}>;`,
           ]
         : []
     const curve = b.ocvCurve
