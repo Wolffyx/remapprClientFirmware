@@ -10,6 +10,7 @@
 import type { DiagnosticBag } from '../../diagnostics'
 import { BLOB_HEADER_LEN, CLUSTER_PSK_LEN, crc32, TableId } from './blobWriter'
 import { DecodeCode, readBlobFrames, type TableFrame } from './decode'
+import { readDisplayTable } from './display'
 
 /** Tables the keymap decoder reads into the config and the compiler writes back
  *  from it. Every other table, the reserved and unknown ids included, is
@@ -36,6 +37,7 @@ const MODELED_TABLES: ReadonlySet<number> = new Set([
     TableId.Power,
     TableId.ActionBinding,
     TableId.Autocorrect,
+    TableId.Display,
 ])
 
 /** TBL_RGB flags bit 0: one color map per layer. The config models only a
@@ -45,7 +47,14 @@ const RGB_FLAG_PER_LAYER = 0x01
 /** Whether the config leaves this table of `blob` out, so it must be carried. */
 export function isCarriedTable(blob: Uint8Array, t: TableFrame): boolean {
     if (!MODELED_TABLES.has(t.id)) return true
+    if (t.id === TableId.Display) return !isShownDisplay(blob, t)
     return t.id === TableId.Rgb && t.end - t.start >= 2 && isPerLayerRgb(blob, t)
+}
+
+/** A TBL_DISPLAY the decoder read into `node.display`; any other (a newer
+ *  version, a widget this client cannot show) is carried as read. */
+function isShownDisplay(blob: Uint8Array, t: TableFrame): boolean {
+    return t.version === 1 && typeof readDisplayTable(blob, t) === 'object'
 }
 
 function isPerLayerRgb(blob: Uint8Array, t: TableFrame): boolean {

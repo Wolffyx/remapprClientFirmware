@@ -248,24 +248,33 @@ export function readJoystickTable(
     return out
 }
 
+/** A TBL_PART value overrides what a v1 table entry carried, a 0 included: the
+ *  device runs the TBL_PART value, so 0 puts the field back on its default
+ *  (left out of the document). */
+const flag =
+    (k: 'invert' | 'radial') =>
+    (a: JoystickAxisConfig, v: number): void => {
+        if (v) a[k] = true
+        else delete a[k]
+    }
+const amount =
+    (k: 'inner' | 'outer') =>
+    (a: JoystickAxisConfig, v: number): void => {
+        if (v) a[k] = v
+        else delete a[k]
+    }
+
 const SHAPING_FROM_WIRE: Readonly<
     Record<number, (a: JoystickAxisConfig, v: number) => void>
 > = {
-    [AxisSetting.invert]: (a, v) => {
-        if (v) a.invert = true
-    },
-    [AxisSetting.radial]: (a, v) => {
-        if (v) a.radial = true
-    },
+    [AxisSetting.invert]: flag('invert'),
+    [AxisSetting.radial]: flag('radial'),
     [AxisSetting.curve]: (a, v) => {
-        if (v && CURVES[v]) a.curve = CURVES[v]
+        if (!v) delete a.curve
+        else if (CURVES[v]) a.curve = CURVES[v]
     },
-    [AxisSetting.inner]: (a, v) => {
-        if (v) a.inner = v
-    },
-    [AxisSetting.outer]: (a, v) => {
-        if (v) a.outer = v
-    },
+    [AxisSetting.inner]: amount('inner'),
+    [AxisSetting.outer]: amount('outer'),
 }
 
 /**

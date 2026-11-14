@@ -123,7 +123,19 @@ export interface RemapprCompileLimits {
     autocorrectMaxTypo?: number
     /** Key positions the engine tracks (CONFIG_REMAPPR_BEHAVIOR_POSITIONS_MAX, 128). */
     maxPositions?: number
+    /** Keys in one combo (CONFIG_REMAPPR_BEHAVIOR_COMBO_KEYS, 8). */
+    comboMaxKeys?: number
+    /** The keyboard node's config pools (app/keyboard_node kb_config.c):
+     *  combo records (cfg_combos, 32), their key positions together
+     *  (cfg_combo_pos, 128) and slider bindings (cfg_sliders, 8). */
+    combosMax?: number
+    comboPositionsMax?: number
+    slidersMax?: number
 }
+const COMBO_MAX_KEYS = 8
+const COMBOS_MAX = 32
+const COMBO_POSITIONS_MAX = 128
+const SLIDERS_MAX = 8
 const LEADER_MAX_KEYS = 5
 const POSITIONS_MAX = 128
 /** Fixed by the wire: the keymap's u8 layer count, the u16 key-override layer
@@ -1359,6 +1371,32 @@ function lowerSliders(
     return out
 }
 
+/**
+ * Errors for what the device's config pools cannot hold: it refuses the whole
+ * blob (VALIDATE ERR_BOUNDS) with no reason. A combo on several layers takes
+ * one record, and its keys again, per layer.
+ */
+function checkPools(
+    combos: readonly ComboRecord[],
+    sliders: readonly SliderRecord[],
+    limits: RemapprCompileLimits,
+    diag: DiagnosticBag,
+): void {
+    const maxKeys = limits.comboMaxKeys ?? COMBO_MAX_KEYS
+    if (combos.some((c) => c.positions.length > maxKeys))
+        diag.error(`a combo takes at most ${maxKeys} keys`, ['combos'])
+    const positions = combos.reduce((n, c) => n + c.positions.length, 0)
+    const pools: [number, number, string, string][] = [
+        [combos.length, limits.combosMax ?? COMBOS_MAX, 'combo records (one per layer)', 'combos'],
+        [positions, limits.comboPositionsMax ?? COMBO_POSITIONS_MAX, 'combo key slots', 'combos'],
+        [sliders.length, limits.slidersMax ?? SLIDERS_MAX, 'slider bindings', 'layers'],
+    ]
+    for (const [n, max, what, at] of pools) {
+        if (n <= max) continue
+        diag.error(`the config takes ${n} ${what}; a device holds ${max}`, [at])
+    }
+}
+
 // Pure encoder: ConfigKeymap → RMBC blob bytes. Shared by the export `compile()`
 // path (version from meta) and the live-device commit path (version = active+1).
 // Does NOT 16-byte-pad — the golden artifact is unpadded; flash-alignment padding
@@ -1656,6 +1694,7 @@ function encodeBlob(
     // macroCtx.records includes any per-argument clones of parameterized
     // templates appended while bindings lowered above (§44.3).
     if (macroCtx.records.length > 0) builder.macroTable(macroCtx.records)
+    checkPools(combos, sliders, limits, diag)
     if (combos.length > 0) builder.comboTable(combos)
     if (encoders.length > 0) builder.encoderTable(encoders)
     // TBL_SLIDER (slider part design §4b): layers[].sliderBindings, by the key

@@ -7,6 +7,8 @@ import { parseKeymap } from '../index'
 import { buildRemapprBlob } from '../compilers/remappr'
 import {
     BehaviorType,
+    BLOB_HEADER_LEN,
+    crc32,
     ScreenKind,
     SliderKind,
     SliderTarget,
@@ -447,9 +449,88 @@ describe('TBL_DISPLAY from node.display (L3.20)', () => {
         ])
     })
 
+    it('a display section deleted from a read config stays deleted (not carried)', () => {
+        const device = compile(json(display)).blob
+        const edited = parseKeymap(keymap(`"layers": [{ "name": "b", "bindings": ["A", "B"] }]`))
+        const r = buildRemapprBlob(edited, { configVersion: 2, carryFrom: device })
+        expect(errors(r)).toEqual([])
+        expect(frame(r.blob, TableId.Display)).toBeUndefined()
+    })
+
+    it('a display table this client cannot show is carried as read', () => {
+        const device = compile(json(display)).blob
+        const t = frame(device, TableId.Display)!
+        const unknown = device.slice()
+        unknown[t.start + 16] = 0x7f // widget 0: a kind this client does not know
+        new DataView(unknown.buffer).setUint32(16, crc32(unknown.subarray(BLOB_HEADER_LEN)), true)
+        const edited = parseKeymap(keymap(`"layers": [{ "name": "b", "bindings": ["A", "B"] }]`))
+        const r = buildRemapprBlob(edited, { configVersion: 2, carryFrom: unknown })
+        const out = frame(r.blob, TableId.Display)!
+        expect(Array.from(r.blob.subarray(out.start, out.end))).toEqual(
+            Array.from(unknown.subarray(t.start, t.end)),
+        )
+    })
+
     it('an empty page list writes an empty table, which clears the screens', () => {
         const r = compile(json({ pages: [] }))
         const t = frame(r.blob, TableId.Display)!
         expect(Array.from(r.blob.subarray(t.start, t.end))).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
+    })
+})
+
+describe("the device's config pools (combos, combo keys, sliders)", () => {
+    const layers = (n: number, extra = '') =>
+        Array.from(
+            { length: n },
+            (_, i) => `{ "name": "L${i}", "bindings": ["A","B","C","D","E","F","G","H","I","J"]${extra} }`,
+        ).join(',')
+    const combos = (n: number, keys: number, on: string[]) =>
+        Array.from({ length: n }, (_, i) =>
+            JSON.stringify({
+                name: `c${i}`,
+                keys: Array.from({ length: keys }, (_, k) => k),
+                action: 'Z',
+                layers: on,
+            }),
+        ).join(',')
+    const withCombos = (n: number, keys: number, on: string[]) =>
+        keymap(`"layers": [${layers(2)}], "combos": [${combos(n, keys, on)}]`, 10)
+
+    it('fits 32 combo records and 128 combo keys', () => {
+        expect(errors(compile(withCombos(16, 4, ['L0', 'L1'])))).toEqual([])
+    })
+
+    it('counts a combo once per layer against the record pool', () => {
+        expect(errors(compile(withCombos(17, 2, ['L0', 'L1'])))).toEqual([
+            'the config takes 34 combo records (one per layer); a device holds 32',
+        ])
+    })
+
+    it('counts every record key against the combo key pool', () => {
+        expect(errors(compile(withCombos(13, 5, ['L0', 'L1'])))).toEqual([
+            'the config takes 130 combo key slots; a device holds 128',
+        ])
+    })
+
+    it('refuses a combo wider than the engine captures', () => {
+        expect(errors(compile(withCombos(1, 9, ['L0'])))).toEqual([
+            'a combo takes at most 8 keys',
+        ])
+    })
+
+    it('refuses more slider bindings than the device holds, and follows the build limits', () => {
+        const json = keymap(
+            `"layers": [${layers(9, ', "sliderBindings": { "1": { "map": "hue" } }')}]`,
+            10,
+            [1],
+        )
+        expect(errors(compile(json))).toEqual([
+            'the config takes 9 slider bindings; a device holds 8',
+        ])
+        const r = buildRemapprBlob(parseKeymap(json), {
+            configVersion: 1,
+            limits: { slidersMax: 16 },
+        })
+        expect(errors(r)).toEqual([])
     })
 })

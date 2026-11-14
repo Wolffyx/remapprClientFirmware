@@ -7,7 +7,8 @@ import { describe, expect, it } from 'vitest'
 import type { SensorInfo, SensorSettingInfo } from '../../devices/types'
 import { buildRemapprDeviceBlob, decodeRemapprDeviceBlob, parseDeviceConfig } from '../index'
 import { readBlobFrames, DecodeCode } from '../compilers/remappr/decode'
-import { TableId } from '../compilers/remappr/blobWriter'
+import { BlobBuilder, Personality, TableId } from '../compilers/remappr/blobWriter'
+import { joystickRecords } from '../compilers/remappr/joystick'
 import { readSensorEntries } from '../compilers/remappr/sensor'
 
 const setting = (name: string): SensorSettingInfo =>
@@ -140,6 +141,24 @@ describe('joystick TBL_JOYSTICK v2 + TBL_PART shaping (L3.19)', () => {
     it('reads a v2 table without the part list as one AXES part (input = channel)', () => {
         const blob = buildRemapprDeviceBlob(cfg, { configVersion: 2, sensors: PARTS })
         expect(decodeRemapprDeviceBlob(blob).joystick).toEqual(JOY.joystick)
+    })
+
+    it('a TBL_PART 0 overrides a v1 entry, as the device runs it', () => {
+        // v1 carries invert + inner 10 on input 0; TBL_PART says invert 0, inner 0.
+        const doc = { axes: [{ input: 0, out: 'x' as const, invert: true, inner: 10 }] }
+        const legacy = joystickRecords(doc)!
+        expect(legacy.version).toBe(1)
+        const blob = new BlobBuilder()
+            .personalityTable(Personality.joystick)
+            .joystickTable(legacy.table as never)
+            .sensorTable([
+                { sensor: 1, id: 0x40, ch: 0, value: 0 },
+                { sensor: 1, id: 0x43, ch: 0, value: 0 },
+            ])
+            .finalize(1, 1, 2)
+        const r = decodeRemapprDeviceBlob(blob, { sensors: PARTS })
+        expect(r.code).toBe(DecodeCode.OK)
+        expect(r.joystick).toEqual({ axes: [{ input: 0, out: 'x' }] })
     })
 
     it('reads TBL_PART shaping over a v1 table, as the device does', () => {
