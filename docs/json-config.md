@@ -309,6 +309,10 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
     its push switch in `buttons`.
   - Each key is placed at its own position, size and rotation (whole
     key-units and degrees; fractional values are rounded, with a warning).
+  - `matrix` also takes the scan timings: `pollMs`, `sleepPollMs`,
+    `settleUs`, `debouncePressMode` (`eager`, the default, or `defer`),
+    `debouncePressMs` (used in `defer` mode only) and `debounceReleaseMs`
+    (these two override `kscan`'s).
   - `maxLayers` (1..32) is how many layers the app may fill without a reflash;
     default the authored layers, at least 4.
   - `encoders` are `gpio-qdec` nodes: `a`, `b`, `steps`, `axis`, and the
@@ -357,6 +361,21 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   first; they are the board's inputs, so they are not new pins). On STM32 it
   also turns on the PWR wake-up lines.
 
+- `board.haptic` is a haptic actuator (`remappr,haptic`) on a PWM channel:
+  `pwm` (the controller's label), `channel`, `periodNs` (a fact of the
+  actuator, so it has no default), optional `inverted` and `pinctrl`. The
+  haptic service takes its triggers over the node bus, so it is turned on only
+  with a node-bus port.
+- `board.ledZones` slice the WS2812 strip by lighting role
+  (`remappr,led-zone`): `[{ "target", "offset", "length" }]`, `target` one of
+  `underglow`, `backlight`, `per-key`, `indicator`. A zone past the chain, two
+  zones that overlap and two zones for one role are errors.
+- `board.displays` are display parts (`remappr,display`). `panel` is the label
+  of a panel the board has, or a panel the shield declares: `part` (its
+  driver compatible), `bus`, `reg`, `width`, `height`, optional `busHz`, and
+  `props`, the driver's own properties by devicetree name (a number, a cell
+  list, `true` for a flag, or a string). `defaults` are the part's setting
+  defaults by registry name.
 - `board.nodeBus` are the node-bus ports (`remappr,node-bus-port`), one per
   inter-node UART; a split keyboard is one device over them. Each has `uart`
   (the UART's node label), `direction` (`downstream`, the default, or

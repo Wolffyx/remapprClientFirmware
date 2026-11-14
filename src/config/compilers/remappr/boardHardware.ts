@@ -400,21 +400,17 @@ const cell = (v: number): string => (v < 0 ? `(${v})` : String(v))
 
 /** `remappr,setting-defaults` pairs from node.sensor.defaults, by registry
  *  macro (the hex id for one the registry has no name for). */
-function settingDefaults(
+export function settingDefaults(
     defaults: Readonly<Record<string, ConfigSensorValue>>,
     diag: DiagnosticBag,
+    path: (string | number)[] = ['node', 'sensor', 'defaults'],
 ): string[] {
     const pairs: string[] = []
     for (const [key, raw] of Object.entries(defaults)) {
         const id = sensorSettingId(key)
         const value = sensorWireValue(key, raw)
         if (id === undefined || value === undefined) {
-            diag.warn(`sensor default "${key}" is not a setting or option`, [
-                'node',
-                'sensor',
-                'defaults',
-                key,
-            ])
+            diag.warn(`default "${key}" is not a setting or option`, [...path, key])
             continue
         }
         const macro = registrySetting(id)?.macro

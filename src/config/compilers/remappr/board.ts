@@ -44,6 +44,7 @@ import {
     emitSliders,
     matrixKeyCount,
 } from './boardInputs'
+import { emitDisplays, emitHaptic, emitLedZones } from './boardOutput'
 import { layoutOrigin, type Origin, placementTokens } from './boardPlacement'
 import { emitBattery, emitPowerOff, emitStatusLeds } from './boardPower'
 import { dtComment } from './dtText'
@@ -346,7 +347,14 @@ function matrixNode(
     const cells = resolveKeyMatrix(config)
     const reports = checkCells(config, cells, wiring, diag)
     const dims = matrixDims(config)
-    const pollMs = config.board?.matrix?.pollMs
+    const bm = config.board?.matrix
+    const pollMs = bm?.pollMs
+    if (wiring.debouncePressMs !== undefined && bm?.debouncePressMode !== 'defer')
+        diag.warn(
+            `debounce-press-ms only applies with debouncePressMode "defer"; the ` +
+                `default eager mode reports a press on the first active scan`,
+            ['board', 'matrix', 'debouncePressMode'],
+        )
 
     // One MATRIX_KEY per position, code = REMAPPR_KB_POS_BASE + position (a
     // layout-option choice reports its cell's default choice). Not the
@@ -361,6 +369,11 @@ function matrixNode(
         `\t\tcompatible = "remappr,kbd-matrix";`,
         `\t\tdiode-direction = "${diode}";`,
         ...(pollMs ? [`\t\tpoll-period-ms = <${pollMs}>;`] : []),
+        ...(bm?.sleepPollMs ? [`\t\tsleep-poll-period-ms = <${bm.sleepPollMs}>;`] : []),
+        ...(bm?.settleUs !== undefined ? [`\t\tsettle-time-us = <${bm.settleUs}>;`] : []),
+        ...(bm?.debouncePressMode
+            ? [`\t\tdebounce-press-mode = "${bm.debouncePressMode}";`]
+            : []),
         ...(wiring.debouncePressMs !== undefined
             ? [`\t\tdebounce-press-ms = <${wiring.debouncePressMs}>;`]
             : []),
@@ -478,6 +491,9 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         emitButtons(config, codes, book),
         ...(buttonsOnly ? [] : [emitButtonPositions(config, codes, origin, diag)]),
         emitSliders(config, adc),
+        emitHaptic(config, diag),
+        emitLedZones(config, diag),
+        emitDisplays(config, diag),
     ]
 
     const overlay: string[] = [

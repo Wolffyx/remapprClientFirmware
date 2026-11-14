@@ -952,6 +952,24 @@ export const BoardSchema = z
                 rows: z.array(z.string()).optional(),
                 cols: z.array(z.string()).optional(),
                 pollMs: z.number().int().positive().optional(),
+                sleepPollMs: z
+                    .number()
+                    .int()
+                    .positive()
+                    .optional()
+                    .describe('Scan period while the device sleeps, ms (default 10).'),
+                settleUs: z
+                    .number()
+                    .int()
+                    .nonnegative()
+                    .optional()
+                    .describe('Wait after driving a strobe line before reading, us (default 50).'),
+                debouncePressMode: z
+                    .enum(['eager', 'defer'])
+                    .optional()
+                    .describe('eager reports a press on the first active scan (default).'),
+                debouncePressMs: z.number().int().nonnegative().optional(),
+                debounceReleaseMs: z.number().int().nonnegative().optional(),
             })
             .optional(),
         split: z.boolean().optional(),
@@ -1011,6 +1029,9 @@ export const BoardSchema = z
         radio: z.lazy(() => BoardRadioSchema).optional(),
         buttons: z.array(z.lazy(() => BoardButtonSchema)).optional(),
         sliders: z.array(z.lazy(() => BoardSliderSchema)).optional(),
+        haptic: z.lazy(() => BoardHapticSchema).optional(),
+        ledZones: z.array(z.lazy(() => BoardLedZoneSchema)).optional(),
+        displays: z.array(z.lazy(() => BoardDisplaySchema)).optional(),
         reservedPins: z
             .array(
                 z.object({
@@ -1522,6 +1543,70 @@ export const BoardRadioSchema = z
             ),
     })
     .describe('2.4 GHz radio facts (remappr,radio-config).')
+
+// pattern-check: skip declarative zod schemas mirroring the haptic, led-zone and display bindings
+export const BoardHapticSchema = z
+    .object({
+        pwm: z.string().min(1).describe('Node label of the PWM controller, e.g. "pwm0".'),
+        channel: z.number().int().min(0).max(31),
+        periodNs: z
+            .number()
+            .int()
+            .positive()
+            .describe('PWM period, ns: a fact of the actuator and its driver.'),
+        inverted: z.boolean().optional().describe('Inverted PWM polarity.'),
+        pinctrl: z
+            .array(z.string().min(1))
+            .optional()
+            .describe("The PWM controller's pinctrl phandles, when the board sets none."),
+    })
+    .describe('A haptic actuator on a PWM channel (remappr,haptic).')
+
+export const LED_ZONE_TARGETS = ['underglow', 'backlight', 'per-key', 'indicator'] as const
+
+export const BoardLedZoneSchema = z
+    .object({
+        target: z.enum(LED_ZONE_TARGETS),
+        offset: z.number().int().nonnegative(),
+        length: z.number().int().positive(),
+    })
+    .describe('A slice of the LED strip for one lighting role (remappr,led-zone).')
+
+/** A devicetree property value for a panel driver: a number, a cell list,
+ *  a flag (true) or a string. */
+const DtPropValue = z.union([
+    z.number().int().nonnegative(),
+    z.array(z.number().int().nonnegative()),
+    z.boolean(),
+    z.string(),
+])
+
+export const BoardPanelSchema = z
+    .object({
+        part: z.string().min(1).describe('The panel driver compatible, e.g. "solomon,ssd1306fb".'),
+        bus: z.string().min(1).describe('Node label of its I2C or SPI bus.'),
+        reg: z.number().int().nonnegative().describe('Its address (I2C) or chip select (SPI).'),
+        width: z.number().int().positive(),
+        height: z.number().int().positive(),
+        busHz: z.number().int().positive().optional().describe("The bus's clock-frequency."),
+        props: z
+            .record(z.string().regex(/^[a-z][a-z0-9,-]*$/), DtPropValue)
+            .optional()
+            .describe("The driver's own properties, by devicetree name."),
+    })
+    .describe('A display panel node the shield declares.')
+
+export const BoardDisplaySchema = z
+    .object({
+        panel: z
+            .union([z.string().min(1), BoardPanelSchema])
+            .describe('Node label of a panel the board has, or a panel to declare.'),
+        defaults: z
+            .record(z.string(), z.union([z.boolean(), z.number().int(), z.string()]))
+            .optional()
+            .describe('The part defaults (brightness, invert, rotation) by registry name.'),
+    })
+    .describe('A display part on a panel (remappr,display).')
 
 // pattern-check: skip declarative zod schemas mirroring TBL_JOYSTICK and the gamepad actions
 const JOYSTICK_AXES = ['x', 'y', 'z', 'rx', 'ry', 'rz'] as const
