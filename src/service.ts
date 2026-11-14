@@ -406,6 +406,9 @@ export interface RgbApi {
 // `service.nodes` once instead of threading the relay RPC; the dongle's adapter
 // owns the wire (listNodes + relayed reads), the consumer just sees views.
 
+/** A node's place in a multi-part keyboard (NodeView.clusterRole). */
+export type NodeClusterRole = 'coordinator' | 'follower' | 'standalone'
+
 /** A node reachable through a dongle, as surfaced to the UI. Decoupled from the
  *  wire NodeRecord so the contract stays firmware-neutral. */
 export interface NodeView {
@@ -420,6 +423,14 @@ export interface NodeView {
     kind?: DeviceKind
     /** Link is up right now. */
     online: boolean
+    /** A crypto session is up and the node is online, so the device can seal
+     *  control toward it now. Gate opening and owner-sealed actions (unpair) on
+     *  this, not on `online`: a node can be heard before its session resumes. */
+    secured: boolean
+    /** The node's stable identity as the device reports it (hex), for keying
+     *  per-node state across re-pairs; absent when the device does not know it
+     *  (a bond older than the identity). `id` can change on a re-pair. */
+    deviceId?: string
     /** Node is bonded to the dongle (vs. a transient sighting). */
     bonded: boolean
     /** Last-seen signal strength in dBm (0 when unknown). */
@@ -431,6 +442,11 @@ export interface NodeView {
     isMaster: boolean
     /** Raw §5 election-role low byte (0 = unknown); `isMaster` is the decoded bit. */
     nodeRole: number
+    /** Its place in a multi-part keyboard, decoded from the role the node
+     *  reports: the `coordinator` merges its `follower`s and talks to the host;
+     *  `standalone` works alone. Absent until the node reports a role. A
+     *  coordinator with no follower in the roster is a keyboard on its own. */
+    clusterRole?: NodeClusterRole
     /** The charge it last reported; absent until it reports one (a node with
      *  no battery never does). */
     battery?: BatteryState
