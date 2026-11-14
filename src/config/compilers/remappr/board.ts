@@ -210,34 +210,54 @@ function cellPath(config: ConfigKeymap, i: number): DiagnosticPath {
     return ['keyboard', 'keys', i]
 }
 
+type OptionTag = [number, number] | undefined
+
+/** Two choices of one VIA layout option (ANSI vs ISO Enter): only one of them
+ *  is on the board, so they share a matrix cell by design. */
+const isAlternate = (a: OptionTag, b: OptionTag): boolean =>
+    !!a && !!b && a[0] === b[0] && a[1] !== b[1]
+
 /** Every cell must fit the GPIO counts (the firmware build-asserts it) and no
- *  two keys may share one (the second would never be read). */
+ *  two keys may share one (the second would never be read), unless they are
+ *  choices of one layout option.
+ *
+ *  Returns the position each key's matrix entry reports. The firmware counts
+ *  the entries (one per position) and keeps the last of a cell's entries, so
+ *  every choice of a shared cell keeps its entry but reports the cell's
+ *  default choice (the lowest; VIA's default is choice 0). */
 function checkCells(
     config: ConfigKeymap,
     cells: [number, number][],
     wiring: MatrixWiring,
     diag: DiagnosticBag,
-): void {
+): number[] {
     const nr = wiring.rows.length
     const nc = wiring.cols.length
-    const seen = new Map<string, number>()
+    const keys = config.keyboard.keys
+    const byCell = new Map<string, number[]>()
     cells.forEach(([r, c], i) => {
         const path = cellPath(config, i)
         if (nr && r >= nr)
             diag.error(`key ${i} is on row ${r}, but the matrix has ${nr} row GPIO(s)`, path)
         if (nc && c >= nc)
             diag.error(`key ${i} is on column ${c}, but the matrix has ${nc} column GPIO(s)`, path)
-        const prior = seen.get(`${r},${c}`)
-        if (prior === undefined) {
-            seen.set(`${r},${c}`, i)
-            return
-        }
+        const sharing = byCell.get(`${r},${c}`) ?? []
+        byCell.set(`${r},${c}`, [...sharing, i])
+        const clash = sharing.find((p) => !isAlternate(keys[p]?.option, keys[i]?.option))
+        if (clash === undefined) return
         diag.error(
-            `keys ${prior} and ${i} share matrix cell (${r}, ${c}); one of them ` +
+            `keys ${clash} and ${i} share matrix cell (${r}, ${c}); one of them ` +
                 `can never be read`,
             path,
         )
     })
+    const reports = cells.map((_, i) => i)
+    for (const group of byCell.values()) {
+        const choice = (i: number): number => keys[i]?.option?.[1] ?? 0
+        const owner = group.reduce((a, b) => (choice(b) < choice(a) ? b : a))
+        group.forEach((i) => (reports[i] = owner))
+    }
+    return reports
 }
 
 /** An encoder or slider key is only a matrix key when its wiring says so (an
@@ -285,16 +305,17 @@ function matrixNode(
         )
     checkElements(config, diag)
     const cells = resolveKeyMatrix(config)
-    checkCells(config, cells, wiring, diag)
+    const reports = checkCells(config, cells, wiring, diag)
     const dims = matrixDims(config)
     const pollMs = config.board?.matrix?.pollMs
 
-    // One MATRIX_KEY per position, code = REMAPPR_KB_POS_BASE + position. Not
-    // the REMAPPR_MATRIX_KEYMAP(CELL...) macro: it is built on FOR_EACH_IDX,
-    // which Zephyr caps at 64 arguments, so a 65th key was a dtc syntax error
-    // and no TKL or full-size board compiled.
+    // One MATRIX_KEY per position, code = REMAPPR_KB_POS_BASE + position (a
+    // layout-option choice reports its cell's default choice). Not the
+    // REMAPPR_MATRIX_KEYMAP(CELL...) macro: it is built on FOR_EACH_IDX, which
+    // Zephyr caps at 64 arguments, so a 65th key was a dtc syntax error and no
+    // TKL or full-size board compiled.
     const cellTokens = cells.map(
-        ([r, c], i) => `MATRIX_KEY(${r}, ${c}, REMAPPR_KB_POS_BASE + ${i})`,
+        ([r, c], i) => `MATRIX_KEY(${r}, ${c}, REMAPPR_KB_POS_BASE + ${reports[i]})`,
     )
     return [
         `\tkbd_matrix: kbd-matrix {`,
