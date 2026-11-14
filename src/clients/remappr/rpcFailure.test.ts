@@ -111,6 +111,39 @@ describe('late replies (L3.4)', () => {
         await rpc.close({ abortTransport: true })
     })
 
+    it('times out a universal call in total even when stale universal frames trickle in', async () => {
+        // Replies to an earlier request id, one every 10 ms: none answers the
+        // call, and none may restart its wait.
+        const rpc = createRemapprRpc(
+            scripted((f, send) => {
+                for (let i = 0; i < 12; i++) send(uniReply(f[2], (f[4] + 100) & 0xff, 0, legacyReply(f[9], f[10])), i * 10)
+            }),
+        )
+        const t0 = Date.now()
+        await expect(
+            rpc.callUniversalPlain(Namespace.COMMON, CommonVerb.GET_LIMITS, undefined, { timeoutMs: 30 }),
+        ).rejects.toThrow(/timeout/)
+        expect(Date.now() - t0).toBeLessThan(80)
+        await rpc.close({ abortTransport: true })
+    })
+
+    it('waits per fragment once a chain starts, past the call timeout in total', async () => {
+        const rpc = createRemapprRpc(
+            scripted((f, send) => {
+                const rid = f[4]
+                const head = [f[9], f[10], Status.OK, 0, 3, 0]
+                send(uniReply(f[2], rid, UchFlag.FRAG_FIRST | UchFlag.FRAG_MORE, [...head, 1], [0, 3]))
+                send(uniReply(f[2], rid, UchFlag.FRAG_MORE, [2], [1, 3]), 25)
+                send(uniReply(f[2], rid, 0, [3], [2, 3]), 50)
+            }),
+        )
+        // Each frame is padded to FRAME, so the body is the first fragment's head.
+        const r = await rpc.callUniversalPlain(Namespace.COMMON, CommonVerb.GET_LIMITS, undefined, { timeoutMs: 30 })
+        expect(r.status).toBe(Status.OK)
+        expect(r.data[0]).toBe(1)
+        await rpc.close({ abortTransport: true })
+    })
+
     it('drops a late legacy sealed reply by its sealed cmd and seq', async () => {
         const dev = new SealedDevice({ serve: (_ns, cmd) => ({ status: Status.OK, data: Uint8Array.of(cmd) }) })
         const rpc = createRemapprRpc(dev.transport)

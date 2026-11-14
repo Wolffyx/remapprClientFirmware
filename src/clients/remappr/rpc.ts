@@ -519,10 +519,18 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
             let inChain = false
             let expIdx = 0 // next expected frag index in the active chain (§4.2)
             let chainCnt = 0 // frag_count from FRAG_FIRST; 0 = legacy (no seq)
-            let timeout = baseTimeout
+            // One deadline for the whole wait: a skipped frame (stale, another
+            // class) never extends it. Only a fragment of this reply's chain
+            // does, to the inter-fragment wait.
+            let waitMs = baseTimeout
+            let deadline = Date.now() + waitMs
             // eslint-disable-next-line no-constant-condition
             while (true) {
-                const frame = await nextFrame(timeout)
+                const left = deadline - Date.now()
+                if (left <= 0) {
+                    throw new TransportError(`Remappr RPC timeout after ${waitMs}ms`)
+                }
+                const frame = await nextFrame(left)
                 if (frame[0] !== UNIVERSAL_TAG) continue // ignore stray legacy frame
                 // A direct sealed reply never answers a plaintext request: it is
                 // a late one to an earlier sealed call. Its byte 1 is not a UCH.
@@ -549,7 +557,7 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
                     inChain = true
                     expIdx = 0
                     chainCnt = uch.fragCount
-                    timeout = Math.max(baseTimeout, FRAG_INTER_TIMEOUT_MS)
+                    waitMs = Math.max(baseTimeout, FRAG_INTER_TIMEOUT_MS)
                 } else if (!inChain) {
                     continue // stray FRAG_MORE without a FRAG_FIRST
                 }
@@ -571,7 +579,10 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
                 if (assembled.length > FRAG_REASSEMBLY_CAP) {
                     throw new TransportError('universal reply exceeds reassembly cap')
                 }
-                if (uch.flags & UchFlag.FRAG_MORE) continue
+                if (uch.flags & UchFlag.FRAG_MORE) {
+                    deadline = Date.now() + waitMs // wait for the next fragment
+                    continue
+                }
                 if (chainCnt > 0 && expIdx !== chainCnt) {
                     throw new FragmentLostError(
                         `FRAG chain ended early: ${expIdx} of ${chainCnt} fragments`,
