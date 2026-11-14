@@ -36,6 +36,7 @@ import {
     type SourcedPin,
 } from './boardMatrix'
 import { boardTarget, PinBook } from './boardPins'
+import { emitNodeBus, emitRadioConfig, emitRadioLink } from './boardLink'
 import { placementTokens } from './boardPlacement'
 import { emitBattery, emitPowerOff, emitStatusLeds } from './boardPower'
 import { dtComment } from './dtText'
@@ -421,6 +422,9 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         emitBattery(config, book, adc, diag),
         emitStatusLeds(config, book, diag),
         emitPowerOff(config, book),
+        emitNodeBus(config, book, diag),
+        emitRadioLink(config, book, diag),
+        emitRadioConfig(config, diag),
     ]
 
     const overlay: string[] = [
