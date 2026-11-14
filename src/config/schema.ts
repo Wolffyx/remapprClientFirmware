@@ -922,6 +922,9 @@ export const BoardSchema = z
             .optional()
             .describe('Rotary encoders (gpio-qdec) for the board generator.'),
         sensor: z.lazy(() => BoardSensorSchema).optional(),
+        battery: z.lazy(() => BoardBatterySchema).optional(),
+        statusLeds: z.array(z.lazy(() => BoardStatusLedSchema)).optional(),
+        powerOff: z.lazy(() => BoardPowerOffSchema).optional(),
         reservedPins: z
             .array(
                 z.object({
@@ -1125,6 +1128,164 @@ export const BoardSensorSchema = z
             .describe('SPI clock, Hz (default 8000000).'),
     })
     .describe('A motion sensor on SPI, for the board generator.')
+
+// pattern-check: skip declarative zod schemas mirroring the firmware power bindings
+/** A devicetree macro token (`ADC_GAIN_1_6`, `NRF_SAADC_AIN4`) or a number. */
+const DtToken = z.union([
+    z.string().regex(/^[A-Z][A-Z0-9_]*$/, 'a devicetree macro like ADC_GAIN_1_6'),
+    z.number().int().nonnegative(),
+])
+
+export const BoardAdcChannelSchema = z
+    .object({
+        adc: z
+            .string()
+            .min(1)
+            .describe('Node label of the ADC, e.g. "adc" (nRF) or "adc1" (STM32).'),
+        channel: z.number().int().min(0).max(31).describe('ADC channel number.'),
+        setup: z
+            .object({
+                gain: z
+                    .string()
+                    .regex(/^ADC_GAIN_[0-9_]+$/, 'an ADC_GAIN_* name')
+                    .describe('zephyr,gain, e.g. "ADC_GAIN_1_6".'),
+                reference: z
+                    .string()
+                    .regex(/^ADC_REF_[A-Z0-9_]+$/, 'an ADC_REF_* name')
+                    .describe('zephyr,reference, e.g. "ADC_REF_INTERNAL".'),
+                acquisitionTime: DtToken.optional().describe(
+                    'zephyr,acquisition-time (default ADC_ACQ_TIME_DEFAULT).',
+                ),
+                inputPositive: DtToken.optional().describe(
+                    'zephyr,input-positive, e.g. "NRF_SAADC_AIN4"; required on nRF.',
+                ),
+                resolution: z.number().int().min(1).max(24).optional(),
+                oversampling: z.number().int().min(0).max(8).optional(),
+            })
+            .optional()
+            .describe(
+                'The channel node to write on the ADC. Leave it out when the ' +
+                    'board already configures the channel.',
+            ),
+    })
+    .describe('One ADC channel, for the board generator.')
+
+export const BoardBatterySchema = z
+    .object({
+        adc: BoardAdcChannelSchema.optional().describe(
+            'The ADC channel the cell is read on, behind `divider`.',
+        ),
+        divider: z
+            .object({
+                outputOhms: z.number().int().positive(),
+                fullOhms: z.number().int().positive(),
+            })
+            .refine((d) => d.outputOhms <= d.fullOhms, {
+                message: 'outputOhms is part of fullOhms, so it cannot be larger',
+            })
+            .optional()
+            .describe('Vadc = Vcell * outputOhms / fullOhms (default 1 / 2).'),
+        fuelGauge: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Node label of a fuel gauge or PMIC the board defines.'),
+        charging: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Charger status pin, active while charging.'),
+        ocvCurve: z
+            .array(
+                z.tuple([
+                    z.number().int().min(0).max(10000),
+                    z.number().int().min(0).max(100),
+                ]),
+            )
+            .min(2)
+            .optional()
+            .describe(
+                '[millivolts, percent] breakpoints by strictly descending voltage.',
+            ),
+    })
+    .superRefine((b, ctx) => {
+        if (!b.adc === !b.fuelGauge)
+            ctx.addIssue({
+                code: 'custom',
+                message: 'set exactly one of adc and fuelGauge',
+            })
+        if (b.divider && !b.adc)
+            ctx.addIssue({
+                code: 'custom',
+                path: ['divider'],
+                message: 'divider goes with adc',
+            })
+        const mv = (b.ocvCurve ?? []).map(([v]) => v)
+        if (mv.some((v, i) => i > 0 && v >= mv[i - 1]))
+            ctx.addIssue({
+                code: 'custom',
+                path: ['ocvCurve'],
+                message: 'ocvCurve voltages must strictly descend',
+            })
+    })
+    .describe('The battery and where its charge is measured (remappr,battery).')
+
+export const STATUS_LED_FUNCTIONS = [
+    'link',
+    'pairing',
+    'bonded',
+    'heartbeat',
+    'activity',
+    'battery',
+] as const
+
+export const BoardStatusLedSchema = z
+    .object({
+        function: z.enum(STATUS_LED_FUNCTIONS),
+        pin: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('The LED pin; the generator declares the LED.'),
+        activeLow: z
+            .boolean()
+            .optional()
+            .describe('With `pin`: the LED lights when the pin is low.'),
+        led: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Node label of an LED the board already declares, e.g. "led0".'),
+        blinkMs: z.number().int().min(0).max(60000).optional(),
+        flashMs: z.number().int().min(0).max(60000).optional(),
+    })
+    .superRefine((s, ctx) => {
+        if (!s.pin === !s.led)
+            ctx.addIssue({ code: 'custom', message: 'set exactly one of pin and led' })
+        if (s.activeLow !== undefined && !s.pin)
+            ctx.addIssue({
+                code: 'custom',
+                path: ['activeLow'],
+                message: 'activeLow goes with pin',
+            })
+    })
+    .describe('A status LED and what it shows (remappr,status-led).')
+
+export const BoardPowerOffSchema = z
+    .object({
+        partialWake: z
+            .boolean()
+            .optional()
+            .describe('Power off even when only some inputs can wake the device.'),
+        wakeFirst: z
+            .array(z.string().min(1))
+            .optional()
+            .describe(
+                'Input pins that take their wake-up line before others on it ' +
+                    '(chips with dedicated wake lines).',
+            ),
+    })
+    .describe('Power-off choices the chip leaves open (remappr,power-off).')
 
 // pattern-check: skip declarative zod schemas mirroring TBL_JOYSTICK and the gamepad actions
 const JOYSTICK_AXES = ['x', 'y', 'z', 'rx', 'ry', 'rz'] as const

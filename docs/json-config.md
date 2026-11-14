@@ -320,6 +320,37 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   `node.sensor.defaults` as `remappr,setting-defaults`; its driver turns on
   from devicetree.
 
+- `board.battery` is the battery (`remappr,battery`): `adc` (`{ adc, channel,
+  setup? }`, with `divider: { outputOhms, fullOhms }`) or `fuelGauge` (the
+  node label of a gauge the board defines), never both; optional `charging`
+  pin and `ocvCurve` (`[[mV, %], ...]`, voltages strictly descending). An ADC
+  `setup` (`gain`, `reference`, optional `acquisitionTime`, `inputPositive`,
+  `resolution`, `oversampling`) writes the channel node on the ADC; leave it
+  out when the board configures the channel. An nRF SAADC channel needs
+  `inputPositive` (`"NRF_SAADC_AIN4"`).
+- `board.statusLeds` are status LEDs (`remappr,status-led`): `function`
+  (`link`, `pairing`, `bonded`, `heartbeat`, `activity`, `battery`) and either
+  `led` (an LED the board declares, `"led0"`) or `pin` (with `activeLow`), on
+  which the shield declares the LED; optional `blinkMs`, `flashMs`.
+- `board.powerOff` is the power-off policy (`remappr,power-off`):
+  `partialWake` and `wakeFirst` (input pins that take their wake-up line
+  first; they are the board's inputs, so they are not new pins). On STM32 it
+  also turns on the PWR wake-up lines.
+
+  ```jsonc
+  "board": {
+    "battery": {
+      "adc": { "adc": "adc", "channel": 4,
+               "setup": { "gain": "ADC_GAIN_1_6", "reference": "ADC_REF_INTERNAL",
+                          "inputPositive": "NRF_SAADC_AIN4" } },
+      "divider": { "outputOhms": 10000, "fullOhms": 14000 },
+      "charging": "P0.29"
+    },
+    "statusLeds": [{ "function": "link", "led": "led0" }],
+    "powerOff": { "partialWake": true }
+  }
+  ```
+
   ```jsonc
   "board": {
     "sensor": {

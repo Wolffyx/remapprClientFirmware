@@ -23,7 +23,13 @@ import type {
     CanonLayer,
     ConfigKeymap,
 } from '../../types'
-import { emitEncoders, emitRgb, emitSensor } from './boardHardware'
+import { AdcBook } from './boardAdc'
+import {
+    emitEncoders,
+    emitRgb,
+    emitSensor,
+    type PeripheralFragment,
+} from './boardHardware'
 import {
     type MatrixWiring,
     matrixWiring,
@@ -31,10 +37,14 @@ import {
 } from './boardMatrix'
 import { boardTarget, PinBook } from './boardPins'
 import { placementTokens } from './boardPlacement'
+import { emitBattery, emitPowerOff, emitStatusLeds } from './boardPower'
 import { dtComment } from './dtText'
 
 /** HID Usage Page 0x07 (Keyboard/Keypad) — the only page a `&key` action emits. */
 const HID_PAGE_KEYBOARD = 7
+
+/** Each line once, in first-seen order (two fragments may need one header). */
+const unique = (lines: string[]): string[] => [...new Set(lines)]
 
 /** Devicetree-safe shield slug (lowercase, `_`-joined) — e.g. `nrf52840_test`. */
 function shieldSlug(config: ConfigKeymap): string {
@@ -382,9 +392,15 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         : []
 
     // Optional peripheral overlay nodes (empty fragments when unconfigured).
-    const rgb = emitRgb(config, book, diag)
-    const enc = emitEncoders(config, book, diag)
-    const sensor = emitSensor(config, book, diag)
+    const adc = new AdcBook(target.soc, diag)
+    const frags: PeripheralFragment[] = [
+        emitRgb(config, book, diag),
+        emitEncoders(config, book, diag),
+        emitSensor(config, book, diag),
+        emitBattery(config, book, adc, diag),
+        emitStatusLeds(config, book, diag),
+        emitPowerOff(config, book),
+    ]
 
     const overlay: string[] = [
         `/*`,
@@ -404,13 +420,10 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         `#include <dt-bindings/remappr/layout.h>`,
         `#include <remappr/keymap-tokens.dtsi>`,
         `#include <remappr/behavior-tokens.dtsi>`,
-        ...rgb.includes,
-        ...enc.includes,
-        ...sensor.includes,
+        ...unique([...frags.flatMap((f) => f.includes), ...adc.includes()]),
         ...(keyNodes.length ? [``, `/ {`, ...keyNodes, `};`] : []),
-        ...(rgb.nodes.length ? ['', ...rgb.nodes] : []),
-        ...(enc.nodes.length ? ['', ...enc.nodes] : []),
-        ...(sensor.nodes.length ? ['', ...sensor.nodes] : []),
+        ...frags.flatMap((f) => (f.nodes.length ? ['', ...f.nodes] : [])),
+        ...adc.blocks(),
         ``,
     ]
 
@@ -427,8 +440,7 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         `# subsystem itself must be on.`,
         `config INPUT`,
         `\tdefault y`,
-        ...rgb.kconfig,
-        ...enc.kconfig,
+        ...frags.flatMap((f) => f.kconfig),
         ...storageDefconfig(config),
         ``,
         `endif # SHIELD_${SHIELD}`,

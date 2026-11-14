@@ -779,6 +779,12 @@ export interface ConfigBoard {
     /** A motion sensor on SPI (opt-in; emits its node with the product's
      *  sensor defaults from node.sensor). */
     sensor?: BoardSensor
+    /** The battery and where its charge is read (remappr,battery). */
+    battery?: BoardBattery
+    /** Status LEDs and what each shows (remappr,status-led). */
+    statusLeds?: BoardStatusLed[]
+    /** Power-off choices the chip leaves open (remappr,power-off). */
+    powerOff?: BoardPowerOff
     /** Pins the board already uses for a bus it owns (console or node-bus
      *  UART, a coprocessor SPI); the generator refuses any other use of one. */
     reservedPins?: { pin: string; use: string }[]
@@ -801,6 +807,70 @@ export interface BoardSensor {
     reset?: string
     /** SPI clock, Hz (default 8000000). */
     spiMaxHz?: number
+}
+
+/** A devicetree macro token (`ADC_GAIN_1_6`) or a number. */
+export type DtToken = string | number
+
+/** One ADC channel. `setup` is the channel node the generator writes on the
+ *  ADC; leave it out when the board configures the channel itself. */
+export interface BoardAdcChannel {
+    /** Node label of the ADC ("adc", "adc1"). */
+    adc: string
+    channel: number
+    setup?: {
+        /** ADC_GAIN_* name. */
+        gain: string
+        /** ADC_REF_* name. */
+        reference: string
+        /** Default ADC_ACQ_TIME_DEFAULT. */
+        acquisitionTime?: DtToken
+        /** The analog input (`NRF_SAADC_AIN4`); required on nRF. */
+        inputPositive?: DtToken
+        resolution?: number
+        oversampling?: number
+    }
+}
+
+/** The battery: an ADC channel behind a divider, or a fuel gauge. */
+export interface BoardBattery {
+    adc?: BoardAdcChannel
+    /** Vadc = Vcell * outputOhms / fullOhms. */
+    divider?: { outputOhms: number; fullOhms: number }
+    /** Node label of a fuel gauge or PMIC the board defines. */
+    fuelGauge?: string
+    /** Charger status pin, active while charging. */
+    charging?: string
+    /** [millivolts, percent] by strictly descending voltage. */
+    ocvCurve?: [number, number][]
+}
+
+export type StatusLedFunction =
+    | 'link'
+    | 'pairing'
+    | 'bonded'
+    | 'heartbeat'
+    | 'activity'
+    | 'battery'
+
+/** A status LED: a pin the generator declares an LED on, or an LED the
+ *  board already has (`led`). */
+export interface BoardStatusLed {
+    function: StatusLedFunction
+    pin?: string
+    /** With `pin`: lit when the pin is low. */
+    activeLow?: boolean
+    /** Node label of a board LED ("led0"). */
+    led?: string
+    blinkMs?: number
+    flashMs?: number
+}
+
+export interface BoardPowerOff {
+    /** Power off even when only some inputs can wake the device. */
+    partialWake?: boolean
+    /** Input pins that take their wake-up line first. */
+    wakeFirst?: string[]
 }
 
 /** A sensor setting's value in a document or JSON config: a boolean (BOOL), a
