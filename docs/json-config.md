@@ -323,9 +323,10 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
 - `board.battery` is the battery (`remappr,battery`): `adc` (`{ adc, channel,
   setup? }`, with `divider: { outputOhms, fullOhms }`) or `fuelGauge` (the
   node label of a gauge the board defines), never both; optional `charging`
-  pin and `ocvCurve` (`[[mV, %], ...]`, voltages strictly descending). An ADC
-  `setup` (`gain`, `reference`, optional `acquisitionTime`, `inputPositive`,
-  `resolution`, `oversampling`) writes the channel node on the ADC; leave it
+  pin (active low with a pull-up; `chargingActiveHigh: true` for a charger
+  that drives it high) and `ocvCurve` (`[[mV, %], ...]`, voltages strictly descending). An ADC
+  `setup` (`gain`, `reference`, `resolution` in bits, optional
+  `acquisitionTime`, `inputPositive`, `oversampling`) writes the channel node on the ADC; leave it
   out when the board configures the channel. An nRF SAADC channel needs
   `inputPositive` (`"NRF_SAADC_AIN4"`).
 - `board.statusLeds` are status LEDs (`remappr,status-led`): `function`

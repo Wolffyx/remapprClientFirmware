@@ -833,7 +833,8 @@ export interface BoardAdcChannel {
         acquisitionTime?: DtToken
         /** The analog input (`NRF_SAADC_AIN4`); required on nRF. */
         inputPositive?: DtToken
-        resolution?: number
+        /** zephyr,resolution in bits; the channel setup fails without it. */
+        resolution: number
         oversampling?: number
     }
 }
@@ -847,6 +848,8 @@ export interface BoardBattery {
     fuelGauge?: string
     /** Charger status pin, active while charging. */
     charging?: string
+    /** The status pin is high while charging (default: low, pulled up). */
+    chargingActiveHigh?: boolean
     /** [millivolts, percent] by strictly descending voltage. */
     ocvCurve?: [number, number][]
 }
