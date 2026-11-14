@@ -257,6 +257,67 @@ describe('L1.6 cells, duplicates and reserved pins are validated', () => {
         expect(errs.some((m) => /keys 0 and 1 .*cell \(0, 1\)/.test(m))).toBe(true)
     })
 
+    /** Key 0 on (0, 0), keys 1 and 2 on (0, 1) with the given option tags. */
+    const alternates = (
+        o1: [number, number] | undefined,
+        o2: [number, number] | undefined,
+    ): string => {
+        const json = JSON.parse(
+            pad(
+                { matrix: { rows: ROWS1, cols: COLS2 } },
+                {
+                    hardware: {
+                        transform: { rows: 1, columns: 2, map: [[0, 0], [0, 1], [0, 1]] },
+                    },
+                    layoutOptions: [
+                        { label: 'Enter', choices: ['ANSI', 'ISO'] },
+                        { label: 'Split Backspace' },
+                    ],
+                },
+            ),
+        )
+        json.keyboard.keys = [
+            { x: 0, y: 0 },
+            { x: 1, y: 0, ...(o1 ? { option: o1 } : {}) },
+            { x: 1, y: 1, ...(o2 ? { option: o2 } : {}) },
+        ]
+        json.layers[0].bindings = ['A', 'ENTER', 'ENTER']
+        return JSON.stringify(json)
+    }
+
+    it('lets choices of one layout option share a cell; it reports the default choice', () => {
+        const res = compile(alternates([0, 0], [0, 1]))
+        expect(errorsOf(res)).toEqual([])
+        const ov = overlayOf(res)
+        // Every position keeps its entry (the firmware counts them), and both
+        // carry choice 0's position, so the cell reports one key whichever
+        // entry wins.
+        expect(ov.match(/MATRIX_KEY\(0, 1, REMAPPR_KB_POS_BASE \+ 1\)/g)).toHaveLength(2)
+        expect(ov).not.toContain('REMAPPR_KB_POS_BASE + 2')
+    })
+
+    it('reports choice 0 even when it comes after the other choice', () => {
+        const ov = overlayOf(compile(alternates([0, 1], [0, 0])))
+        expect(ov.match(/MATRIX_KEY\(0, 1, REMAPPR_KB_POS_BASE \+ 2\)/g)).toHaveLength(2)
+        expect(ov).not.toContain('REMAPPR_KB_POS_BASE + 1)')
+    })
+
+    it.skipIf(!TC)('a board with layout-option alternates compiles with dtc', () => {
+        const r = dtcCheck(TC!, overlayOf(compile(alternates([0, 0], [0, 1]))))
+        expect(r.log).toBe('')
+    })
+
+    it.each([
+        ['the same choice of one option', [0, 1], [0, 1]],
+        ['choices of different options', [0, 1], [1, 1]],
+        ['an untagged key and an option key', undefined, [0, 1]],
+    ] as const)('is still an error for %s on one cell', (_, o1, o2) => {
+        const errs = errorsOf(
+            compile(alternates(o1 as [number, number] | undefined, [...o2] as [number, number])),
+        )
+        expect(errs.some((m) => /keys 1 and 2 share matrix cell \(0, 1\)/.test(m))).toBe(true)
+    })
+
     it('is an error when a row pin is also a column pin', () => {
         const res = compile(
             pad({ matrix: { rows: ['PA3'], cols: ['PA4', '&gpioa 3 GPIO_ACTIVE_HIGH'] } }),
