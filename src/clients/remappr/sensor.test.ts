@@ -18,6 +18,7 @@ import {
 } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
 import { buildSensorApi, describeSensors, sensorIo, servesSensor } from './sensor'
+import { plainMutations } from './plainRpc.fixture'
 
 const ascii = (s: string): number[] => [...s].map((c) => c.charCodeAt(0))
 
@@ -311,7 +312,7 @@ function fakeRpc(over?: (c: Call) => UniversalReply | undefined) {
         status: Status.OK,
         data,
     })
-    const rpc = {
+    const rpc = plainMutations({
         callUniversalPlain: (
             ns: number,
             verb: number,
@@ -337,7 +338,7 @@ function fakeRpc(over?: (c: Call) => UniversalReply | undefined) {
                     return Promise.resolve(ok(STATUS))
             }
         },
-    } as unknown as RemapprRpc
+    }) as unknown as RemapprRpc
     return { rpc, calls }
 }
 

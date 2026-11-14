@@ -95,6 +95,20 @@ async function call(
     return reply.data
 }
 
+/** One mutating SENSOR verb: sealed (§19) when the RPC holds a session. */
+async function mutate(
+    rpc: RemapprRpc,
+    verb: number,
+    name: string,
+    arg: Uint8Array,
+    to?: CallTarget,
+): Promise<Uint8Array> {
+    const reply = await rpc.callMutation(Namespace.SENSOR, verb, arg, to)
+    if (reply.status !== Status.OK)
+        throw new Error(`${name} → ${statusName(reply.status)}`)
+    return reply.data
+}
+
 const bytes = (...b: number[]): Uint8Array => new Uint8Array(b)
 
 /** What a device's PART namespace speaks: ns_version 1 (channels) or 0 (the
@@ -265,7 +279,7 @@ export async function setSensorSetting(
     opts: SensorCallOpts = {},
 ): Promise<number> {
     return parseSensorApplied(
-        await call(
+        await mutate(
             rpc,
             SensorVerb.SET_SETTING,
             'SET_SETTING',
@@ -287,7 +301,7 @@ export async function runSensorProcedure(
     opts: SensorCallOpts = {},
 ): Promise<SensorStatusRecord> {
     return parseSensorStatus(
-        await call(
+        await mutate(
             rpc,
             SensorVerb.RUN_PROCEDURE,
             'RUN_PROCEDURE',

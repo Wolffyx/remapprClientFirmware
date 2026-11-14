@@ -121,8 +121,32 @@ offset  size  field
 
 `0xE1` is the sealed (AEAD) envelope a session uses after the
 `CONTROL_AUTH_BEGIN` / `CONTROL_AUTH_FINISH` handshake (`auth.ts`, RUCP §19).
-Dev builds have control auth disabled and serve the mutating verbs in
-plaintext, which is how the client sends them today.
+The envelope is `ctr_le32 || AES-128-CCM(plaintext) || tag16`; a request's
+plaintext is zero-padded to fill the report. It comes in three forms:
+
+| Form | Request | Request plaintext |
+| --- | --- | --- |
+| Legacy | `[0xE1][env]` | inner request, padded to 43 |
+| Direct universal (target 0) | `[0xE2][0xE1][env]` | `UCH ‖ inner`, padded to 42 |
+| Relayed (§6.3) | `[0xE2][UCH][0xE1][env]` | `UCH ‖ inner`, padded to 34 |
+
+A reply uses the same form, but the device seals exactly its response, with
+no padding (a relayed ack is `UCH ‖ 6-byte header` = 14 bytes). The length is
+not on the wire, so the client opens a reply by trial: each length from the
+smallest possible reply up, until one passes the tag. The device→host counter
+must rise within a session; a reply at or below the last one is refused as a
+replay. A request the device cannot open (no session, a stale counter,
+tampering) gets the bare plaintext header `cmd 0, seq 0, ERR_AUTH`, or on the
+relayed form that header after the echoed outer UCH.
+
+The keyboard adapter runs the handshake when the device sets `Cap.AUTH` and
+binds the session to the RPC (`rpc.bindSession`). From then on
+`rpc.callWrite` (config staging) and `rpc.callMutation` (namespace verbs to the
+device itself) are sealed. On a plaintext ERR_AUTH (the device lost the
+session: a reboot, another host's handshake) the RPC runs the handshake once
+more and resends; the refused verb never ran. Without a session (dev builds
+have control auth off, and mice, joysticks and the dongle hold none) the same
+calls go in plaintext.
 
 ### 3.2 Universal frame
 
@@ -822,8 +846,10 @@ catalog actions `dev:<action>[:dpi]` for DPI actions. Joystick: `btn:<pos>`,
    yet.
 2. **JOYSTICK namespace** — provisional (`ns_version` 0). It has run on
    hardware, over USB and through a dongle; the layouts are not frozen yet.
-3. **Sealing** — mutating verbs go plaintext while control auth is
-   dev-disabled; a product build seals them (RUCP §19).
+3. **Sealing** — the client seals every mutating verb to a keyboard that
+   advertises `Cap.AUTH` (§3.1). The direct and relayed sealed forms are
+   tested against a fake device that seals like the firmware, not yet on an
+   auth-on board.
 4. **OTA over the wire** — not bound to a transport yet.
 5. **Live combos / macros / tap-dance RPC** — they ship in the blob; no live
    verbs.

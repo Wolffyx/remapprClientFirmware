@@ -34,6 +34,16 @@ export const SEAL_OVERHEAD = 20
  *  but is not yet validated against the firmware relay decoder. */
 export const RELAY_SEAL_PLAIN = 34
 
+/** Universal-sealed DIRECT (§6.3, target 0) AEAD-plaintext size: the host pads
+ *  `UCH(8) || inner` to this so the frame fills the 64-byte report and the
+ *  device derives the plaintext length from `env_len`. Budget: 64 − 1(0xE2) −
+ *  1(0xE1) − 4(ctr) − 16(tag) = 42. Matches control_cli SEAL_PLAIN_DIRECT. */
+export const DIRECT_SEAL_PLAIN = 42
+
+/** An inner response header: cmd, seq, status, pad, data_len u16. The smallest
+ *  plaintext a sealed reply can carry. */
+export const RESP_HDR_LEN = 6
+
 /** Legacy sealed (0xE1) config-chunk size — the firmware's legacy data-plane
  *  figure (the universal-sealed GET_LIMITS value of 16 is a different path).
  *  Config writes ride the legacy sealed path, so they use this. */
