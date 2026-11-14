@@ -305,13 +305,27 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
     (`[{ "pin": "PA9", "use": "console UART TX" }]`) is an error. Choices of
     one layout option (`option: [g, 0]` and `[g, 1]`, an ANSI/ISO Enter) may
     share a cell; the cell reports the lowest choice's position. An encoder
-    or slider key needs a cell of its own (its push switch); off-matrix inputs
-    are not generated yet.
+    or slider key needs a cell of its own (its push switch in the matrix), or
+    its push switch in `buttons`.
   - Each key is placed at its own position, size and rotation (whole
     key-units and degrees; fractional values are rounded, with a warning).
   - `maxLayers` (1..32) is how many layers the app may fill without a reflash;
     default the authored layers, at least 4.
-  - `encoders` are `gpio-qdec` nodes: `a`, `b`, `steps`, `axis`.
+  - `encoders` are `gpio-qdec` nodes: `a`, `b`, `steps`, `axis`, and the
+    timings `sampleTimeUs` (2000), `idleTimeoutMs` (200) and `idlePollTimeUs`
+    (5000; 0 leaves it out, so the pins interrupt).
+  - `buttons` are off-matrix keys on their own pins (`[{ "key", "pin",
+    "code"? }]`): a `gpio-keys` child and a `remappr,extra-input` node with the
+    key's rect, in 1/100 key-unit. The button keys must be the last keys of
+    `keyboard.keys`, in `buttons` order, since their engine positions follow
+    the matrix keys'. `code` is an `INPUT_KEY_*`/`INPUT_BTN_*` code, default
+    `INPUT_KEY_F13` onward. A board whose keys are all buttons needs no
+    `matrix`: its keymap node has no scan and lists the button codes as
+    `extra-input-codes`, so its layers and `max-layers` still reach the
+    firmware.
+  - `sliders` are analog sliders (`remappr,slider`) on an ADC channel (`adc`,
+    as for the battery), with optional `function` (`rgb-brightness`),
+    `deadband` and `pollMs`.
   - A `keyboard.hardware.ws2812` strip goes on an nRF SPIM, or on an STM32 SPI
     with `ws2812.stm32` (its pinctrl and GPDMA). The bit frames follow
     `spiMaxFrequency`; a chain over 64 LEDs raises `CONFIG_REMAPPR_RGB_LED_MAX`.
@@ -320,7 +334,10 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   `cs`, `reset`) its pins, as raw `&gpioN pin FLAGS` specs or friendly labels;
   `spiMaxHz` defaults to 8 MHz. The shield gets the sensor's node with
   `node.sensor.defaults` as `remappr,setting-defaults`; its driver turns on
-  from devicetree.
+  from devicetree. `cpi` (`{ "native", "min"?, "max"?, "step"? }`) adds the
+  `remappr,mouse` node: the resolution the sensor reports and the DPI range a
+  config may pick. Without it the device reports no pointer and refuses
+  SET_DPI, so a mouse needs it.
 
 - `board.battery` is the battery (`remappr,battery`): `adc` (`{ adc, channel,
   setup? }`, with `divider: { outputOhms, fullOhms }`) or `fuelGauge` (the

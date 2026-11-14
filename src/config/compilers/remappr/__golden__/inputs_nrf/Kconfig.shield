@@ -1,0 +1,2 @@
+config SHIELD_INPUTS_NRF
+	def_bool $(shields_list_contains,inputs_nrf)

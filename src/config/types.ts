@@ -819,6 +819,29 @@ export interface BoardEncoder {
     steps?: number
     /** Zephyr relative axis code the qdec emits, e.g. "INPUT_REL_WHEEL" (default). */
     axis?: string
+    /** Phase sample period while turning, us. Default 2000. */
+    sampleTimeUs?: number
+    /** No step this long ends active sampling, ms. Default 200. */
+    idleTimeoutMs?: number
+    /** Idle poll period, us; 0 = pin interrupts. Default 5000. */
+    idlePollTimeUs?: number
+}
+
+// pattern-check: skip plain data interfaces for the input board fields
+/** An off-matrix button: a keyboard.keys entry after every matrix key. */
+export interface BoardButton {
+    key: number
+    pin: string
+    /** INPUT_KEY_* / INPUT_BTN_* code; default INPUT_KEY_F13 onward. */
+    code?: string
+}
+
+/** An analog slider on an ADC channel. */
+export interface BoardSlider {
+    adc: BoardAdcChannel
+    function?: 'rgb-brightness'
+    deadband?: number
+    pollMs?: number
 }
 
 export interface ConfigBoard {
@@ -852,6 +875,10 @@ export interface ConfigBoard {
     radioLink?: BoardRadioLink
     /** 2.4 GHz radio facts (remappr,radio-config). */
     radio?: { channelSeed: number[] }
+    /** Off-matrix buttons on their own pins (remappr,extra-input). */
+    buttons?: BoardButton[]
+    /** Analog sliders (remappr,slider). */
+    sliders?: BoardSlider[]
     /** Pins the board already uses for a bus it owns (console or node-bus
      *  UART, a coprocessor SPI); the generator refuses any other use of one. */
     reservedPins?: { pin: string; use: string }[]
@@ -874,6 +901,8 @@ export interface BoardSensor {
     reset?: string
     /** SPI clock, Hz (default 8000000). */
     spiMaxHz?: number
+    /** The pointer (remappr,mouse): native resolution and the DPI range. */
+    cpi?: { native: number; min?: number; max?: number; step?: number }
 }
 
 /** A devicetree macro token (`ADC_GAIN_1_6`) or a number. */

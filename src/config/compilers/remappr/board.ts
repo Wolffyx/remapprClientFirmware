@@ -37,7 +37,14 @@ import {
 } from './boardMatrix'
 import { boardTarget, PinBook } from './boardPins'
 import { emitNodeBus, emitRadioConfig, emitRadioLink } from './boardLink'
-import { placementTokens } from './boardPlacement'
+import {
+    buttonCodes,
+    emitButtonPositions,
+    emitButtons,
+    emitSliders,
+    matrixKeyCount,
+} from './boardInputs'
+import { layoutOrigin, type Origin, placementTokens } from './boardPlacement'
 import { emitBattery, emitPowerOff, emitStatusLeds } from './boardPower'
 import { dtComment } from './dtText'
 
@@ -180,6 +187,25 @@ function storageDefconfig(config: ConfigKeymap): string[] {
     ]
 }
 
+/** The config as the matrix nodes see it: its first `m` keys (the rest are
+ *  off-matrix buttons), with the layers and the transform cut to match. */
+function matrixView(config: ConfigKeymap, m: number): ConfigKeymap {
+    const n = config.keyboard.keys.length
+    if (m === n) return config
+    const hw = config.keyboard.hardware
+    return {
+        ...config,
+        keyboard: {
+            ...config.keyboard,
+            keys: config.keyboard.keys.slice(0, m),
+            ...(hw?.transform
+                ? { hardware: { ...hw, transform: { ...hw.transform, map: hw.transform.map.slice(0, m) } } }
+                : {}),
+        },
+        layers: config.layers.map((l) => ({ ...l, bindings: l.bindings.slice(0, m) })),
+    }
+}
+
 /** Personalities whose board may have no key matrix (their inputs are wired
  *  elsewhere), so a board without matrix pins is not a mistake. */
 const MATRIX_OPTIONAL = new Set(['mouse', 'joystick', 'dongle'])
@@ -273,17 +299,19 @@ function checkCells(
 
 /** An encoder or slider key is only a matrix key when its wiring says so (an
  *  encoder's push switch). Without that it would get a made-up cell, which can
- *  collide with a real key; its own node (remappr,extra-input or
- *  remappr,slider) is not generated yet. */
+ *  collide with a real key. Its hardware is declared apart: the rotation in
+ *  board.encoders, the wiper in board.sliders, a push switch on its own pin in
+ *  board.buttons; the key itself has no engine position to draw yet. */
 function checkElements(config: ConfigKeymap, diag: DiagnosticBag): void {
     if (config.keyboard.hardware?.transform) return
     config.keyboard.keys.forEach((k, i) => {
         if (!k.element || k.matrix) return
         const what = k.element === 'encoder' ? 'an encoder' : 'a slider'
+        const where = k.element === 'encoder' ? 'board.encoders' : 'board.sliders'
         diag.error(
-            `key ${i} is ${what} with no matrix cell: off-matrix inputs ` +
-                `(remappr,extra-input, remappr,slider) are not generated yet. ` +
-                `Give it a matrix cell if its switch is in the matrix`,
+            `key ${i} is ${what} with no matrix cell. Declare its hardware in ` +
+                `${where} (a push switch on its own pin in board.buttons) and ` +
+                `give the key a matrix cell only if its switch is in the matrix`,
             ['keyboard', 'keys', i, 'element'],
         )
     })
@@ -376,16 +404,24 @@ function maxLayers(config: ConfigKeymap, diag: DiagnosticBag): number {
 
 /** The `remappr,keymap` node: placement, layer capacity and the default
  *  layers, scanning the matrix node. */
+/** How the keymap node's positions are read: from the kbd_matrix scan, or
+ *  (a board whose keys are all buttons) from these off-matrix input codes. */
+type KeymapSource = { scan: true } | { extraCodes: string[] }
+
 function keymapNode(
     config: ConfigKeymap,
-    rowCounts: number[],
+    layout: { rowCounts: number[]; origin: Origin },
+    source: KeymapSource,
     diag: DiagnosticBag,
 ): string[] {
-    const placement = placementTokens(config.keyboard.keys, diag)
+    const { rowCounts, origin } = layout
+    const placement = placementTokens(config.keyboard.keys, diag, origin)
     return [
         `\tremappr_keymap: remappr-keymap {`,
         `\t\tcompatible = "remappr,keymap";`,
-        `\t\tscan = <&kbd_matrix>;`,
+        ...('scan' in source
+            ? [`\t\tscan = <&kbd_matrix>;`]
+            : [`\t\textra-input-codes = <${source.extraCodes.join(' ')}>;`]),
         `\t\tcolumns = <${Math.max(1, ...rowCounts)}>;`,
         `\t\trows = <${rowCounts.join(' ')}>;`,
         `\t\tmax-layers = <${maxLayers(config, diag)}>;`,
@@ -404,14 +440,28 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     const book = new PinBook(target, diag)
     book.reserve(config.board?.reservedPins ?? [])
 
-    const rowCounts = visualRowCounts(config.keyboard.keys)
-    const wiring = planMatrix(config, diag)
+    // The matrix nodes take the keys before the off-matrix buttons; both lay
+    // out from one origin so the drawn board lines up.
+    const origin = layoutOrigin(config.keyboard.keys)
+    const m = matrixKeyCount(config, diag)
+    const mx = matrixView(config, m)
+    const rowCounts = visualRowCounts(mx.keyboard.keys)
+    const wiring = m > 0 ? planMatrix(mx, diag) : null
+    const codes = buttonCodes(config, diag)
+    const buttonsOnly = m === 0 && codes.length > 0
     const keyNodes = wiring
         ? [
-              ...matrixNode(config, wiring, book, rowCounts, diag),
-              ...keymapNode(config, rowCounts, diag),
+              ...matrixNode(mx, wiring, book, rowCounts, diag),
+              ...keymapNode(mx, { rowCounts, origin }, { scan: true }, diag),
           ]
-        : []
+        : buttonsOnly
+          ? keymapNode(
+                config,
+                { rowCounts: visualRowCounts(config.keyboard.keys), origin },
+                { extraCodes: codes },
+                diag,
+            )
+          : []
 
     // Optional peripheral overlay nodes (empty fragments when unconfigured).
     const adc = new AdcBook(target.soc, diag)
@@ -425,6 +475,9 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         emitNodeBus(config, book, diag),
         emitRadioLink(config, book, diag),
         emitRadioConfig(config, diag),
+        emitButtons(config, codes, book),
+        ...(buttonsOnly ? [] : [emitButtonPositions(config, codes, origin, diag)]),
+        emitSliders(config, adc),
     ]
 
     const overlay: string[] = [
