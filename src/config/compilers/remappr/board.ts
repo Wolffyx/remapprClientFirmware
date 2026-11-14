@@ -30,6 +30,7 @@ import {
     type SourcedPin,
 } from './boardMatrix'
 import { boardTarget, PinBook } from './boardPins'
+import { placementTokens } from './boardPlacement'
 import { dtComment } from './dtText'
 
 /** HID Usage Page 0x07 (Keyboard/Keypad) — the only page a `&key` action emits. */
@@ -322,6 +323,25 @@ function matrixNode(
     ]
 }
 
+/** Layers the app may fill without a reflash when board.maxLayers is not set
+ *  (the firmware sizes its layer store from max-layers). */
+const DEFAULT_MAX_LAYERS = 4
+
+/** The layer capacity: board.maxLayers, else the authored layers with room to
+ *  grow. Equal to the authored count, as before, a one-layer bootstrap could
+ *  never take a second layer from the app. */
+function maxLayers(config: ConfigKeymap, diag: DiagnosticBag): number {
+    const authored = config.layers.length
+    const set = config.board?.maxLayers
+    if (set === undefined) return Math.max(authored, DEFAULT_MAX_LAYERS)
+    if (set < authored)
+        diag.error(
+            `board.maxLayers ${set} is below the ${authored} layers authored`,
+            ['board', 'maxLayers'],
+        )
+    return Math.max(set, authored)
+}
+
 /** The `remappr,keymap` node: placement, layer capacity and the default
  *  layers, scanning the matrix node. */
 function keymapNode(
@@ -329,16 +349,16 @@ function keymapNode(
     rowCounts: number[],
     diag: DiagnosticBag,
 ): string[] {
-    const placementTokens = config.keyboard.keys.map(() => 'KEY()')
+    const placement = placementTokens(config.keyboard.keys, diag)
     return [
         `\tremappr_keymap: remappr-keymap {`,
         `\t\tcompatible = "remappr,keymap";`,
         `\t\tscan = <&kbd_matrix>;`,
         `\t\tcolumns = <${Math.max(1, ...rowCounts)}>;`,
         `\t\trows = <${rowCounts.join(' ')}>;`,
-        `\t\tmax-layers = <${config.layers.length}>;`,
+        `\t\tmax-layers = <${maxLayers(config, diag)}>;`,
         `\t\tplacement = <`,
-        chunkByRows(placementTokens, rowCounts),
+        chunkByRows(placement, rowCounts),
         `\t\t>;`,
         ...config.layers.flatMap((l, i) => emitLayer(l, i, rowCounts, diag)),
         `\t};`,

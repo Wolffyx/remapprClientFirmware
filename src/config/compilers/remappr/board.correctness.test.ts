@@ -468,3 +468,76 @@ describe('L1.8 free strings reach devicetree checked', () => {
         expect(() => parseKeymap(pad({ encoders: [{ a: 'PA0', b: 'PA1', steps: 4 }] }))).not.toThrow()
     })
 })
+
+describe('L1.9 geometry in KEY() and max-layers', () => {
+    const geo = (keys: Record<string, unknown>[], board: Record<string, unknown> = {}): string => {
+        const json = JSON.parse(
+            pad({
+                matrix: {
+                    rows: ROWS1,
+                    cols: Array.from({ length: keys.length }, (_, i) => `&gpio1 ${i} GPIO_ACTIVE_HIGH`),
+                },
+                ...board,
+            }),
+        )
+        json.keyboard.keys = keys
+        json.keyboard.hardware.transform = {
+            rows: 1,
+            columns: keys.length,
+            map: keys.map((_, i) => [0, i]),
+        }
+        json.layers[0].bindings = keys.map(() => 'A')
+        return JSON.stringify(json)
+    }
+
+    it('places each key at its own x/y with its size and rotation', () => {
+        const ov = overlayOf(
+            compile(
+                geo([
+                    { x: 0, y: 0 },
+                    { x: 1, y: 0, w: 2 },
+                    { x: 5, y: 0, h: 2 },
+                    { x: 7, y: 1, r: 15, rx: 7, ry: 1 },
+                ]),
+            ),
+        )
+        expect(ov).toContain('KEY(&x 0 &y 0)')
+        expect(ov).toContain('KEY(&x 1 &y 0 &w 2)')
+        expect(ov).toContain('KEY(&x 5 &y 0 &h 2)')
+        expect(ov).toContain('KEY(&x 7 &y 1 &rot 15 &rotx 7 &roty 1)')
+    })
+
+    it('turns a negative rotation into its clockwise equivalent', () => {
+        const ov = overlayOf(compile(geo([{ x: 0, y: 0 }, { x: 1, y: 0, r: -30 }])))
+        expect(ov).toContain('&rot 330')
+    })
+
+    it('rounds fractional geometry to whole key-units, with a warning', () => {
+        const res = compile(geo([{ x: 0, y: 0, w: 1.5 }, { x: 1.5, y: 0 }]))
+        expect(overlayOf(res)).toContain('KEY(&x 2 &y 0)')
+        expect(
+            res.diagnostics.some((d) => d.level === 'warn' && /whole key-units/.test(d.message)),
+        ).toBe(true)
+    })
+
+    it('gives the app room for more layers than the bootstrap has', () => {
+        expect(overlayOf(compile(geo([{ x: 0, y: 0 }])))).toContain('max-layers = <4>;')
+        expect(
+            overlayOf(compile(geo([{ x: 0, y: 0 }], { maxLayers: 8 }))),
+        ).toContain('max-layers = <8>;')
+    })
+
+    it('is an error when maxLayers is below the authored layer count', () => {
+        const json = JSON.parse(geo([{ x: 0, y: 0 }], { maxLayers: 1 }))
+        json.layers.push({ name: 'fn', bindings: ['B'] })
+        const res = compile(JSON.stringify(json))
+        expect(errorsOf(res).some((m) => /maxLayers 1 .*2 layers/.test(m))).toBe(true)
+    })
+
+    it.skipIf(!TC)('a placed, rotated board compiles with dtc', () => {
+        const ov = overlayOf(
+            compile(geo([{ x: 0, y: 0, w: 2 }, { x: 3, y: 1, r: -20, rx: 3, ry: 1 }])),
+        )
+        expect(dtcCheck(TC!, ov).log).toBe('')
+    })
+})

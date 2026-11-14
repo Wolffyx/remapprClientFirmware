@@ -896,6 +896,16 @@ export const BoardSchema = z
             .optional(),
         split: z.boolean().optional(),
         storage: z.enum(['zms', 'nvs']).optional(),
+        maxLayers: z
+            .number()
+            .int()
+            .min(1)
+            .max(32)
+            .optional()
+            .describe(
+                'Layers the app may fill without a reflash (max-layers). ' +
+                    'Default: the authored layers, at least 4.',
+            ),
         encoders: z
             .array(
                 z.object({

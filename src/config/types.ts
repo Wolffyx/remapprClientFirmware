@@ -771,6 +771,9 @@ export interface ConfigBoard {
     }
     split?: boolean
     storage?: 'zms' | 'nvs'
+    /** Layer capacity (`max-layers`): layers the app may fill without a
+     *  reflash. Default: the authored layers, at least 4. */
+    maxLayers?: number
     /** Rotary encoder hardware for the board generator (opt-in; emits gpio-qdec). */
     encoders?: BoardEncoder[]
     /** A motion sensor on SPI (opt-in; emits its node with the product's

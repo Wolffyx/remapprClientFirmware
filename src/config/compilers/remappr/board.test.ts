@@ -144,7 +144,9 @@ describe('remappr-board shield compiler', () => {
         expect(ov).toContain('scan = <&kbd_matrix>;')
         expect(ov).toContain('columns = <4>;')
         expect(ov).toContain('rows = <3 3 4 4>;')
-        expect(ov).toContain('max-layers = <2>;')
+        // Room for the app to add layers: the authored 2, at least 4.
+        expect(ov).toContain('max-layers = <4>;')
+        expect(ov).toContain('KEY(&x 3 &y 2)')
     })
 
     it('lowers plain keys to &key HID usages and transparent/none to &pass/&block', () => {
