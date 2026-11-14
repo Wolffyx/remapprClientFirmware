@@ -223,11 +223,14 @@ describe('buildNodesApi.list', () => {
             personality: 2,
             kind: 'mouse',
             online: true,
+            secured: false,
+            deviceId: '010203040506',
             bonded: true,
             rssi: -40,
             hopCount: 0,
             isMaster: true,
             nodeRole: 0x01,
+            clusterRole: 'standalone',
         })
         expect(nodes[1]).toMatchObject({
             id: 0x0009,
@@ -240,6 +243,51 @@ describe('buildNodesApi.list', () => {
             isMaster: false,
             nodeRole: 0,
         })
+        expect(nodes[1].clusterRole).toBeUndefined()
+    })
+
+    it('keeps the secured bit apart from online', async () => {
+        const roster = new Uint8Array([
+            ...nodeRecordBytes(0x0002, 1, 0x07, 0, -50, []), // online+bonded+secured
+            ...nodeRecordBytes(0x0003, 1, 0x03, 0, -50, []), // heard, no session
+        ])
+        const { rpc } = makeRpc({ roster })
+        const nodes = await buildNodesApi(rpc).list()
+
+        expect(nodes.map((n) => [n.online, n.secured])).toEqual([
+            [true, true],
+            [true, false],
+        ])
+    })
+
+    it('names the device id only when the bond carries one', async () => {
+        const roster = new Uint8Array([
+            ...nodeRecordBytes(0x0002, 1, 0x03, 0, 0, [0xab, 0, 0, 0, 0, 0x01]),
+            ...nodeRecordBytes(0x0003, 1, 0x03, 0, 0, []), // legacy bond
+        ])
+        const { rpc } = makeRpc({ roster })
+        const nodes = await buildNodesApi(rpc).list()
+
+        expect(nodes.map((n) => n.deviceId)).toEqual(['ab0000000001', undefined])
+    })
+
+    it('decodes the cluster role from the role bits', async () => {
+        const roster = new Uint8Array([
+            // CLUSTER_MAIN | USB_OUTPUT: a coordinator that also drives USB
+            ...nodeRecordBytes(0x0002, 1, 0x0b, 0, 0, [], 0x12),
+            ...nodeRecordBytes(0x0003, 1, 0x03, 1, 0, [], 0x04), // FOLLOWER
+            ...nodeRecordBytes(0x0004, 2, 0x0b, 0, 0, [], 0x01), // STANDALONE_MAIN
+            ...nodeRecordBytes(0x0005, 1, 0x03, 0, 0, [], 0x20), // RADIO_OUTPUT only
+        ])
+        const { rpc } = makeRpc({ roster })
+        const nodes = await buildNodesApi(rpc).list()
+
+        expect(nodes.map((n) => n.clusterRole)).toEqual([
+            'coordinator',
+            'follower',
+            'standalone',
+            undefined,
+        ])
     })
 
     it('carries the reported charge and the charging bit', async () => {

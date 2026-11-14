@@ -6,7 +6,12 @@
 // and a keyboard a READ-ONLY RemapprKeyboardService (its changes need the
 // sealed relay session, not proven on hardware yet). The dongle's RPC is
 // shared; node views never tear it down.
-import type { NodesApi, NodeView, KeyboardService } from '../../service'
+import type {
+    KeyboardService,
+    NodeClusterRole,
+    NodesApi,
+    NodeView,
+} from '../../service'
 import type { DeviceKind } from '../../devices/types'
 import type { DeviceInfo } from '../../types'
 import { Personality } from '../../config/compilers/remappr/blobWriter'
@@ -61,20 +66,48 @@ const KIND_NAME: Readonly<Record<DeviceKind, string>> = {
     dongle: 'Dongle',
 }
 
+/** §5 election-role bits (firmware enum remappr_node_role, node_election.h).
+ *  A node may hold several; the first match in CLUSTER_ROLE_BITS names it. */
+const ROLE_STANDALONE_MAIN = 0x01
+const ROLE_CLUSTER_MAIN = 0x02
+const ROLE_FOLLOWER = 0x04
+
+const CLUSTER_ROLE_BITS: ReadonlyArray<readonly [number, NodeClusterRole]> = [
+    [ROLE_CLUSTER_MAIN, 'coordinator'],
+    [ROLE_FOLLOWER, 'follower'],
+    [ROLE_STANDALONE_MAIN, 'standalone'],
+]
+
+/** The node's cluster role from its §5 role byte; undefined when it holds
+ *  none of the three (0 = it never reported one). */
+function clusterRoleOf(nodeRole: number): NodeClusterRole | undefined {
+    return CLUSTER_ROLE_BITS.find(([bit]) => (nodeRole & bit) !== 0)?.[1]
+}
+
+/** The device_id tail, or undefined when the bond pre-dates it (all zero). */
+function deviceIdOf(tail: string): string | undefined {
+    return /^0*$/.test(tail) ? undefined : tail
+}
+
 /** Map a wire node record onto the firmware-neutral UI view. */
 function toNodeView(r: NodeRecord): NodeView {
     const kind = KIND_BY_NODE_PERSONALITY[r.personality]
+    const clusterRole = clusterRoleOf(r.nodeRole)
+    const deviceId = deviceIdOf(r.deviceIdTail)
     return {
         id: r.shortId,
         label: `${kind ? KIND_NAME[kind] : 'Node'} ${hexId(r.shortId)}`,
         personality: r.personality,
         ...(kind ? { kind } : {}),
         online: r.online,
+        secured: r.secured,
+        ...(deviceId ? { deviceId } : {}),
         bonded: r.bonded,
         rssi: r.rssi,
         hopCount: r.hopCount,
         isMaster: r.master,
         nodeRole: r.nodeRole,
+        ...(clusterRole ? { clusterRole } : {}),
         ...(r.battery === null
             ? {}
             : { battery: { level: r.battery, charging: r.charging } }),
