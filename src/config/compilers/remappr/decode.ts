@@ -89,6 +89,7 @@ import {
     bytesToHex,
     type BehaviorRecord,
 } from './blobWriter'
+import { readDisplayTable } from './display'
 import { readPower } from './power'
 import { needsWire, recordToWire } from './wire'
 import { readRadio } from './radio'
@@ -294,6 +295,10 @@ function keyPress(usage: number, mods: Modifier[]): CanonKeyPress {
     return kp
 }
 
+/** A sticky record's release-after (its tapping_term_ms), when set. */
+const releaseAfter = (rec: BehaviorRecord): { releaseAfterMs?: number } =>
+    rec.tappingTermMs ? { releaseAfterMs: rec.tappingTermMs } : {}
+
 // One behavior record → a CanonAction. When the canonical form cannot hold the
 // record in full, the action carries the record as `_wire` (wire.ts), and the
 // compiler writes it back, so a save keeps what the binding really does.
@@ -377,7 +382,12 @@ function behaviorToCanon(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
         case BehaviorType.ToggleLayer:
             return { type: 'layer', mode: 'toggle', layer: ctx.layerName(rec.hold) }
         case BehaviorType.StickyLayer:
-            return { type: 'layer', mode: 'sticky', layer: ctx.layerName(rec.hold) }
+            return {
+                type: 'layer',
+                mode: 'sticky',
+                layer: ctx.layerName(rec.hold),
+                ...releaseAfter(rec),
+            }
         case BehaviorType.StickyMod: {
             const mod = maskToMod(rec.hold)
             if (!mod) return unmodeled('sticky_mod')
@@ -385,13 +395,17 @@ function behaviorToCanon(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
             // key.keyboard_left_shift), whose usage is 0xE0 + bit index.
             const usage = 0xe0 + MODIFIERS.indexOf(mod)
             const k = usageToKey(usage)
-            return k ? { type: 'sticky_key', key: k } : unmodeled('sticky_mod')
+            return k
+                ? { type: 'sticky_key', key: k, ...releaseAfter(rec) }
+                : unmodeled('sticky_mod')
         }
         case BehaviorType.StickyKey: {
             // One-shot non-mod key (BH_STICKY_KEY); the modifier form decodes
             // from StickyMod above — both round-trip to canonical sticky_key.
             const k = keyOf(rec.tap)
-            return k ? { type: 'sticky_key', key: k } : unmodeled('sticky_key')
+            return k
+                ? { type: 'sticky_key', key: k, ...releaseAfter(rec) }
+                : unmodeled('sticky_key')
         }
         case BehaviorType.KeyToggle: {
             const k = keyOf(rec.tap)
@@ -474,7 +488,16 @@ function behaviorToCanon(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
         case BehaviorType.AutoShift: {
             const k = keyOf(rec.tap)
             return k
-                ? { type: 'auto_shift', key: k, mods: maskToMods(rec.hold) }
+                ? {
+                      type: 'auto_shift',
+                      key: k,
+                      mods: maskToMods(rec.hold),
+                      ...(rec.tappingTermMs ? { timeoutMs: rec.tappingTermMs } : {}),
+                      ...(rec.quickTapMs ? { quickTapMs: rec.quickTapMs } : {}),
+                      ...(rec.requirePriorIdleMs
+                          ? { requirePriorIdleMs: rec.requirePriorIdleMs }
+                          : {}),
+                  }
                 : { type: 'none' }
         }
         case BehaviorType.AltRepeat:
@@ -488,7 +511,11 @@ function behaviorToCanon(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
                 mods: maskToMods(rec.tap),
             }
         case BehaviorType.LayerTapToggle:
-            return { type: 'tap_toggle', layer: ctx.layerName(rec.hold) }
+            return {
+                type: 'tap_toggle',
+                layer: ctx.layerName(rec.hold),
+                ...(rec.tappingTermMs ? { tappingTermMs: rec.tappingTermMs } : {}),
+            }
         case BehaviorType.ToSaved:
             return { type: 'set_base_saved', layer: ctx.layerName(rec.hold) }
         case BehaviorType.AutoLayer:
@@ -1002,6 +1029,13 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
     const powerT = table(TableId.Power)
     const power = powerT ? readPowerTable(bytes, powerT, diag) : undefined
 
+    // ── DISPLAY (optional, id 31) → node.display. A table this client cannot
+    //    show in full stays out of the config, and a save carries it as read. ──
+    const displayT = table(TableId.Display)
+    const shown = displayT?.version === 1 ? readDisplayTable(bytes, displayT) : undefined
+    if (typeof shown === 'string') diag.warn(`${shown} — kept as read`)
+    const display = typeof shown === 'object' ? shown : undefined
+
     // ── ACTION_BINDING (optional, id 17, §F) → top-level actionBindings[] ──
     const actionT = table(TableId.ActionBinding)
     const actionBindings = actionT ? readActionBindings(bytes, actionT) : []
@@ -1025,7 +1059,8 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
         cluster ||
         linkProfile ||
         radio ||
-        power
+        power ||
+        display
             ? {
                   ...(pers.personality ? { personality: pers.personality } : {}),
                   ...(pers.role ? { role: pers.role } : {}),
@@ -1035,6 +1070,7 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
                   ...(linkProfile ? { linkProfile } : {}),
                   ...(radio ? { radio } : {}),
                   ...(power ? { power } : {}),
+                  ...(display ? { display } : {}),
               }
             : undefined
 
@@ -1496,6 +1532,9 @@ function readCombos(
     const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const out: CanonCombo[] = []
+    // The compiler writes a combo on several layers as consecutive records that
+    // differ only in their layer; they read back as that one combo.
+    let prev: { sig: string; combo: CanonCombo } | undefined
     for (let ci = 0; ci < count; ci++) {
         const np = r.u16()
         const timeoutMs = r.u16()
@@ -1504,6 +1543,11 @@ function readCombos(
         const outIdx = r.u16()
         const keys: number[] = []
         for (let i = 0; i < np; i++) keys.push(r.u16())
+        const sig = `${keys.join(',')}|${timeoutMs}|${outIdx}`
+        if (layer !== 0xff && prev?.combo.layers && prev.sig === sig) {
+            prev.combo.layers.push(layerName(layer))
+            continue
+        }
         const action =
             outIdx < decoded.length ? decoded[outIdx] : ({ type: 'none' } as CanonAction)
         if (outIdx >= decoded.length)
@@ -1511,6 +1555,7 @@ function readCombos(
         const combo: CanonCombo = { name: `combo_${ci}`, keys, action, timeoutMs }
         if (layer !== 0xff) combo.layers = [layerName(layer)]
         out.push(combo)
+        prev = { sig, combo }
     }
     return out
 }

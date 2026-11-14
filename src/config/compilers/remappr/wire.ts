@@ -60,14 +60,6 @@ const MODELED_FLAGS: Readonly<Record<number, number>> = {
 const unmodeledFlags = (type: number, flags: number): number =>
     flags & ~(MODELED_FLAGS[type] ?? 0)
 
-/** Sticky cells reuse tapping_term_ms as the one-shot release-after timeout,
- *  which `sticky_key` has no field for. */
-const STICKY_TYPES: ReadonlySet<number> = new Set([
-    BehaviorType.StickyMod,
-    BehaviorType.StickyLayer,
-    BehaviorType.StickyKey,
-])
-
 /** Types whose record names a layer, macro or sub-behavior by index. Written
  *  back verbatim, the index could point elsewhere once the config changes, so
  *  such a record is only carried when the canonical form kept its type. */
@@ -92,24 +84,19 @@ export function needsWire(rec: BehaviorRecord, decodedType: string): boolean {
     if (decodedType === 'none') {
         return rec.type !== BehaviorType.None && !INDEXED_TYPES.has(rec.type)
     }
-    if (unmodeledFlags(rec.type, rec.flags) !== 0) return true
-    return STICKY_TYPES.has(rec.type) && rec.tappingTermMs !== 0
+    return unmodeledFlags(rec.type, rec.flags) !== 0
 }
 
 /**
  * The record to write for an action carrying `_wire`. When the canonical form
  * lost the type (it decoded as `none`), the carried record as is. Otherwise the
- * freshly lowered record, so every field the form holds (layer indices
- * included) is current, plus what the form has no slot for: the unmodeled flag
- * bits and a sticky cell's release-after.
+ * freshly lowered record, so every field the form holds (layer indices and
+ * timings included) is current, plus what the form has no slot for: the
+ * unmodeled flag bits.
  */
 export function mergeWire(lowered: BehaviorRecord, wire: string): BehaviorRecord {
     const raw = wireToRecord(wire)
     if (!raw) return lowered
     if (lowered.type !== raw.type) return raw
-    return {
-        ...lowered,
-        flags: lowered.flags | unmodeledFlags(raw.type, raw.flags),
-        ...(STICKY_TYPES.has(raw.type) ? { tappingTermMs: raw.tappingTermMs } : {}),
-    }
+    return { ...lowered, flags: lowered.flags | unmodeledFlags(raw.type, raw.flags) }
 }

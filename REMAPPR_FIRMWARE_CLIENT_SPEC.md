@@ -656,16 +656,25 @@ v3: + u8 stage_count | u8 stage | u16 stages[5]    (DPI stages; cpi = stages[sta
 invertWheel 4, invertHwheel 8, swapXY 16. The compiler writes the lowest
 version the fields need; the decoder reads v1–v3.
 
-### 5.4 TBL_JOYSTICK (28) v1
+### 5.4 TBL_JOYSTICK (28) v2 (v1 read for one release)
 
 ```
-u8 hat_ways (0 = 8) | u8 axis_count
-axis_count × { u8 input | u8 out_axis (0xFF off) | u8 flags (bit0 invert)
-               | u8 curve (0 linear, 1 aggressive, 2 relaxed, 3 precise)
-               | u8 inner | u8 outer | u16 rsvd }
+v2: u8 hat_ways (0 = 8) | u8 axis_count
+    axis_count × { u8 input | u8 out_axis (0xFF off) }
+v1: u8 hat_ways (0 = 8) | u8 axis_count
+    axis_count × { u8 input | u8 out_axis (0xFF off) | u8 flags (bit0 invert, bit1 radial)
+                   | u8 curve (0 linear, 1 aggressive, 2 relaxed, 3 precise)
+                   | u8 inner | u8 outer | u16 rsvd }
 ```
 
-Emitted only when something differs from the defaults.
+In v2 an input's shaping is its AXES part's, in TBL_PART on that part's
+channel: 0x40 invert, 0x41 radial, 0x42 curve, 0x43 inner deadzone, 0x44 outer
+deadzone. Inputs are numbered across the AXES parts (class analog) in part
+order. The compiler writes v2 plus all five settings for each listed input
+when it has the device's part list. Without the list, or when an input has no
+AXES part, it writes v1. The decoder reads both, and lets TBL_PART shaping win
+over a v1 entry, as the device does. Emitted only when something differs from
+the defaults.
 
 ### 5.5 TBL_ACTION_BINDING (17) v1 and action kinds
 

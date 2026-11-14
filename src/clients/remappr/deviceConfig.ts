@@ -218,7 +218,11 @@ export function buildDeviceConfigApi(
                 stored: false,
             }
         }
-        const decoded = decodeRemapprDeviceBlob(blob)
+        // A joystick's axis shaping sits on its AXES parts, a mouse's settings
+        // on its pointer part: the device's part list places both.
+        const sensors =
+            target.personality === 'dongle' ? undefined : await target.sensors?.()
+        const decoded = decodeRemapprDeviceBlob(blob, { sensors })
         // A stored config this client cannot read is refused rather than shown
         // as defaults: saving over it would drop settings nobody saw.
         if (decoded.code !== DecodeCode.OK) {
@@ -288,7 +292,10 @@ export function buildDeviceConfigApi(
         // that does not move it forward, and another tool may have pushed since.
         const info = await deviceInfo()
         const version = (info.hasActive ? info.configVersion : 0) + 1
-        const sensors = parsed.data.sensor ? await target.sensors?.() : undefined
+        const sensors =
+            parsed.data.sensor || parsed.data.joystick
+                ? await target.sensors?.()
+                : undefined
         const blob = padToAlign(
             buildRemapprDeviceBlob(parsed.data, { configVersion: version, sensors }),
         )
