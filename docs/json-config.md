@@ -302,7 +302,9 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   - The cells prefer `keyboard.hardware.transform` or per-key `matrix`, and
     warn when derived from geometry. A cell past the GPIO counts, two keys on
     one cell, a pin used twice, or a pin listed in `reservedPins`
-    (`[{ "pin": "PA9", "use": "console UART TX" }]`) is an error. An encoder
+    (`[{ "pin": "PA9", "use": "console UART TX" }]`) is an error. Choices of
+    one layout option (`option: [g, 0]` and `[g, 1]`, an ANSI/ISO Enter) may
+    share a cell; the cell reports the lowest choice's position. An encoder
     or slider key needs a cell of its own (its push switch in the matrix), or
     its push switch in `buttons`.
   - Each key is placed at its own position, size and rotation (whole
