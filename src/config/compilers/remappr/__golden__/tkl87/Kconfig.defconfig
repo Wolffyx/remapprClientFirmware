@@ -1,0 +1,23 @@
+if SHIELD_TKL87
+
+# The matrix + keymap drivers auto-enable from devicetree; the input
+# subsystem itself must be on.
+config INPUT
+	default y
+
+# WS2812 per-key RGB (chain-length 87) over spi3.
+config REMAPPR_RGB_LED
+	default y
+config SPI
+	default y
+config WS2812_STRIP_SPI
+	default y
+# The pixel buffer must hold the whole chain (default 64).
+config REMAPPR_RGB_LED_MAX
+	default 87
+
+choice REMAPPR_SETTINGS_BACKEND
+	default REMAPPR_SETTINGS_BACKEND_NVS
+endchoice
+
+endif # SHIELD_TKL87

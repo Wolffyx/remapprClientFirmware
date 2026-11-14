@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildProjectBundle, getCompiler, parseKeymap } from '../../index'
+import { dtcCheck, dtcToolchain } from './dtcHarness'
 
 // nRF52840 14-key macropad (rows 3/3/4/4), raw SoC gpios, col2row, NVS storage.
 const NRF = parseKeymap(`{
@@ -87,7 +88,7 @@ const RGB = parseKeymap(`{
         "storage": "nvs" }
 }`)
 
-// STM32 board with a WS2812 strip on SPI1 + GPDMA (the bench-proven path):
+// STM32 board with a WS2812 strip on SPI1 + GPDMA (the bench-verified path):
 // ws2812.stm32 carries the raw pinctrl / dmas the emitter can't guess.
 const STMRGB = parseKeymap(`{
     "schemaVersion": 1, "kind": "remappr.keymap",
@@ -133,22 +134,20 @@ describe('remappr-board shield compiler', () => {
         expect(ov).toContain('<&gpio1 15 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>')
         expect(ov).toContain('<&gpio0 31 GPIO_ACTIVE_HIGH>')
         expect(ov).toContain('compatible = "input-keymap"')
-        expect(ov).toContain('REMAPPR_MATRIX_KEYMAP(')
-        // Explicit transform wiring → cells match the electrical matrix.
-        expect(ov).toContain('CELL(0, 0)')
-        expect(ov).toContain('CELL(2, 3)')
-        expect(ov).toContain('CELL(3, 3)')
-        // REMAPPR_MATRIX_KEYMAP is a variadic macro → CELL() args MUST be
-        // comma-separated (space-joined cells fail DTC on real hardware).
-        expect(ov).toContain('CELL(0, 0), CELL(0, 1), CELL(0, 2)')
-        expect(ov).toContain('CELL(3, 0), CELL(3, 1), CELL(3, 2), CELL(3, 3)')
+        // One MATRIX_KEY per position (code = base + position); explicit
+        // transform wiring → cells match the electrical matrix.
+        expect(ov).toContain('MATRIX_KEY(0, 0, REMAPPR_KB_POS_BASE + 0)')
+        expect(ov).toContain('MATRIX_KEY(2, 3, REMAPPR_KB_POS_BASE + 9)')
+        expect(ov).toContain('MATRIX_KEY(3, 3, REMAPPR_KB_POS_BASE + 13)')
         expect(ov).toContain('row-size = <4>;')
         expect(ov).toContain('col-size = <4>;')
         expect(ov).toContain('compatible = "remappr,keymap"')
         expect(ov).toContain('scan = <&kbd_matrix>;')
         expect(ov).toContain('columns = <4>;')
         expect(ov).toContain('rows = <3 3 4 4>;')
-        expect(ov).toContain('max-layers = <2>;')
+        // Room for the app to add layers: the authored 2, at least 4.
+        expect(ov).toContain('max-layers = <4>;')
+        expect(ov).toContain('KEY(&x 3 &y 2)')
     })
 
     it('lowers plain keys to &key HID usages and transparent/none to &pass/&block', () => {
@@ -261,7 +260,9 @@ describe('remappr-board shield compiler', () => {
         expect(ov).toContain('dma-names = "tx", "rx";')
         expect(ov).toContain('compatible = "worldsemi,ws2812-spi"')
         expect(ov).toContain('chain-length = <14>;')
-        expect(ov).toContain('spi-one-frame = <0xF0>;')
+        // The HW-verified bench14 frames (a low lead-in bit), not 0xF0/0xC0.
+        expect(ov).toContain('spi-one-frame = <0x78>;')
+        expect(ov).toContain('spi-zero-frame = <0x60>;')
         expect(ov).toContain('remappr,led-strip = &led_strip;')
         expect(ov).not.toContain('remappr,led-strip = <&led_strip>;')
         // NOT the nRF psel / FIXME-scaffold path.
@@ -369,11 +370,11 @@ describe('board-gen ST port-pin labels', () => {
         // no per-board table — and must not warn as if it were unresolved.
         const out = getCompiler('remappr-board')!.compile(STM_LABELS)
         expect(
-            out.diagnostics.filter((d) => /unresolved GPIO/.test(d.message)),
+            out.diagnostics.filter((d) => /does not resolve/.test(d.message)),
         ).toHaveLength(0)
     })
 
-    it('leaves a label that is not a port-pin alone, with a warning', () => {
+    it('refuses a label that is not a port-pin, as an error', () => {
         const odd = parseKeymap(`{
             "schemaVersion": 1, "kind": "remappr.keymap",
             "meta": { "name": "Odd", "target": "zmk" },
@@ -383,8 +384,27 @@ describe('board-gen ST port-pin labels', () => {
             "board": { "matrix": { "rows": ["PZ3"], "cols": ["PA99"] } }
         }`)
         const out = getCompiler('remappr-board')!.compile(odd)
+        // Written verbatim it would never build, so it is an error.
         expect(
-            out.diagnostics.filter((d) => /unresolved GPIO/.test(d.message)),
+            out.diagnostics.filter(
+                (d) => d.level === 'error' && /does not resolve/.test(d.message),
+            ),
         ).toHaveLength(2)
+    })
+})
+
+const TC = dtcToolchain()
+
+describe.skipIf(!TC)('every fixture above builds with dtc', () => {
+    it.each([
+        ['nrf52840_test', NRF],
+        ['u5a5_pad', STM],
+        ['glow_pad', RGB],
+        ['glow_u5', STMRGB],
+        ['u5a5_labels', STM_LABELS],
+    ] as const)('%s', (slug, cfg) => {
+        const r = dtcCheck(TC!, overlayOf(cfg, slug))
+        expect(r.log).toBe('')
+        expect(r.ok).toBe(true)
     })
 })

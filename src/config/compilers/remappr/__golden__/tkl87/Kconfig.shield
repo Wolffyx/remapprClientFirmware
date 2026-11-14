@@ -1,0 +1,2 @@
+config SHIELD_TKL87
+	def_bool $(shields_list_contains,tkl87)

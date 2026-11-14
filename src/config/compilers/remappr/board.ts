@@ -14,23 +14,24 @@
 import type { ExportedFile } from '../../../types'
 import { HID_USAGE_BY_CANONICAL } from '../../../catalog/entries'
 import { type KeymapCompiler, registerCompiler, runCompile } from '../../compiler'
-import type { DiagnosticBag } from '../../diagnostics'
-import { resolveController } from '../../controller'
+import type { DiagnosticBag, DiagnosticPath } from '../../diagnostics'
 import { matrixDims, resolveKeyMatrix } from '../../matrix'
-import {
-    gpioSpec,
-    type PinRole,
-    resolveStPin,
-    resolveZmkPin,
-} from '../../pinmaps'
+import { type PinRole, ROLE_FLAGS } from '../../pinmaps'
 import type {
     CanonAction,
     CanonGeometry,
     CanonLayer,
     ConfigKeymap,
-    DiodeDirection,
 } from '../../types'
 import { emitEncoders, emitRgb, emitSensor } from './boardHardware'
+import {
+    type MatrixWiring,
+    matrixWiring,
+    type SourcedPin,
+} from './boardMatrix'
+import { boardTarget, PinBook } from './boardPins'
+import { placementTokens } from './boardPlacement'
+import { dtComment } from './dtText'
 
 /** HID Usage Page 0x07 (Keyboard/Keypad) — the only page a `&key` action emits. */
 const HID_PAGE_KEYBOARD = 7
@@ -63,45 +64,16 @@ function visualRowCounts(keys: CanonGeometry[]): number[] {
     return counts.length ? counts : [keys.length]
 }
 
-/** Resolve one GPIO entry to a devicetree spec (inside `<...>`). A raw `&`-spec
- *  passes through verbatim; a friendly label resolves against the controller's
- *  pin table, then — for ST parts, where the silkscreen name IS the mapping —
- *  against the generic port-pin form; else it emits unchanged with a diagnostic.
- *
- *  The ST fallback is not board-specific on purpose: it is what makes a generated
- *  STM32 shield buildable at all. Before it, `rows: ["PE11"]` emitted
- *  `row-gpios = <PE11>` — not valid devicetree. */
-function resolveGpio(
-    raw: string,
-    role: PinRole,
-    board: string | undefined,
-    diag: DiagnosticBag,
-    path: (string | number)[],
-): string {
-    const s = raw.trim()
-    if (s.startsWith('&')) return s
-    const core = (board ? resolveZmkPin(board, s) : null) ?? resolveStPin(s)
-    if (core) return gpioSpec(core, role)
-    diag.warn(
-        `unresolved GPIO label "${raw}" — emitting verbatim; set board.controller ` +
-            `to a known board or provide a raw "&gpioN pin FLAGS" spec`,
-        path,
-    )
-    return s
-}
-
 /** A `row-gpios`/`col-gpios` property with one `<spec>` per line. */
 function gpioProp(
     name: string,
-    specs: string[],
+    pins: SourcedPin[],
     role: PinRole,
-    board: string | undefined,
-    diag: DiagnosticBag,
-    path: (string | number)[],
+    book: PinBook,
 ): string[] {
-    if (specs.length === 0) return []
-    const rows = specs.map(
-        (s, i) => `\t\t\t<${resolveGpio(s, role, board, diag, [...path, i])}>`,
+    if (pins.length === 0) return []
+    const rows = pins.map(
+        (p) => `\t\t\t<${book.spec(p.raw, ROLE_FLAGS[role], p.path)}>`,
     )
     return [`\t\t${name} =`, `${rows.join(',\n')};`]
 }
@@ -160,22 +132,6 @@ function chunkByRows(tokens: string[], rowCounts: number[]): string {
     return lines.join('\n')
 }
 
-/** Like chunkByRows but COMMA-joins tokens. REMAPPR_MATRIX_KEYMAP is a variadic
- *  FOR_EACH_IDX macro, so its CELL() args must be comma-separated — space-joined
- *  cells parse as a single arg and DTC fails ("expected ')', not '('"). Only the
- *  matrix keymap needs this; placement / layer actions are phandle-array cells
- *  that stay space-separated. */
-function chunkCellsByRows(tokens: string[], rowCounts: number[]): string {
-    const lines: string[] = []
-    let i = 0
-    for (const n of rowCounts) {
-        lines.push('\t\t\t\t' + tokens.slice(i, i + n).join(', '))
-        i += n
-    }
-    if (i < tokens.length) lines.push('\t\t\t\t' + tokens.slice(i).join(', '))
-    return lines.join(',\n')
-}
-
 function emitLayer(
     layer: CanonLayer,
     index: number,
@@ -213,32 +169,107 @@ function storageDefconfig(config: ConfigKeymap): string[] {
     ]
 }
 
-function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
-    const slug = shieldSlug(config)
-    const SHIELD = slug.toUpperCase()
-    const ctrl = resolveController(config)
-    const board = config.board
+/** Personalities whose board may have no key matrix (their inputs are wired
+ *  elsewhere), so a board without matrix pins is not a mistake. */
+const MATRIX_OPTIONAL = new Set(['mouse', 'joystick', 'dongle'])
 
-    const diode: DiodeDirection =
-        board?.matrix?.diode ??
-        config.keyboard.matrix?.diodeDirection ??
-        'col2row'
+/** The key matrix wiring to emit, or null for a board that has none. A
+ *  keyboard without matrix pins is an error: `remappr,kbd-matrix` requires
+ *  both row-gpios and col-gpios, so that node never builds. */
+function planMatrix(
+    config: ConfigKeymap,
+    diag: DiagnosticBag,
+): MatrixWiring | null {
+    const wiring = matrixWiring(config, diag)
+    if (!wiring) return null
+    const nr = wiring.rows.length
+    const nc = wiring.cols.length
+    const personality = config.node?.personality
+    if (nr === 0 && nc === 0 && personality && MATRIX_OPTIONAL.has(personality)) {
+        diag.warn(
+            `no matrix pins: the ${personality} shield declares no key matrix ` +
+                `and no default keymap`,
+            ['board', 'matrix'],
+        )
+        return null
+    }
+    const where = 'set board.matrix.rows/cols, keyboard.hardware.kscan or keyboard.pins'
+    if (nr === 0 && nc === 0)
+        diag.error(`no matrix pins: ${where}`, ['board', 'matrix'])
+    else if (nr === 0) diag.error(`no row pins: ${where}`, ['board', 'matrix', 'rows'])
+    else if (nc === 0)
+        diag.error(`no column pins: ${where}`, ['board', 'matrix', 'cols'])
+    return wiring
+}
+
+/** Where a key's matrix cell was written, for a diagnostic. */
+function cellPath(config: ConfigKeymap, i: number): DiagnosticPath {
+    if (config.keyboard.keys[i].matrix) return ['keyboard', 'keys', i, 'matrix']
+    if (config.keyboard.hardware?.transform)
+        return ['keyboard', 'hardware', 'transform', 'map', i]
+    return ['keyboard', 'keys', i]
+}
+
+/** Every cell must fit the GPIO counts (the firmware build-asserts it) and no
+ *  two keys may share one (the second would never be read). */
+function checkCells(
+    config: ConfigKeymap,
+    cells: [number, number][],
+    wiring: MatrixWiring,
+    diag: DiagnosticBag,
+): void {
+    const nr = wiring.rows.length
+    const nc = wiring.cols.length
+    const seen = new Map<string, number>()
+    cells.forEach(([r, c], i) => {
+        const path = cellPath(config, i)
+        if (nr && r >= nr)
+            diag.error(`key ${i} is on row ${r}, but the matrix has ${nr} row GPIO(s)`, path)
+        if (nc && c >= nc)
+            diag.error(`key ${i} is on column ${c}, but the matrix has ${nc} column GPIO(s)`, path)
+        const prior = seen.get(`${r},${c}`)
+        if (prior === undefined) {
+            seen.set(`${r},${c}`, i)
+            return
+        }
+        diag.error(
+            `keys ${prior} and ${i} share matrix cell (${r}, ${c}); one of them ` +
+                `can never be read`,
+            path,
+        )
+    })
+}
+
+/** An encoder or slider key is only a matrix key when its wiring says so (an
+ *  encoder's push switch). Without that it would get a made-up cell, which can
+ *  collide with a real key; its own node (remappr,extra-input or
+ *  remappr,slider) is not generated yet. */
+function checkElements(config: ConfigKeymap, diag: DiagnosticBag): void {
+    if (config.keyboard.hardware?.transform) return
+    config.keyboard.keys.forEach((k, i) => {
+        if (!k.element || k.matrix) return
+        const what = k.element === 'encoder' ? 'an encoder' : 'a slider'
+        diag.error(
+            `key ${i} is ${what} with no matrix cell: off-matrix inputs ` +
+                `(remappr,extra-input, remappr,slider) are not generated yet. ` +
+                `Give it a matrix cell if its switch is in the matrix`,
+            ['keyboard', 'keys', i, 'element'],
+        )
+    })
+}
+
+/** The `remappr,kbd-matrix` node with its `input-keymap` child. */
+function matrixNode(
+    config: ConfigKeymap,
+    wiring: MatrixWiring,
+    book: PinBook,
+    rowCounts: number[],
+    diag: DiagnosticBag,
+): string[] {
+    const diode = wiring.diode
     // col2row: rows are inputs, columns strobe outputs (and vice-versa).
     const rowRole: PinRole = diode === 'col2row' ? 'input' : 'output'
     const colRole: PinRole = diode === 'col2row' ? 'output' : 'input'
-
-    const rowGpios = board?.matrix?.rows ?? config.keyboard.pins?.rows ?? []
-    const colGpios = board?.matrix?.cols ?? config.keyboard.pins?.cols ?? []
-    if (rowGpios.length === 0 && colGpios.length === 0)
-        diag.warn(
-            `no matrix pins — set board.matrix.rows/cols (or keyboard.pins) to a ` +
-                `GPIO spec list`,
-            ['board', 'matrix'],
-        )
-
-    const dims = matrixDims(config)
-    const rowSize = rowGpios.length || dims.rows || 1
-    const colSize = colGpios.length || dims.cols || 1
 
     // resolveKeyMatrix falls back to a geometry-derived matrix when no wiring is
     // given; that packing rarely matches the physical row/col gpios, so warn.
@@ -248,26 +279,116 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     if (!explicitWiring)
         diag.warn(
             `matrix cells auto-derived from key geometry — verify each ` +
-                `CELL(row, col) against your row/col wiring, or provide ` +
+                `matrix cell against your row/col wiring, or provide ` +
                 `keyboard.hardware.transform`,
             ['keyboard', 'hardware', 'transform'],
         )
-
+    checkElements(config, diag)
     const cells = resolveKeyMatrix(config)
-    const rowCounts = visualRowCounts(config.keyboard.keys)
-    const columns = Math.max(1, ...rowCounts)
+    checkCells(config, cells, wiring, diag)
+    const dims = matrixDims(config)
+    const pollMs = config.board?.matrix?.pollMs
 
-    const cellTokens = cells.map(([r, c]) => `CELL(${r}, ${c})`)
-    const placementTokens = config.keyboard.keys.map(() => 'KEY()')
+    // One MATRIX_KEY per position, code = REMAPPR_KB_POS_BASE + position. Not
+    // the REMAPPR_MATRIX_KEYMAP(CELL...) macro: it is built on FOR_EACH_IDX,
+    // which Zephyr caps at 64 arguments, so a 65th key was a dtc syntax error
+    // and no TKL or full-size board compiled.
+    const cellTokens = cells.map(
+        ([r, c], i) => `MATRIX_KEY(${r}, ${c}, REMAPPR_KB_POS_BASE + ${i})`,
+    )
+    return [
+        `\tkbd_matrix: kbd-matrix {`,
+        `\t\tcompatible = "remappr,kbd-matrix";`,
+        `\t\tdiode-direction = "${diode}";`,
+        ...(pollMs ? [`\t\tpoll-period-ms = <${pollMs}>;`] : []),
+        ...(wiring.debouncePressMs !== undefined
+            ? [`\t\tdebounce-press-ms = <${wiring.debouncePressMs}>;`]
+            : []),
+        ...(wiring.debounceReleaseMs !== undefined
+            ? [`\t\tdebounce-release-ms = <${wiring.debounceReleaseMs}>;`]
+            : []),
+        ...gpioProp('row-gpios', wiring.rows, rowRole, book),
+        ...gpioProp('col-gpios', wiring.cols, colRole, book),
+        ``,
+        `\t\tkeymap {`,
+        `\t\t\tcompatible = "input-keymap";`,
+        `\t\t\tkeymap = <`,
+        chunkByRows(cellTokens, rowCounts),
+        `\t\t\t>;`,
+        `\t\t\trow-size = <${wiring.rows.length || dims.rows || 1}>;`,
+        `\t\t\tcol-size = <${wiring.cols.length || dims.cols || 1}>;`,
+        `\t\t};`,
+        `\t};`,
+        ``,
+    ]
+}
+
+/** Layers the app may fill without a reflash when board.maxLayers is not set
+ *  (the firmware sizes its layer store from max-layers). */
+const DEFAULT_MAX_LAYERS = 4
+
+/** The layer capacity: board.maxLayers, else the authored layers with room to
+ *  grow. Equal to the authored count, as before, a one-layer bootstrap could
+ *  never take a second layer from the app. */
+function maxLayers(config: ConfigKeymap, diag: DiagnosticBag): number {
+    const authored = config.layers.length
+    const set = config.board?.maxLayers
+    if (set === undefined) return Math.max(authored, DEFAULT_MAX_LAYERS)
+    if (set < authored)
+        diag.error(
+            `board.maxLayers ${set} is below the ${authored} layers authored`,
+            ['board', 'maxLayers'],
+        )
+    return Math.max(set, authored)
+}
+
+/** The `remappr,keymap` node: placement, layer capacity and the default
+ *  layers, scanning the matrix node. */
+function keymapNode(
+    config: ConfigKeymap,
+    rowCounts: number[],
+    diag: DiagnosticBag,
+): string[] {
+    const placement = placementTokens(config.keyboard.keys, diag)
+    return [
+        `\tremappr_keymap: remappr-keymap {`,
+        `\t\tcompatible = "remappr,keymap";`,
+        `\t\tscan = <&kbd_matrix>;`,
+        `\t\tcolumns = <${Math.max(1, ...rowCounts)}>;`,
+        `\t\trows = <${rowCounts.join(' ')}>;`,
+        `\t\tmax-layers = <${maxLayers(config, diag)}>;`,
+        `\t\tplacement = <`,
+        chunkByRows(placement, rowCounts),
+        `\t\t>;`,
+        ...config.layers.flatMap((l, i) => emitLayer(l, i, rowCounts, diag)),
+        `\t};`,
+    ]
+}
+
+function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
+    const slug = shieldSlug(config)
+    const SHIELD = slug.toUpperCase()
+    const target = boardTarget(config, diag)
+    const book = new PinBook(target, diag)
+    book.reserve(config.board?.reservedPins ?? [])
+
+    const rowCounts = visualRowCounts(config.keyboard.keys)
+    const wiring = planMatrix(config, diag)
+    const keyNodes = wiring
+        ? [
+              ...matrixNode(config, wiring, book, rowCounts, diag),
+              ...keymapNode(config, rowCounts, diag),
+          ]
+        : []
 
     // Optional peripheral overlay nodes (empty fragments when unconfigured).
-    const rgb = emitRgb(config, ctrl.board, diag)
-    const enc = emitEncoders(config, ctrl.board, diag)
-    const sensor = emitSensor(config, ctrl.board, diag)
+    const rgb = emitRgb(config, book, diag)
+    const enc = emitEncoders(config, book, diag)
+    const sensor = emitSensor(config, book, diag)
 
     const overlay: string[] = [
         `/*`,
-        ` * ${config.meta.name} — Remappr shield (generated by remappr).`,
+        ` * ${dtComment(config.meta.name)} — Remappr shield (generated by remappr).`,
         ` *`,
         ` * Drop this directory into a remappr-firmware checkout under`,
         ` * boards/shields/${slug}/ and build with -DSHIELD=${slug}. Verify the`,
@@ -281,53 +402,12 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         `#include <zephyr/dt-bindings/input/keymap.h>`,
         `#include <dt-bindings/remappr/keys.h>`,
         `#include <dt-bindings/remappr/layout.h>`,
-        `#include <zephyr/sys/util_macro.h>`,
         `#include <remappr/keymap-tokens.dtsi>`,
         `#include <remappr/behavior-tokens.dtsi>`,
         ...rgb.includes,
         ...enc.includes,
         ...sensor.includes,
-        ``,
-        `/ {`,
-        `\tkbd_matrix: kbd-matrix {`,
-        `\t\tcompatible = "remappr,kbd-matrix";`,
-        `\t\tdiode-direction = "${diode}";`,
-        ...(board?.matrix?.pollMs
-            ? [`\t\tpoll-period-ms = <${board.matrix.pollMs}>;`]
-            : []),
-        ...gpioProp('row-gpios', rowGpios, rowRole, ctrl.board, diag, [
-            'board',
-            'matrix',
-            'rows',
-        ]),
-        ...gpioProp('col-gpios', colGpios, colRole, ctrl.board, diag, [
-            'board',
-            'matrix',
-            'cols',
-        ]),
-        ``,
-        `\t\tkeymap {`,
-        `\t\t\tcompatible = "input-keymap";`,
-        `\t\t\tkeymap = <REMAPPR_MATRIX_KEYMAP(`,
-        chunkCellsByRows(cellTokens, rowCounts),
-        `\t\t\t)>;`,
-        `\t\t\trow-size = <${rowSize}>;`,
-        `\t\t\tcol-size = <${colSize}>;`,
-        `\t\t};`,
-        `\t};`,
-        ``,
-        `\tremappr_keymap: remappr-keymap {`,
-        `\t\tcompatible = "remappr,keymap";`,
-        `\t\tscan = <&kbd_matrix>;`,
-        `\t\tcolumns = <${columns}>;`,
-        `\t\trows = <${rowCounts.join(' ')}>;`,
-        `\t\tmax-layers = <${config.layers.length}>;`,
-        `\t\tplacement = <`,
-        chunkByRows(placementTokens, rowCounts),
-        `\t\t>;`,
-        ...config.layers.flatMap((l, i) => emitLayer(l, i, rowCounts, diag)),
-        `\t};`,
-        `};`,
+        ...(keyNodes.length ? [``, `/ {`, ...keyNodes, `};`] : []),
         ...(rgb.nodes.length ? ['', ...rgb.nodes] : []),
         ...(enc.nodes.length ? ['', ...enc.nodes] : []),
         ...(sensor.nodes.length ? ['', ...sensor.nodes] : []),

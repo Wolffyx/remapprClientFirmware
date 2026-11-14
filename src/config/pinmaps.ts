@@ -121,7 +121,7 @@ export function resolveZmkPin(
  *  direct switches wire to ground (active-low, pull-up). */
 export type PinRole = 'input' | 'output' | 'direct'
 
-const ROLE_FLAGS: Record<PinRole, string> = {
+export const ROLE_FLAGS: Record<PinRole, string> = {
     input: '(GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)',
     output: 'GPIO_ACTIVE_HIGH',
     direct: '(GPIO_ACTIVE_LOW | GPIO_PULL_UP)',
@@ -161,6 +161,28 @@ export function resolveStPin(label: string): string | null {
     const pin = Number(m[2])
     if (pin > 15) return null
     return `&gpio${m[1].toLowerCase()} ${pin}`
+}
+
+// pattern-check: skip pure label parsers beside resolveStPin, no abstraction
+/** An nRF port-pin label ("P0.13", "P1.2") → its devicetree phandle+pin core
+ *  ("&gpio0 13"), or null when the label is not that shape. Like the ST form it
+ *  needs no per-board table: Zephyr nRF boards label their ports `gpio<port>`.
+ *  Pins 0..31 (one port register); anything else returns null. */
+export function resolveNrfPin(label: string): string | null {
+    const m = /^P(\d)\.(\d{1,2})$/.exec(norm(label))
+    if (!m) return null
+    const pin = Number(m[2])
+    if (pin > 31) return null
+    return `&gpio${m[1]} ${pin}`
+}
+
+/** An RP2040 / RP2350 GPIO label ("GP12") → "&gpio0 12", or null. One bank,
+ *  GP0..GP47 (the RP2350B has 48). */
+export function resolveRpPin(label: string): string | null {
+    const m = /^GP(\d{1,2})$/.exec(norm(label))
+    if (!m) return null
+    const pin = Number(m[1])
+    return pin > 47 ? null : `&gpio0 ${pin}`
 }
 
 /** True when remappr has a ZMK pin table for this board. */

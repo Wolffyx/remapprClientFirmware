@@ -4,6 +4,8 @@ import {
     resolveQmkPin,
     gpioSpec,
     hasZmkPinMap,
+    resolveNrfPin,
+    resolveRpPin,
 } from '../pinmaps'
 import { getCompiler } from '../compiler'
 import { buildProjectBundle } from '../bundle'
@@ -12,6 +14,21 @@ import '../compilers/zmk'
 import '../compilers/qmk'
 
 /* ── resolver ──────────────────────────────────────────────────────────── */
+
+describe('port-pin label forms', () => {
+    it('maps nRF P<port>.<pin> to the gpio<port> controller', () => {
+        expect(resolveNrfPin('P0.13')).toBe('&gpio0 13')
+        expect(resolveNrfPin('p1.2')).toBe('&gpio1 2')
+        expect(resolveNrfPin('P0.32')).toBeNull()
+        expect(resolveNrfPin('PA3')).toBeNull()
+    })
+
+    it('maps RP2040 GP<n> to the one gpio0 bank', () => {
+        expect(resolveRpPin('GP29')).toBe('&gpio0 29')
+        expect(resolveRpPin('gp0')).toBe('&gpio0 0')
+        expect(resolveRpPin('GP48')).toBeNull()
+    })
+})
 
 describe('pin resolver', () => {
     it('maps a nexus-board label to the &pro_micro phandle (case-insensitive)', () => {

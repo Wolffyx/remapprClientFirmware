@@ -896,7 +896,45 @@ export const BoardSchema = z
             .optional(),
         split: z.boolean().optional(),
         storage: z.enum(['zms', 'nvs']).optional(),
+        maxLayers: z
+            .number()
+            .int()
+            .min(1)
+            .max(32)
+            .optional()
+            .describe(
+                'Layers the app may fill without a reflash (max-layers). ' +
+                    'Default: the authored layers, at least 4.',
+            ),
+        encoders: z
+            .array(
+                z.object({
+                    a: z.string().min(1).describe('Phase-A GPIO.'),
+                    b: z.string().min(1).describe('Phase-B GPIO.'),
+                    steps: z.number().int().positive().optional(),
+                    axis: z
+                        .string()
+                        .regex(/^(INPUT_[A-Z0-9_]+|\d+)$/)
+                        .optional()
+                        .describe('Relative axis code, e.g. "INPUT_REL_WHEEL".'),
+                }),
+            )
+            .optional()
+            .describe('Rotary encoders (gpio-qdec) for the board generator.'),
         sensor: z.lazy(() => BoardSensorSchema).optional(),
+        reservedPins: z
+            .array(
+                z.object({
+                    pin: z.string().min(1),
+                    use: z.string().min(1),
+                }),
+            )
+            .optional()
+            .describe(
+                'Pins the board already uses (console or node-bus UART, a ' +
+                    'coprocessor SPI): the generator refuses a key, encoder or ' +
+                    'sensor on one.',
+            ),
     })
     .describe(
         'Build-time board definition for the DT/Kconfig generator (never in the blob).',
