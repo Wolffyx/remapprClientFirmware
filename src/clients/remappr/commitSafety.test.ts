@@ -5,8 +5,17 @@ import { describe, expect, it } from 'vitest'
 
 import { type ConfigKeymap, parseKeymap } from '../../config'
 import { buildRemapprBlob } from '../../config/compilers/remappr'
-import { TableId } from '../../config/compilers/remappr/blobWriter'
-import { assembleBlob, keymapCore, tableOf } from '../../config/__tests__/blobFixtures'
+import {
+    BehaviorType,
+    SystemAction,
+    TableId,
+} from '../../config/compilers/remappr/blobWriter'
+import {
+    assembleBlob,
+    behaviorBytes,
+    keymapCore,
+    tableOf,
+} from '../../config/__tests__/blobFixtures'
 
 import { loadDeviceConfig } from './configRead'
 
@@ -151,5 +160,41 @@ describe('commit keeps the tables the config does not model (L3.7)', () => {
         // and a second save still has them (carried from the blob it wrote)
         await svc.commit()
         expect(tableOf(dev.active!, TableId.Sensor)).toEqual(sensor)
+    })
+})
+
+describe('commit keeps bindings the config cannot express (L3.7)', () => {
+    it('a save keeps an untouched clear_storage key as read', async () => {
+        const clear = behaviorBytes({
+            type: BehaviorType.System,
+            tap: SystemAction.clear_storage,
+        })
+        const device = assembleBlob(keymapCore([behaviorBytes({ type: BehaviorType.Key, tap: 0x04 }), clear]))
+        const dev = new FakeConfigDevice({ active: device })
+        const loaded = await loadDeviceConfig(dev.rpc, {
+            protoMax: 1,
+            deviceInfo: {
+                protoMin: 1,
+                protoMax: 1,
+                schemaVersion: 1,
+                fwMajor: 0,
+                fwMinor: 0,
+                fwPatch: 0,
+                hwRev: 0,
+                hasActive: true,
+                configVersion: 1,
+            },
+        })
+        const svc = new RemapprKeyboardService({
+            rpc: dev.rpc,
+            deviceInfo: { name: 'CommitTest', firmware: 'remappr' },
+            config: loaded.config,
+            configVersion: loaded.configVersion,
+            layouts: loaded.layouts,
+            activeLayoutId: loaded.activeLayoutId,
+            maxLayers: loaded.maxLayers,
+        })
+        await svc.commit()
+        expect(tableOf(dev.active!, TableId.Behavior)).toEqual(tableOf(device, TableId.Behavior))
     })
 })

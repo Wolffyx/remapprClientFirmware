@@ -88,6 +88,7 @@ import {
     type BehaviorRecord,
 } from './blobWriter'
 import { readPower } from './power'
+import { needsWire, recordToWire } from './wire'
 import { readRadio } from './radio'
 import { readMouseTable } from './mouse'
 
@@ -247,9 +248,12 @@ function systemUsageToKey(usage: number): CanonicalKeyId | null {
 }
 
 /** Single modifier-mask bit → Modifier (lowest set bit wins). */
+// Exactly one modifier: a multi-mod mask has no single-modifier canonical form,
+// so its cell decodes as unmodeled and is carried as read (wire.ts) instead of
+// keeping only the lowest modifier.
 function maskToMod(mask: number): Modifier | null {
-    for (let i = 0; i < 8; i++) if (mask & (1 << i)) return MODIFIERS[i]
-    return null
+    const i = MODIFIERS.findIndex((_, bit) => mask === 1 << bit)
+    return i < 0 ? null : MODIFIERS[i]
 }
 
 /** Modifier mask → Modifier[] (for KEY_MODS hold). */
@@ -288,13 +292,26 @@ function keyPress(usage: number, mods: Modifier[]): CanonKeyPress {
     return kp
 }
 
-// The inverse of lowerAction: one 16-byte behavior record → a CanonAction. Types
-// the canonical model can't yet express (composites, the 23..36 vocabulary,
-// extended system/mouse/lighting sub-codes) decode to `none` + a diagnostic.
+// One behavior record → a CanonAction. When the canonical form cannot hold the
+// record in full, the action carries the record as `_wire` (wire.ts), and the
+// compiler writes it back, so a save keeps what the binding really does.
 function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
+    const action = behaviorToCanon(rec, ctx)
+    return needsWire(rec, action.type)
+        ? { ...action, _wire: recordToWire(rec) }
+        : action
+}
+
+// The inverse of lowerAction: one 16-byte behavior record → a CanonAction. Types
+// the canonical model can't yet express (extended system / mouse / lighting
+// sub-codes, multi-mod sticky and mod-tap) decode to `none` + a diagnostic.
+function behaviorToCanon(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
     const { diag, path } = ctx
     const unmodeled = (what: string): CanonAction => {
-        diag.warn(`behavior ${what} has no canonical form yet — decoded as none`, path)
+        diag.warn(
+            `behavior ${what} has no canonical form yet — shown as none, kept as read`,
+            path,
+        )
         return { type: 'none' }
     }
     const keyOf = (usage: number): CanonicalKeyId | null => {

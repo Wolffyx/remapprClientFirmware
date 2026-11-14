@@ -126,7 +126,17 @@ export interface CanonTapHold {
     _preset?: 'mod_tap' | 'layer_tap'
 }
 
-export type CanonAction =
+/** Set by the Remappr blob decoder on an action whose 16-byte behavior record
+ *  the canonical form cannot hold in full: a type or sub-code with no canonical
+ *  form, a usage the catalog does not know, or a flag or field the form has no
+ *  slot for. It is the record as hex; the Remappr compiler writes it back so a
+ *  binding the user did not touch survives a save. Never authored by hand, and
+ *  dropped by serialize (an edited binding is a new action without it). */
+export interface CanonWireCarry {
+    _wire?: string
+}
+
+export type CanonAction = (
     | CanonKeyPress
     | CanonTapHold
     | { type: 'layer'; mode: LayerMode; layer: string }
@@ -180,6 +190,8 @@ export type CanonAction =
     | { type: 'macro_play'; slot: number }
     | { type: 'leader'; windowMs?: number }
     | { type: 'peripheral'; kind: PeripheralKind; code: number }
+) &
+    CanonWireCarry
 
 export interface CanonGeometry {
     x: number

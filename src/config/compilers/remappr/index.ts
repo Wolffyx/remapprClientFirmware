@@ -72,6 +72,7 @@ import {
 } from './blobWriter'
 import { encodeAutocorrectDictionary } from './autocorrect'
 import { carryUnmodeledTables } from './carry'
+import { mergeWire } from './wire'
 import { powerRecord } from './power'
 import { radioRecord } from './radio'
 import { mouseRecord } from './mouse'
@@ -592,7 +593,21 @@ function withComposite(
 
 // Lower one canonical binding to a behavior record. Unsupported actions emit a
 // diagnostic and fall back to NONE so the blob still forms (thin slice).
+// A decoded binding carrying `_wire` (wire.ts) writes back what its canonical
+// form could not hold, so a save does not change what an untouched key does.
 function lowerAction(
+    action: CanonAction,
+    diag: DiagnosticBag,
+    path: (string | number)[],
+    macroCtx: MacroCtx,
+    layerIndex: Map<string, number>,
+    comp: CompCtx,
+): BehaviorRecord {
+    const lowered = lowerCanonAction(action, diag, path, macroCtx, layerIndex, comp)
+    return action._wire ? mergeWire(lowered, action._wire) : lowered
+}
+
+function lowerCanonAction(
     action: CanonAction,
     diag: DiagnosticBag,
     path: (string | number)[],
