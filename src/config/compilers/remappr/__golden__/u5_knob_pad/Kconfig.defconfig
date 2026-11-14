@@ -1,0 +1,13 @@
+if SHIELD_U5_KNOB_PAD
+
+# The matrix + keymap drivers auto-enable from devicetree; the input
+# subsystem itself must be on.
+config INPUT
+	default y
+
+# 1 rotary encoder(s) — stock gpio-qdec. Rotation →
+# behavior-engine binding is HIL-deferred (see the overlay warning).
+config INPUT_GPIO_QDEC
+	default y
+
+endif # SHIELD_U5_KNOB_PAD
