@@ -317,7 +317,10 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
     key's rect, in 1/100 key-unit. The button keys must be the last keys of
     `keyboard.keys`, in `buttons` order, since their engine positions follow
     the matrix keys'. `code` is an `INPUT_KEY_*`/`INPUT_BTN_*` code, default
-    `INPUT_KEY_F13` onward.
+    `INPUT_KEY_F13` onward. A board whose keys are all buttons needs no
+    `matrix`: its keymap node has no scan and lists the button codes as
+    `extra-input-codes`, so its layers and `max-layers` still reach the
+    firmware.
   - `sliders` are analog sliders (`remappr,slider`) on an ADC channel (`adc`,
     as for the battery), with optional `function` (`rgb-brightness`),
     `deadband` and `pollMs`.
