@@ -50,6 +50,9 @@ export const TableId = {
     Joystick: 28, // joystick axes + hat (input-layout plan §4)
     Sensor: 29, // sensor settings (sensor-settings plan §4)
     Power: 30, // idle / sleep / off timeouts (sleep-wake design)
+    // Not written by the compiler; a save carries them from the device (carry.ts).
+    Display: 31, // what each display shows (display part design §3)
+    Slider: 32, // what each slider does, per layer (slider part design §4b)
 } as const
 
 /** enum remappr_personality (firmware include/remappr/role.h). */
@@ -455,7 +458,12 @@ export interface MacroStep {
 
 export interface MacroRecord {
     steps: MacroStep[]
+    /** §17 write-only (REMAPPR_MACRO_FLAG_PRIVATE); needs TBL_MACRO v2. */
+    private?: boolean
 }
+
+/** TBL_MACRO v2 per-macro flags (behavior_table.h REMAPPR_MACRO_FLAG_*). */
+export const MACRO_FLAG_PRIVATE = 1 << 0
 
 // pattern-check: skip plain wire-DTO interface mirroring the TBL_CONDITIONAL layout
 /** One conditional (tri-)layer: while every ifLayer is active, thenLayer is on. */
@@ -887,11 +895,19 @@ export class BlobBuilder {
     }
 
     // pattern-check: skip one more table-emit method on the existing Builder
+    /** TBL_MACRO. v1 unless a macro is private: v2 adds u8 flags + u8 reserved
+     *  after each num_steps (§17), and firmware older than v2 refuses it, so a
+     *  blob without private macros stays v1. */
     macroTable(macros: MacroRecord[]): this {
-        this.tableBegin(TableId.Macro, 1)
+        const v2 = macros.some((m) => m.private)
+        this.tableBegin(TableId.Macro, v2 ? 2 : 1)
         this.w.u16(macros.length)
         for (const m of macros) {
             this.w.u16(m.steps.length)
+            if (v2) {
+                this.w.u8(m.private ? MACRO_FLAG_PRIVATE : 0)
+                this.w.u8(0) // reserved
+            }
             for (const s of m.steps) {
                 this.w.u8(s.op)
                 this.w.u8(0) // pad

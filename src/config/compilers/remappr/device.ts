@@ -31,6 +31,7 @@ import {
 } from './blobWriter'
 import {
     ByteReader,
+    FrameOverrun,
     DecodeCode,
     type DecodeCodeValue,
     readBlobFrames,
@@ -293,7 +294,13 @@ export function decodeRemapprDeviceBlob(bytes: Uint8Array): DeviceDecodeResult {
     const personality = PERSONALITY_BY_CODE[bytes[pers.start]]
     if (!personality) return { code: DecodeCode.DEVICE }
 
-    const tables = TABLES_BY_PERSONALITY[personality](bytes, table)
+    let tables: ReturnType<(typeof TABLES_BY_PERSONALITY)[typeof personality]>
+    try {
+        tables = TABLES_BY_PERSONALITY[personality](bytes, table)
+    } catch (e) {
+        if (e instanceof FrameOverrun) return { code: DecodeCode.TABLE_FRAME }
+        throw e
+    }
     if (typeof tables === 'number') return { code: tables }
     return {
         code: DecodeCode.OK,

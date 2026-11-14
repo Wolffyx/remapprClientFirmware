@@ -71,6 +71,8 @@ import {
     type PosholdRecord,
 } from './blobWriter'
 import { encodeAutocorrectDictionary } from './autocorrect'
+import { carryUnmodeledTables } from './carry'
+import { mergeWire } from './wire'
 import { powerRecord } from './power'
 import { radioRecord } from './radio'
 import { mouseRecord } from './mouse'
@@ -338,8 +340,20 @@ function buildMacros(
             ctx.templates.set(m.id, { m, mi })
             return
         }
+        // A private macro read off a device came back with its steps blanked;
+        // writing it as read would store an empty macro in its place.
+        if (m._redacted && m.steps.length === 0) {
+            diag.error(
+                `macro "${m.id}" is private: the device does not return its steps, ` +
+                    'so enter them again before saving',
+                ['macros', mi],
+            )
+        }
         ctx.index.set(m.id, ctx.records.length)
-        ctx.records.push({ steps: lowerMacroSteps(m, mi, diag) })
+        ctx.records.push({
+            steps: lowerMacroSteps(m, mi, diag),
+            ...(m.private ? { private: true } : {}),
+        })
     })
     return ctx
 }
@@ -591,7 +605,21 @@ function withComposite(
 
 // Lower one canonical binding to a behavior record. Unsupported actions emit a
 // diagnostic and fall back to NONE so the blob still forms (thin slice).
+// A decoded binding carrying `_wire` (wire.ts) writes back what its canonical
+// form could not hold, so a save does not change what an untouched key does.
 function lowerAction(
+    action: CanonAction,
+    diag: DiagnosticBag,
+    path: (string | number)[],
+    macroCtx: MacroCtx,
+    layerIndex: Map<string, number>,
+    comp: CompCtx,
+): BehaviorRecord {
+    const lowered = lowerCanonAction(action, diag, path, macroCtx, layerIndex, comp)
+    return action._wire ? mergeWire(lowered, action._wire) : lowered
+}
+
+function lowerCanonAction(
     action: CanonAction,
     diag: DiagnosticBag,
     path: (string | number)[],
@@ -734,6 +762,7 @@ function lowerAction(
                             diag,
                             action.param,
                         ),
+                        ...(tpl.m.private ? { private: true } : {}),
                     })
                     macroCtx.instances.set(ikey, idx)
                     // §24 display name: the template's id plus the argument, so
@@ -1567,10 +1596,19 @@ function exportConfigVersion(config: ConfigKeymap): number {
  */
 export function buildRemapprBlob(
     config: ConfigKeymap,
-    opts: { configVersion: number },
+    opts: {
+        configVersion: number
+        /** The blob read off the device. Its tables the config does not model
+         *  (and the compile does not write) are carried over byte for byte, so
+         *  a save does not drop them; one that cannot be carried is an error. */
+        carryFrom?: Uint8Array
+    },
 ): { blob: Uint8Array; diagnostics: readonly Diagnostic[] } {
     const diag = new DiagnosticBag()
-    const blob = encodeBlob(config, diag, opts.configVersion)
+    const compiled = encodeBlob(config, diag, opts.configVersion)
+    const blob = opts.carryFrom
+        ? carryUnmodeledTables(compiled, opts.carryFrom, diag)
+        : compiled
     return { blob, diagnostics: diag.all }
 }
 
