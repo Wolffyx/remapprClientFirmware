@@ -72,6 +72,20 @@ async function call(
     return reply.data
 }
 
+/** One mutating JOYSTICK verb: sealed (§19) when the RPC holds a session. */
+async function mutate(
+    rpc: RemapprRpc,
+    verb: number,
+    name: string,
+    arg?: Uint8Array,
+    to?: CallTarget,
+): Promise<Uint8Array> {
+    const reply = await rpc.callMutation(Namespace.JOYSTICK, verb, arg, to)
+    if (reply.status !== Status.OK)
+        throw new Error(`${name} → ${statusName(reply.status)}`)
+    return reply.data
+}
+
 /** JOYSTICK.GET_AXIS_STATE: each input's raw count and value, buttons, hat. */
 export async function getAxisState(
     rpc: RemapprRpc,
@@ -115,7 +129,7 @@ export async function calibrate(
     input?: number,
     targetNode = 0,
 ): Promise<CalSuggestion[]> {
-    const data = await call(
+    const data = await mutate(
         rpc,
         JoystickVerb.CALIBRATE,
         'CALIBRATE',
@@ -137,7 +151,7 @@ export async function setAxisMap(
     const bits =
         (flags.invert ? JoyAxisFlag.INVERT : 0) |
         (flags.radial ? JoyAxisFlag.RADIAL : 0)
-    await call(
+    await mutate(
         rpc,
         JoystickVerb.SET_AXIS_MAP,
         'SET_AXIS_MAP',
@@ -153,7 +167,7 @@ export async function setDeadzone(
     zones: { inner: number; outer: number },
     targetNode = 0,
 ): Promise<void> {
-    await call(
+    await mutate(
         rpc,
         JoystickVerb.SET_DEADZONE,
         'SET_DEADZONE',

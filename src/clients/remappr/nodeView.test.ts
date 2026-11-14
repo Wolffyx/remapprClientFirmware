@@ -17,6 +17,7 @@ import {
     Status,
 } from './protocol'
 import type { RemapprRpc, UniversalReply } from './rpc'
+import { plainMutations } from './plainRpc.fixture'
 
 /* ── seed config + active blob (the node's "active" config) ──────────────── */
 
@@ -129,7 +130,7 @@ function makeRpc(
         data: new Uint8Array(),
     }
 
-    state.rpc = {
+    state.rpc = plainMutations({
         async callUniversalPlain(
             namespace: number,
             verb: number,
@@ -203,7 +204,7 @@ function makeRpc(
             state.closeCalls++
             state.closed = true
         },
-    } as unknown as RemapprRpc
+    }) as unknown as RemapprRpc
 
     return state
 }

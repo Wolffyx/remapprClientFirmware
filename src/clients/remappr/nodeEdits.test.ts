@@ -10,6 +10,7 @@ import { parseKeymap, type ConfigNode } from '../../config'
 import type { RemapprRpc } from './rpc'
 import { HwCap } from './protocol'
 import { RemapprKeyboardService, type RemapprServiceDeps } from './service'
+import { plainMutations } from './plainRpc.fixture'
 
 // A node seeded as a mode-B keyboard follower — enough to prove a role/forwardMode
 // edit merges without dropping the pre-existing personality field.
@@ -22,12 +23,12 @@ const CONFIG = parseKeymap(`{
     "node": { "personality": "keyboard", "forwardMode": "resolved" }
 }`)
 
-const stubRpc = {
+const stubRpc = plainMutations({
     onClosed: () => () => undefined,
     subscribeInput: () => () => undefined,
     close: async () => undefined,
     callPlain: async () => ({ status: 0, data: new Uint8Array() }),
-} as unknown as RemapprRpc
+}) as unknown as RemapprRpc
 
 function makeService(readOnly = false, hwCaps?: number): RemapprKeyboardService {
     const deps: RemapprServiceDeps = {

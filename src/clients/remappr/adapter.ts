@@ -224,7 +224,7 @@ async function probeRemappr(transport: Transport): Promise<ProbedRemappr | null>
 }
 
 /** Run the §19 control-auth handshake (plaintext BEGIN/FINISH) over the RPC. */
-async function establishSession(rpc: RemapprRpc): Promise<RemapprSession> {
+export async function establishSession(rpc: RemapprRpc): Promise<RemapprSession> {
     const session = new RemapprSession(loadOrCreateIdentity())
     const begin = await rpc.callPlain(Cmd.CONTROL_AUTH_BEGIN)
     if (begin.status !== Status.OK || begin.data.length < 32) {
@@ -304,16 +304,19 @@ export const remapprAdapter: FirmwareAdapter = {
             // takes plaintext writes, so skip the handshake entirely there. A
             // null capBits means the firmware predates GET_CAPABILITIES —
             // assume auth is present (the pre-capability behavior).
-            const session =
-                capBits === null || (capBits & Cap.AUTH) !== 0
-                    ? await establishSession(rpc)
-                    : undefined
+            // The RPC seals every mutation with it from here on, and runs the
+            // handshake again if the device drops the session (ERR_AUTH).
+            if (capBits === null || (capBits & Cap.AUTH) !== 0) {
+                rpc.bindSession({
+                    session: await establishSession(rpc),
+                    renew: () => establishSession(rpc),
+                })
+            }
 
             const loaded = await loadDeviceConfig(rpc, discovery)
 
             return new RemapprKeyboardService({
                 rpc,
-                session,
                 deviceInfo,
                 config: loaded.config,
                 configVersion: loaded.configVersion,

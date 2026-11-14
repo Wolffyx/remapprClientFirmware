@@ -45,6 +45,7 @@ export class FakeConfigDevice {
             callPlain: call,
             callSealed: async (_s: unknown, cmd: number, arg?: Uint8Array) =>
                 call(cmd, arg),
+            callWrite: call,
             callUniversalPlain: async (_ns: number, cmd: number, arg?: Uint8Array) =>
                 call(cmd, arg),
             onClosed: () => () => undefined,
@@ -57,7 +58,8 @@ export class FakeConfigDevice {
         return this.active && this.active.length >= 12 ? u32At(this.active, 8) : 0
     }
 
-    private handle(cmd: number, arg: Uint8Array): Reply {
+    /** Run one config verb (also the inner verb of a sealed request). */
+    handle(cmd: number, arg: Uint8Array): Reply {
         this.log.push(cmd)
         switch (cmd) {
             case Cmd.GET_DEVICE_INFO:

@@ -35,6 +35,7 @@ import {
     parseUch,
     parseUchEvent,
     PLAINTEXT_CMDS,
+    RESP_HDR_LEN,
     SEALED_TAG,
     Status,
     UchFlag,
@@ -95,18 +96,62 @@ export interface UniversalReply {
     data: Uint8Array
 }
 
+/** The reply to a sealed call. `sealed` is false for the bare plaintext error
+ *  a device sends when it could not open the request (no session, a stale
+ *  counter, tampering): the verb never ran. */
+export interface SealedReply extends UniversalReply {
+    sealed: boolean
+}
+
+/** A legacy sealed response, with the same `sealed` marker. */
+export type SealedResponse = ControlResponse & { sealed: boolean }
+
+/** The §19 session the RPC seals mutations with, and how to get a fresh one
+ *  when the device has dropped it. */
+export interface SessionBinding {
+    session: RemapprSession
+    /** Run the handshake again; resolves with the new session. */
+    renew: () => Promise<RemapprSession>
+}
+
 export interface RemapprRpc {
     /** A legacy plaintext request → response (reads + handshake). */
     callPlain(cmd: number, arg?: Uint8Array, timeoutMs?: number): Promise<ControlResponse>
-    /** A sealed (mutating) verb. `expectedDataLen` sizes the reply CCM span
-     *  (0 for acks). Returns the opened inner response, or the plaintext
-     *  ERR_AUTH if the device refused the seal. */
+    /** A legacy sealed (0xE1) verb. Returns the opened inner response (its
+     *  length found by trial), or the plaintext ERR_AUTH if the device refused
+     *  the seal (`sealed` false). */
     callSealed(
         session: RemapprSession,
         cmd: number,
         arg?: Uint8Array,
-        opts?: { expectedDataLen?: number; timeoutMs?: number },
-    ): Promise<ControlResponse>
+        opts?: { timeoutMs?: number },
+    ): Promise<SealedResponse>
+    /** A namespace verb sealed for the device itself (§6.3 direct form,
+     *  `[0xE2][0xE1]...`). The reply is matched by the request id inside its
+     *  sealed UCH. A bare plaintext ERR_AUTH comes back with `sealed` false. */
+    callSealedUniversal(
+        session: RemapprSession,
+        namespace: number,
+        verb: number,
+        arg?: Uint8Array,
+        opts?: { timeoutMs?: number },
+    ): Promise<SealedReply>
+    /** Seal the mutations of `callWrite` / `callMutation` with this session
+     *  (undefined: send them in plaintext, for a device with auth off). */
+    bindSession(binding: SessionBinding | undefined): void
+    /** A legacy flat mutating verb (config staging): sealed through the bound
+     *  session, plaintext when none is bound. On a plaintext ERR_AUTH the
+     *  session is renewed once and the verb sent again. */
+    callWrite(cmd: number, arg?: Uint8Array): Promise<ControlResponse>
+    /** A mutating namespace verb. To the device itself it is sealed through the
+     *  bound session (renewed once on a plaintext ERR_AUTH); with no session, or
+     *  to a node behind the dongle, it goes as `callUniversalPlain`. */
+    callMutation(
+        namespace: number,
+        verb: number,
+        arg?: Uint8Array,
+        target?: CallTarget,
+    ): Promise<UniversalReply>
     /** A direct-attach universal (0xE2) request with inbound FRAG reassembly.
      *  `retries` (default 0) re-issues the request on a transient ERR_STATE — the
      *  §10 relay-timeout a flapping 2.4 GHz link produces. Only pass it for a
@@ -195,8 +240,11 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
             }
             return // events never satisfy a response waiter
         }
+        // A direct sealed reply ([0xE2][0xE1][ctr]...) has no cleartext UCH:
+        // its byte 3 is counter, not flags.
         if (
             frame[0] === UNIVERSAL_TAG &&
+            frame[1] !== SEALED_TAG &&
             frame.length > UCH_LEN + 1 &&
             (frame[3] & UchFlag.EVENT) !== 0
         ) {
@@ -323,22 +371,112 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
         session: RemapprSession,
         cmd: number,
         arg: Uint8Array = new Uint8Array(),
-        opts: { expectedDataLen?: number; timeoutMs?: number } = {},
-    ): Promise<ControlResponse> {
+        opts: { timeoutMs?: number } = {},
+    ): Promise<SealedResponse> {
         const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
         return exchange(async () => {
             await writeFrame(session.seal(cmd, nextSeq(), arg))
             const frame = await nextFrame(timeoutMs)
             if (frame[0] !== SEALED_TAG) {
                 // Plaintext reply — a gated verb the device refused (ERR_AUTH).
-                return parseResponse(frame)
+                return { ...parseResponse(frame), sealed: false }
             }
-            const inner = session.open(frame.subarray(1), opts.expectedDataLen ?? 0)
+            const inner = session.open(frame.subarray(1))
             if (inner === null) {
                 throw new TransportError('sealed reply failed authentication')
             }
-            return parseResponse(inner)
+            return { ...parseResponse(inner), sealed: true }
         })
+    }
+
+    // One direct sealed universal request → its reply. A sealed reply carries
+    // its request id inside the AEAD, so a stale one (a late answer to an
+    // earlier request) is opened and skipped. The device answers a request it
+    // could not open with a bare 6-byte plaintext header (cmd 0, seq 0).
+    async function callSealedUniversal(
+        session: RemapprSession,
+        namespace: number,
+        verb: number,
+        arg: Uint8Array = new Uint8Array(),
+        opts: { timeoutMs?: number } = {},
+    ): Promise<SealedReply> {
+        const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+        return exchange(async () => {
+            const rid = nextReqId()
+            const uch = buildUch(namespace, rid)
+            await writeFrame(session.sealDirect(uch, verb, nextSeq(), arg))
+            // eslint-disable-next-line no-constant-condition
+            while (true) {
+                const frame = await nextFrame(timeoutMs)
+                const bare = bareStatus(frame)
+                if (bare !== null) return { status: bare, data: new Uint8Array(), sealed: false }
+                if (frame[0] !== UNIVERSAL_TAG || frame[1] !== SEALED_TAG) continue
+                const pt = session.openDirect(frame)
+                if (pt === null) {
+                    throw new TransportError('sealed reply failed authentication')
+                }
+                const ruch = parseUch(pt)
+                if (ruch.requestId !== rid || !(ruch.flags & UchFlag.RESP)) continue
+                const resp = parseResponse(pt.subarray(UCH_LEN))
+                return { status: resp.status, data: resp.data, sealed: true }
+            }
+        })
+    }
+
+    let binding: SessionBinding | undefined
+    let renewing: Promise<RemapprSession> | null = null
+
+    // Re-handshake once, shared by every call that saw the session drop.
+    function renewSession(b: SessionBinding, stale: RemapprSession): Promise<RemapprSession> {
+        if (b.session !== stale) return Promise.resolve(b.session) // already renewed
+        renewing ??= b
+            .renew()
+            .then((fresh) => {
+                b.session = fresh
+                return fresh
+            })
+            .finally(() => {
+                renewing = null
+            })
+        return renewing
+    }
+
+    // Send a sealed call; when the device answers a plaintext ERR_AUTH (it has
+    // lost the session: a reboot, another host's handshake), renew the session
+    // and send it once more. The refused verb never ran, so a resend is safe.
+    async function withSession<T extends { status: number; sealed: boolean }>(
+        b: SessionBinding,
+        send: (s: RemapprSession) => Promise<T>,
+    ): Promise<T> {
+        const used = b.session
+        const first = await send(used)
+        if (first.sealed || first.status !== Status.ERR_AUTH) return first
+        return send(await renewSession(b, used))
+    }
+
+    async function callWrite(
+        cmd: number,
+        arg?: Uint8Array,
+    ): Promise<ControlResponse> {
+        const b = binding
+        if (!b) return callPlain(cmd, arg)
+        return withSession(b, (s) => callSealed(s, cmd, arg))
+    }
+
+    async function callMutation(
+        namespace: number,
+        verb: number,
+        arg?: Uint8Array,
+        target?: CallTarget,
+    ): Promise<UniversalReply> {
+        const b = binding
+        if (!b || (target?.targetNode ?? 0) !== 0) {
+            return callUniversalPlain(namespace, verb, arg, target)
+        }
+        const r = await withSession(b, (s) =>
+            callSealedUniversal(s, namespace, verb, arg),
+        )
+        return { status: r.status, data: r.data }
     }
 
     // One universal (0xE2) request → reassembled reply. Serialized by exchange().
@@ -363,9 +501,9 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
             while (true) {
                 const frame = await nextFrame(timeout)
                 if (frame[0] !== UNIVERSAL_TAG) continue // ignore stray legacy frame
-                if (frame[1] === SEALED_TAG) {
-                    throw new TransportError('sealed universal reply not supported here')
-                }
+                // A direct sealed reply never answers a plaintext request: it is
+                // a late one to an earlier sealed call. Its byte 1 is not a UCH.
+                if (frame[1] === SEALED_TAG) continue
                 const uch = parseUch(frame, 1)
                 if (uch.requestId !== rid) continue // a reply to an earlier request
                 if (!(uch.flags & UchFlag.RESP)) {
@@ -552,6 +690,12 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
     return {
         callPlain,
         callSealed,
+        callSealedUniversal,
+        bindSession(b) {
+            binding = b
+        },
+        callWrite,
+        callMutation,
         callUniversalPlain,
         callSealedRelay,
         subscribeInput,
@@ -566,6 +710,15 @@ export function createRemapprRpc(transport: Transport): RemapprRpc {
         },
         close,
     }
+}
+
+/** The status of the bare 6-byte header (cmd 0, seq 0, a non-zero status) a
+ *  device sends where it has no trusted cmd/seq to echo — a sealed request it
+ *  could not open. Null for any other frame. */
+export function bareStatus(frame: Uint8Array): number | null {
+    if (frame.length < RESP_HDR_LEN) return null
+    if (frame[0] !== 0 || frame[1] !== 0 || frame[2] === 0) return null
+    return frame[2]
 }
 
 /** True when a verb may be sent over the plaintext path (no seal required). */

@@ -4,9 +4,10 @@
 // §5.4 pointer-device motion control. MOUSE opcodes are namespace-scoped and
 // ride ONLY the 0xE2/UCH router. Every verb is manifest-gated on the firmware
 // actually having the op wired (a keyboard without a pointer sensor answers
-// ERR_CMD and doesn't list the namespace). The SET_* verbs are mutating —
-// product builds seal them (§19); served plaintext while the node's control
-// auth is dev-disabled. Pass `targetNode` to relay through a dongle.
+// ERR_CMD and doesn't list the namespace). The SET_* verbs are mutating: they
+// ride `callMutation`, sealed (§19) when the RPC holds a session, plaintext
+// when the node's control auth is off. Pass `targetNode` to relay through a
+// dongle.
 
 import {
     buildDpiArg,
@@ -48,7 +49,7 @@ export async function setDpi(
     dpi: number,
     targetNode = 0,
 ): Promise<void> {
-    const reply = await rpc.callUniversalPlain(
+    const reply = await rpc.callMutation(
         Namespace.MOUSE,
         MouseVerb.SET_DPI,
         buildDpiArg(dpi),
@@ -64,7 +65,7 @@ export async function setAccelProfile(
     profile: number,
     targetNode = 0,
 ): Promise<void> {
-    const reply = await rpc.callUniversalPlain(
+    const reply = await rpc.callMutation(
         Namespace.MOUSE,
         MouseVerb.SET_ACCEL_PROFILE,
         new Uint8Array([profile]),
@@ -80,7 +81,7 @@ export async function setScrollMode(
     mode: number,
     targetNode = 0,
 ): Promise<void> {
-    const reply = await rpc.callUniversalPlain(
+    const reply = await rpc.callMutation(
         Namespace.MOUSE,
         MouseVerb.SET_SCROLL_MODE,
         new Uint8Array([mode]),
