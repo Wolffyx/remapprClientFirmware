@@ -361,7 +361,7 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
         : []
 
     // Optional peripheral overlay nodes (empty fragments when unconfigured).
-    const rgb = emitRgb(config, target.board, diag)
+    const rgb = emitRgb(config, book, diag)
     const enc = emitEncoders(config, book, diag)
     const sensor = emitSensor(config, book, diag)
 

@@ -312,3 +312,106 @@ describe('L1.10 encoder and slider keys get no fake matrix cell', () => {
         expect(overlayOf(res)).toContain('MATRIX_KEY(0, 1, REMAPPR_KB_POS_BASE + 1)')
     })
 })
+
+/** A two-key board with a WS2812 strip. */
+const strip = (
+    ws: Record<string, unknown>,
+    board: Record<string, unknown> = {},
+): string =>
+    pad(
+        { matrix: { rows: ['P0.4'], cols: ['P0.5', 'P1.6'] }, ...board },
+        {
+            hardware: {
+                transform: { rows: 1, columns: 2, map: [[0, 0], [0, 1]] },
+                ws2812: { spi: 'spi3', dataPin: 'P0.6', chainLength: 2, ...ws },
+            },
+        },
+    )
+
+const STM32_WS = {
+    spi: 'spi2',
+    dataPin: 'PC3',
+    stm32: { pinctrl: ['&spi2_sck_pb10', '&spi2_mosi_pc3'] },
+}
+const STM32_PINS = { matrix: { rows: ['PE11'], cols: ['PF15', 'PE13'] } }
+
+describe('L1.2 WS2812 frames', () => {
+    it('emits the HW-verified 0x78/0x60 frames on STM32 at 5 MHz', () => {
+        const ov = overlayOf(compile(strip(STM32_WS, STM32_PINS)))
+        expect(ov).toContain('spi-one-frame = <0x78>;')
+        expect(ov).toContain('spi-zero-frame = <0x60>;')
+        expect(ov).not.toContain('0xF0')
+    })
+
+    it('derives the frames from another SPI clock', () => {
+        const ov = overlayOf(
+            compile(strip({ ...STM32_WS, spiMaxFrequency: 8000000 }, STM32_PINS)),
+        )
+        // 125 ns a bit: '1' = 6 bits = 0.75 us, '0' = 3 bits = 0.375 us.
+        expect(ov).toContain('spi-one-frame = <0x7E>;')
+        expect(ov).toContain('spi-zero-frame = <0x70>;')
+    })
+
+    it('is an error for a clock no frame fits', () => {
+        const res = compile(strip({ ...STM32_WS, spiMaxFrequency: 2000000 }, STM32_PINS))
+        expect(errorsOf(res).some((m) => /no WS2812 bit timing fits a 2000000 Hz/.test(m))).toBe(true)
+    })
+})
+
+describe('L1.7 the WS2812 path follows the SoC', () => {
+    it('refuses an STM32 board without ws2812.stm32, instead of an nrf-spim node', () => {
+        const res = compile(
+            strip(
+                { spi: 'spi1', dataPin: 'PA7' },
+                { controller: 'nucleo_u5a5zj_q', ...STM32_PINS },
+            ),
+        )
+        expect(overlayOf(res)).not.toContain('nordic,nrf-spim')
+        expect(errorsOf(res).some((m) => /WS2812/.test(m))).toBe(true)
+    })
+
+    it('generates the nRF SPIM path for a custom nRF board.controller', () => {
+        const res = compile(
+            strip({}, { controller: { custom: true, soc: 'nrf52840', name: 'my_board' } }),
+        )
+        const ov = overlayOf(res)
+        expect(ov).toContain('psels = <NRF_PSEL(SPIM_MOSI, 0, 6)>;')
+        expect(ov).toContain('compatible = "nordic,nrf-spim";')
+        expect(ov).not.toContain('FIXME')
+        expect(errorsOf(res)).toEqual([])
+    })
+
+    it('is an error when the data pin is also a matrix pin', () => {
+        const res = compile(strip({ dataPin: 'P0.5' }, { controller: 'nrf52840dk/nrf52840' }))
+        expect(errorsOf(res).some((m) => /&gpio0 5 is used twice/.test(m))).toBe(true)
+    })
+})
+
+describe.skipIf(!TC)('WS2812 shields compile with dtc', () => {
+    it('on nRF and on STM32', () => {
+        for (const json of [
+            strip({}, { controller: 'nrf52840dk/nrf52840' }),
+            strip(STM32_WS, STM32_PINS),
+        ]) {
+            const r = dtcCheck(TC!, overlayOf(compile(json)))
+            expect(r.log).toBe('')
+        }
+    })
+})
+
+describe('L1.15 chain-length', () => {
+    it('raises the firmware pixel buffer for a strip longer than 64 LEDs', () => {
+        const res = compile(strip({ chainLength: 87 }, { controller: 'nrf52840dk/nrf52840' }))
+        const defcfg = String(
+            res.files.find((f) => f.filename.endsWith('Kconfig.defconfig'))!.content,
+        )
+        expect(defcfg).toContain('config REMAPPR_RGB_LED_MAX\n\tdefault 87')
+    })
+
+    it('warns when the strip is shorter than the key count', () => {
+        const res = compile(strip({ chainLength: 1 }, { controller: 'nrf52840dk/nrf52840' }))
+        expect(
+            res.diagnostics.some((d) => d.level === 'warn' && /shorter than the 2 keys/.test(d.message)),
+        ).toBe(true)
+    })
+})

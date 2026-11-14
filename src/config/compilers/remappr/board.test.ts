@@ -87,7 +87,7 @@ const RGB = parseKeymap(`{
         "storage": "nvs" }
 }`)
 
-// STM32 board with a WS2812 strip on SPI1 + GPDMA (the bench-proven path):
+// STM32 board with a WS2812 strip on SPI1 + GPDMA (the bench-verified path):
 // ws2812.stm32 carries the raw pinctrl / dmas the emitter can't guess.
 const STMRGB = parseKeymap(`{
     "schemaVersion": 1, "kind": "remappr.keymap",
@@ -257,7 +257,9 @@ describe('remappr-board shield compiler', () => {
         expect(ov).toContain('dma-names = "tx", "rx";')
         expect(ov).toContain('compatible = "worldsemi,ws2812-spi"')
         expect(ov).toContain('chain-length = <14>;')
-        expect(ov).toContain('spi-one-frame = <0xF0>;')
+        // The HW-verified bench14 frames (a low lead-in bit), not 0xF0/0xC0.
+        expect(ov).toContain('spi-one-frame = <0x78>;')
+        expect(ov).toContain('spi-zero-frame = <0x60>;')
         expect(ov).toContain('remappr,led-strip = &led_strip;')
         expect(ov).not.toContain('remappr,led-strip = <&led_strip>;')
         // NOT the nRF psel / FIXME-scaffold path.
