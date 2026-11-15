@@ -6,6 +6,7 @@
 // momentary / toggle / transparent). Richer canonical actions lower to
 // transparent for display and survive in the config across a raise (configBridge).
 import type { ActionType, KeyAction, KeyLabel } from '../../types'
+import type { BehaviorFamilies, BehaviorFamily } from './protocol'
 
 export const REMAPPR_KIND_TRANSPARENT = 'remappr:trans'
 export const REMAPPR_KIND_KEYPRESS = 'remappr:kp'
@@ -74,9 +75,29 @@ const HID_VALUES = (): { value: number; label: string }[] => {
     return out
 }
 
+/** The behavior family a picker kind belongs to; other kinds are core. */
+const KIND_FAMILY: Readonly<Record<string, BehaviorFamily>> = {
+    [REMAPPR_KIND_MOD_TAP]: 'tapHold',
+    [REMAPPR_KIND_LAYER_TAP]: 'tapHold',
+    [REMAPPR_KIND_MACRO]: 'macros',
+    [REMAPPR_KIND_TAP_DANCE]: 'sequences',
+}
+
 // pattern-check: skip — mechanical revert of the enum-slot experiment back to the
 // original bare ActionType factory (named-macro picking moves to the Macros tab).
-export function buildRemapprActionTypes(maxLayers: number): ActionType[] {
+/** The picker's action kinds. `families` (GET_LIMITS) drops the kinds of a
+ *  family the keyboard was built without; null = every family present. */
+export function buildRemapprActionTypes(
+    maxLayers: number,
+    families: BehaviorFamilies | null = null,
+): ActionType[] {
+    return allRemapprActionTypes(maxLayers).filter((t) => {
+        const family = KIND_FAMILY[t.id]
+        return family === undefined || (families?.[family] ?? true)
+    })
+}
+
+function allRemapprActionTypes(maxLayers: number): ActionType[] {
     return [
         {
             id: REMAPPR_KIND_TRANSPARENT,

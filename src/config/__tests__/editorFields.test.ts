@@ -110,6 +110,17 @@ describe('behavior (hold-tap / mod-morph) helpers', () => {
         ).toBe(true)
     })
 
+    it('featureSupported: a family counts as present until bit 13 says otherwise', () => {
+        expect(featureSupported('combos', 0)).toBe(true)
+        expect(featureSupported('combos', LimitsFeature.behaviorFamilies)).toBe(false)
+        expect(
+            featureSupported(
+                'combos',
+                LimitsFeature.behaviorFamilies | LimitsFeature.combos,
+            ),
+        ).toBe(true)
+    })
+
     it('toggleModifier adds then removes', () => {
         expect(toggleModifier(['LEFT_SHIFT'], 'LEFT_CTRL')).toEqual([
             'LEFT_SHIFT',

@@ -20,13 +20,21 @@ import { remapprAdapter } from './adapter'
 import { RemapprKeyboardService } from './service'
 import { supportsConfigEditing } from '../../configEditing'
 import { ccmOpen, ccmSeal } from './auth'
-import { REMAPPR_KIND_KEYPRESS, REMAPPR_KIND_TRANSPARENT } from './actions'
+import {
+    REMAPPR_KIND_KEYPRESS,
+    REMAPPR_KIND_LAYER_TAP,
+    REMAPPR_KIND_MACRO,
+    REMAPPR_KIND_MOD_TAP,
+    REMAPPR_KIND_TAP_DANCE,
+    REMAPPR_KIND_TRANSPARENT,
+} from './actions'
 import {
     buildUch,
     Cmd,
     CommonVerb,
     DongleVerb,
     EVENT_TAG,
+    Feature,
     EVT_INPUT,
     FRAME,
     KeyboardVerb,
@@ -116,7 +124,7 @@ const uniFrame = (
     const uch = buildUch(ns, reqId, 0, UchFlag.RESP | flags)
     return Uint8Array.from([UNIVERSAL_TAG, ...uch, ...chunk])
 }
-const limitsBytes = (): Uint8Array =>
+const limitsBytes = (featureBitmask = 0x003f): Uint8Array =>
     Uint8Array.from([
         ...le16(48),
         ...le16(16),
@@ -125,8 +133,8 @@ const limitsBytes = (): Uint8Array =>
         ...le16(8192),
         16,
         1,
-        ...le16(0x003f), // feature_bitmask lo (§7.4.1 Phase-2 features)
-        ...le16(0x0000), // feature_bitmask hi
+        ...le16(featureBitmask & 0xffff), // feature_bitmask lo (§7.4.1)
+        ...le16(featureBitmask >>> 16), // feature_bitmask hi
     ])
 // A mouse image also serves the MOUSE namespace (control.c lists it); a
 // fixture can say it does not, to check the motion facade follows the list.
@@ -177,7 +185,12 @@ interface FakeRemappr {
 }
 
 function makeFakeRemappr(
-    opts: { protoMax?: number; personality?: number; mouseNs?: boolean } = {},
+    opts: {
+        protoMax?: number
+        personality?: number
+        mouseNs?: boolean
+        featureBitmask?: number
+    } = {},
 ): FakeRemappr {
     const protoMax = opts.protoMax ?? 1
     let controller!: ReadableStreamDefaultController<Uint8Array>
@@ -252,7 +265,7 @@ function makeFakeRemappr(
             if (uch.namespace === Namespace.COMMON) {
                 if (verb === CommonVerb.GET_PERSONALITY_MAP)
                     data = personalityBytes(opts.personality, opts.mouseNs)
-                else if (verb === CommonVerb.GET_LIMITS) data = limitsBytes()
+                else if (verb === CommonVerb.GET_LIMITS) data = limitsBytes(opts.featureBitmask)
             } else if (uch.namespace === Namespace.KEYBOARD) {
                 if (verb === KeyboardVerb.GET_KEYMAP_BOUNDS) {
                     data = boundsBytes(4)
@@ -456,6 +469,40 @@ describe('RemapprKeyboardService — live config round-trip', () => {
         expect(svc.limits?.featureBitmask).toBe(0x3f)
         // The same guard the editors use accepts a real device (as it does the mock).
         expect(supportsConfigEditing(svc)).toBe(true)
+        await svc.disconnect()
+    })
+
+    it('advertises every behavior family on firmware that predates the family bits', async () => {
+        const svc = await connectFake(makeFakeRemappr({ protoMax: 2 }))
+        expect(svc.limits?.families).toBeNull()
+        const b = svc.capabilities.behaviors
+        expect([b?.tapHold, b?.combos, b?.macros, b?.sequences, b?.unicode]).toEqual([true, true, true, true, true])
+        expect([b?.conditionals, b?.keyOverrides, b?.leader, b?.autoShift]).toEqual([true, true, true, true])
+        const kinds = (await svc.listActionTypes()).map((t) => t.id)
+        expect(kinds).toContain(REMAPPR_KIND_MOD_TAP)
+        expect(kinds).toContain(REMAPPR_KIND_MACRO)
+        await svc.disconnect()
+    })
+
+    it('hides the behavior families a keyboard was built without', async () => {
+        // Families advertised (bit 13); only combos + Unicode built in.
+        const mask = 0x3f | Feature.BEHAVIOR_FAMILIES | Feature.COMBOS | Feature.UNICODE
+        const svc = await connectFake(makeFakeRemappr({ protoMax: 2, featureBitmask: mask }))
+        expect(svc.limits?.families).toEqual({
+            tapHold: false,
+            combos: true,
+            macros: false,
+            sequences: false,
+            unicode: true,
+            conditionals: false,
+            keyOverrides: false,
+        })
+        const b = svc.capabilities.behaviors
+        expect(b).toMatchObject({ tapHold: false, combos: true, unicode: true, leader: false, autoShift: false })
+        const kinds = (await svc.listActionTypes()).map((t) => t.id)
+        for (const k of [REMAPPR_KIND_MOD_TAP, REMAPPR_KIND_LAYER_TAP, REMAPPR_KIND_MACRO, REMAPPR_KIND_TAP_DANCE])
+            expect(kinds).not.toContain(k)
+        expect(kinds).toContain(REMAPPR_KIND_KEYPRESS)
         await svc.disconnect()
     })
 

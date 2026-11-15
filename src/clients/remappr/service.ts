@@ -11,6 +11,7 @@ import type {
     ClusterApi,
     DeviceConfigApi,
     DynamicEntriesApi,
+    FirmwareBehaviorFlags,
     KeyboardService,
     KeyTestApi,
     MacroApi,
@@ -71,6 +72,8 @@ import {
 } from './dynamicBridge'
 import type { RemapprRpc } from './rpc'
 import {
+    BEHAVIOR_FAMILIES,
+    type BehaviorFamilies,
     BLOB_ALIGN,
     Cmd,
     CommonVerb,
@@ -84,6 +87,18 @@ import {
     Status,
     statusName,
 } from './protocol'
+
+/**
+ * The Capabilities.behaviors flags for a keyboard's built-in behavior families
+ * (GET_LIMITS bits 14-20). Null families — firmware that predates family
+ * advertisement — has every family. A family built out also clears the
+ * older flags for what it owns: leader (sequences) and auto shift (tap-hold).
+ */
+export function behaviorFlagsFor(families: BehaviorFamilies | null): FirmwareBehaviorFlags {
+    const flags: FirmwareBehaviorFlags = {}
+    for (const f of BEHAVIOR_FAMILIES) flags[f] = families?.[f] ?? true
+    return { ...flags, leader: flags.sequences, autoShift: flags.tapHold }
+}
 
 type NotificationHandler = (notification: AdapterNotification) => void
 type PendingChangesHandler = (pending: boolean) => void
@@ -295,6 +310,7 @@ export class RemapprKeyboardService
             // written durably to device storage as a first-class feature.
             persistence: true,
             maxLayers: this.maxLayers,
+            behaviors: behaviorFlagsFor(this.limits?.families ?? null),
             readOnly: this.readOnly,
             ...(deps.readOnlyReason ? { readOnlyReason: deps.readOnlyReason } : {}),
             ...(power ? { power } : {}),
@@ -538,7 +554,7 @@ export class RemapprKeyboardService
     /* ── action catalog ─────────────────────────────────────────────────── */
 
     async listActionTypes(): Promise<ActionType[]> {
-        return buildRemapprActionTypes(this.maxLayers)
+        return buildRemapprActionTypes(this.maxLayers, this.limits?.families ?? null)
     }
 
     buildKeyAction(kind: string, params: number[]): KeyAction {
