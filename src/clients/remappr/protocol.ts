@@ -734,26 +734,20 @@ export function buildUniversal(
 /* ── proto-v2 reply payloads ────────────────────────────────────────────── */
 
 /**
- * §7.4.1 GET_LIMITS feature_bitmask bits (fw include/remappr/control.h
- * REMAPPR_FEAT_*). A set bit means the device honors that optional behavior/
- * timing field in a pushed config blob; the whole word is absent on pre-Phase-2
- * firmware, which parseLimits reports as 0 (no optional features).
+ * §7.4.1 GET_LIMITS feature_bitmask bits — the one table of them, under the
+ * firmware's names (fw include/remappr/control.h REMAPPR_FEAT_*; the CLI's
+ * remappr_proto.py LIMITS_FEATURE_BITS prints the same set). A set bit means
+ * the device honors that optional behavior / timing field in a pushed config
+ * blob; the whole word is absent on pre-Phase-2 firmware, which parseLimits
+ * reports as 0 (no optional features). Bits 0–5 are set only where the KEYBOARD
+ * namespace is served; firmware before the audit-E protocol fixes reported 0x3F
+ * on every device and no bit above 5.
+ *
+ * Bits 13–20 are the behavior families: BEHAVIOR_FAMILIES (13) says bits 14–20
+ * are valid, and each of those is set when its family is built into the image.
+ * Firmware without bit 13 predates the family knobs and has every family — read
+ * them through {@link familiesFromBitmask} / {@link hasFamily}, never raw.
  */
-export const LimitsFeature = {
-    holdTriggerOnRelease: 1 << 0,
-    capsWordIdle: 1 << 1,
-    stickyReleaseAfter: 1 << 2,
-    macroDefaults: 1 << 3,
-    matrixPollPeriod: 1 << 4,
-    layerTailV3: 1 << 5,
-    /** Keyboard usages 0x78..0xA7 (international, LANG, keyboard-page
-     *  volume) reach the host; without it a build stops at 0x77. */
-    kbdExt: 1 << 12,
-} as const
-
-/** GET_LIMITS feature_bitmask bits (REMAPPR_FEAT_*, control.h). Bits 0–5 are
- *  set only where the KEYBOARD namespace is served; firmware before the
- *  audit-E protocol fixes reported 0x3F on every device and no bit above 5. */
 export const Feature = {
     HOLD_ON_RELEASE: 1 << 0,
     CAPS_WORD_IDLE: 1 << 1,
@@ -767,7 +761,111 @@ export const Feature = {
     TBL_SENSOR_V2: 1 << 9,
     TBL_MOUSE_V3: 1 << 10,
     UNPAIR_ACTION: 1 << 11,
+    /** Keyboard usages 0x78..0xA7 (international, LANG, keyboard-page
+     *  volume) reach the host; without it a build stops at 0x77. */
+    KBD_EXT: 1 << 12,
+    BEHAVIOR_FAMILIES: 1 << 13,
+    /** Mod-tap, layer-tap, auto-shift, layer-tap-toggle, tune-term, TBL_POSHOLD. */
+    TAP_HOLD: 1 << 14,
+    /** TBL_COMBO. */
+    COMBOS: 1 << 15,
+    /** Macro, macro record / play, TBL_MACRO. */
+    MACROS: 1 << 16,
+    /** Tap-dance, leader, TBL_LEADER. */
+    SEQUENCES: 1 << 17,
+    /** The Unicode behavior. */
+    UNICODE: 1 << 18,
+    /** TBL_CONDITIONAL. */
+    CONDITIONALS: 1 << 19,
+    /** TBL_KEY_OVERRIDE. */
+    KEY_OVERRIDES: 1 << 20,
 } as const
+
+/** The {@link Feature} bits under the camelCase names the config layer keys its
+ *  feature requirements and labels by. Derived, so the two can't drift. */
+export const LimitsFeature = {
+    holdTriggerOnRelease: Feature.HOLD_ON_RELEASE,
+    capsWordIdle: Feature.CAPS_WORD_IDLE,
+    stickyReleaseAfter: Feature.STICKY_RELEASE,
+    macroDefaults: Feature.MACRO_DEFAULTS,
+    matrixPollPeriod: Feature.MATRIX_POLL,
+    layerTailV3: Feature.LAYER_TAIL_V3,
+    tblSlider: Feature.TBL_SLIDER,
+    tblDisplay: Feature.TBL_DISPLAY,
+    tblPower: Feature.TBL_POWER,
+    tblSensorV2: Feature.TBL_SENSOR_V2,
+    tblMouseV3: Feature.TBL_MOUSE_V3,
+    unpairAction: Feature.UNPAIR_ACTION,
+    kbdExt: Feature.KBD_EXT,
+    behaviorFamilies: Feature.BEHAVIOR_FAMILIES,
+    tapHold: Feature.TAP_HOLD,
+    combos: Feature.COMBOS,
+    macros: Feature.MACROS,
+    sequences: Feature.SEQUENCES,
+    unicode: Feature.UNICODE,
+    conditionals: Feature.CONDITIONALS,
+    keyOverrides: Feature.KEY_OVERRIDES,
+} as const
+
+/** A behavior family a keyboard image may build out (fw lib/behavior/Kconfig).
+ *  Sticky keys, caps word, repeat, the locks and mod-morph are core: always in. */
+export type BehaviorFamily =
+    | 'tapHold'
+    | 'combos'
+    | 'macros'
+    | 'sequences'
+    | 'unicode'
+    | 'conditionals'
+    | 'keyOverrides'
+
+/** Each family's GET_LIMITS bit, in bit order. */
+export const BEHAVIOR_FAMILY_BIT: Readonly<Record<BehaviorFamily, number>> = {
+    tapHold: Feature.TAP_HOLD,
+    combos: Feature.COMBOS,
+    macros: Feature.MACROS,
+    sequences: Feature.SEQUENCES,
+    unicode: Feature.UNICODE,
+    conditionals: Feature.CONDITIONALS,
+    keyOverrides: Feature.KEY_OVERRIDES,
+}
+
+export const BEHAVIOR_FAMILIES = Object.keys(BEHAVIOR_FAMILY_BIT) as BehaviorFamily[]
+
+/** Which behavior families the image has built in. */
+export type BehaviorFamilies = Readonly<Record<BehaviorFamily, boolean>>
+
+/** The families a feature bitmask advertises, or null when bit 13 is clear —
+ *  firmware from before family advertisement, which has every family. */
+export function familiesFromBitmask(featureBitmask: number): BehaviorFamilies | null {
+    if ((featureBitmask & Feature.BEHAVIOR_FAMILIES) === 0) return null
+    const out = {} as Record<BehaviorFamily, boolean>
+    for (const f of BEHAVIOR_FAMILIES) out[f] = (featureBitmask & BEHAVIOR_FAMILY_BIT[f]) !== 0
+    return out
+}
+
+/** Whether the device has `family` built in. True when the device says nothing
+ *  (no GET_LIMITS, or families null: firmware that predates the knobs). */
+export function hasFamily(
+    limits: { families: BehaviorFamilies | null } | undefined,
+    family: BehaviorFamily,
+): boolean {
+    return limits?.families?.[family] ?? true
+}
+
+const FAMILY_BITS_MASK = BEHAVIOR_FAMILIES.reduce((m, f) => m | BEHAVIOR_FAMILY_BIT[f], 0)
+
+/** Whether a device's feature bitmask covers feature bit(s) `bits`. Family bits
+ *  count as present on firmware without BEHAVIOR_FAMILIES (it has them all). */
+export function bitmaskHas(featureBitmask: number, bits: number): boolean {
+    return (bits & ~effectiveFeatureBitmask(featureBitmask)) === 0
+}
+
+/** `featureBitmask` with the family bits filled in for firmware that predates
+ *  family advertisement, so a plain `&` answers family questions correctly. */
+export function effectiveFeatureBitmask(featureBitmask: number): number {
+    if ((featureBitmask & Feature.BEHAVIOR_FAMILIES) !== 0) return featureBitmask
+    return featureBitmask | FAMILY_BITS_MASK
+}
 
 export interface Limits {
     maxUnsealedChunk: number
@@ -778,10 +876,15 @@ export interface Limits {
     maxOutstandingRequests: number
     supportsFragmentation: boolean
     featureBitmask: number // §7.4.1; 0 when absent (pre-Phase-2 firmware)
+    /** The behavior families built in; null = firmware that predates family
+     *  advertisement (bit 13 clear), which has every family. See hasFamily. */
+    families: BehaviorFamilies | null
 }
 
 export function parseLimits(d: Uint8Array): Limits {
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    // Append-only u32 tail; older firmware omits it (12-byte payload) → 0.
+    const featureBitmask = d.byteLength >= 16 ? dv.getUint32(12, true) : 0
     return {
         maxUnsealedChunk: dv.getUint16(0, true),
         maxSealedChunk: dv.getUint16(2, true),
@@ -790,8 +893,8 @@ export function parseLimits(d: Uint8Array): Limits {
         maxConfigBytes: dv.getUint16(8, true),
         maxOutstandingRequests: d[10],
         supportsFragmentation: d[11] !== 0,
-        // Append-only u32 tail; older firmware omits it (12-byte payload) → 0.
-        featureBitmask: d.byteLength >= 16 ? dv.getUint32(12, true) : 0,
+        featureBitmask,
+        families: familiesFromBitmask(featureBitmask),
     }
 }
 
