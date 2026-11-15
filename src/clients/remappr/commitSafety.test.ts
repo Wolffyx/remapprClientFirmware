@@ -41,6 +41,7 @@ const limits = (maxConfigBytes: number): Limits => ({
     maxOutstandingRequests: 1,
     supportsFragmentation: true,
     featureBitmask: 0,
+    families: null,
 })
 
 function setup(

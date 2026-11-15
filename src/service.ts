@@ -51,11 +51,26 @@ import type { ConfigDevice } from './config/device'
 import type { ConfigDisplay, ConfigScreenPage, ConfigScreenWidget } from './config/types'
 
 // pattern-check: skip optional behavior-flags field added to existing Capabilities DTO — feature gate per firmware
+// Each flag: `false` = the firmware lacks it (the UI hides it); `true` or absent =
+// present. The family flags mirror a Remappr keyboard's built-in behavior
+// families (GET_LIMITS bits 14-20); firmwares that don't build families out
+// leave them unset.
 export interface FirmwareBehaviorFlags {
     capsWord?: boolean
     leader?: boolean
     autoShift?: boolean
     swapHands?: boolean
+    /** Mod-tap, layer-tap, auto shift, tap-toggle, tapping-term tuning,
+     *  positional hold triggers. */
+    tapHold?: boolean
+    combos?: boolean
+    /** Macros, incl. recording / playing a macro. */
+    macros?: boolean
+    /** Tap-dances and leader sequences. */
+    sequences?: boolean
+    unicode?: boolean
+    conditionals?: boolean
+    keyOverrides?: boolean
 }
 
 export interface Capabilities {

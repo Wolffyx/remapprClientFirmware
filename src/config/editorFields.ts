@@ -27,7 +27,7 @@ import {
     TYPO_ALPHABET as AUTOCORRECT_TYPO_ALPHABET,
 } from './compilers/remappr/autocorrect'
 import type { FeatureName } from './featureWarnings'
-import { LimitsFeature, LinkProfileKnob } from '../clients/remappr/protocol'
+import { bitmaskHas, LimitsFeature, LinkProfileKnob } from '../clients/remappr/protocol'
 import type { SensorInfo } from '../devices/types'
 import { MATRIX_SETTINGS } from './compilers/remappr/matrix'
 import type { LinkLimitKnob } from '../configEditing'
@@ -175,7 +175,7 @@ export function fieldSupported(
     featureBitmask: number,
 ): boolean {
     if (!field.feature) return true
-    return (featureBitmask & LimitsFeature[field.feature]) !== 0
+    return bitmaskHas(featureBitmask, LimitsFeature[field.feature])
 }
 
 /** Timing fields a device part holds itself, keyed by `defaults` field. */
@@ -313,7 +313,7 @@ export function featureSupported(
     featureBitmask: number,
 ): boolean {
     if (!feature) return true
-    return (featureBitmask & LimitsFeature[feature]) !== 0
+    return bitmaskHas(featureBitmask, LimitsFeature[feature])
 }
 
 /** Add/remove `m` from a modifier list (immutable). */
