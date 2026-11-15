@@ -72,7 +72,7 @@ import {
 } from '@firmware/config'
 import type { ConfigEditingApi } from '@firmware/configEditing'
 import type { LinkLimitKnob } from '@firmware/configEditing'
-import type { Limits } from '@firmware/clients/remappr/protocol'
+import { familiesFromBitmask, type Limits } from '@firmware/clients/remappr/protocol'
 // Raw JSON source of the demo remappr.keymap — the config editor + download
 // modal's source of truth. `?raw` hands back the file verbatim as a string, so
 // it round-trips through parseKeymap unchanged. Parsed once: it both seeds the
@@ -219,6 +219,7 @@ export class MockKeyboardService implements KeyboardService, ConfigEditingApi {
         maxOutstandingRequests: 4,
         supportsFragmentation: true,
         featureBitmask: 0xffffffff,
+        families: familiesFromBitmask(0xffffffff),
     }
 
     private tapDances: TapDanceEntry[] = Array.from(

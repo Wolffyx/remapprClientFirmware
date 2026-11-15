@@ -249,6 +249,8 @@ export {
     type FeatureName,
     capabilityWarnings,
     configRequiredFeatures,
+    configRequiredFamilies,
+    BEHAVIOR_FAMILY_LABEL,
 } from './featureWarnings'
 export {
     type ZmkConfFlags,

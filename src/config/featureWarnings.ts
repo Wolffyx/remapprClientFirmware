@@ -10,24 +10,54 @@
 // connected device does NOT advertise, so the app can warn "firmware ignores X"
 // instead of silently dropping the field on push (the dlen-gated-tail failure
 // mode). Pure + dependency-light — the UI wiring lives in the app (Phase 5).
+//
+// Behavior families (bits 13-20) are the other kind of gap: a keyboard built
+// without a family REFUSES a config that uses it (validate fails), so those
+// warnings are `blocking` — the app must not push such a config at all.
 
 import { HID_USAGE_BY_CANONICAL } from '../catalog/entries'
-import { LimitsFeature } from '../clients/remappr/protocol'
+import {
+    BEHAVIOR_FAMILY_BIT,
+    effectiveFeatureBitmask,
+    LimitsFeature,
+    type BehaviorFamily,
+} from '../clients/remappr/protocol'
 import type { CanonAction, ConfigKeymap } from './types'
 
 /** A LimitsFeature bit name (the optional firmware features a config can need). */
 export type FeatureName = keyof typeof LimitsFeature
 
 /** One capability gap: the config uses `feature` but the connected firmware's
- *  GET_LIMITS bitmask does not advertise it, so the device SILENTLY IGNORES that
- *  field. `message` is a ready-to-show "firmware ignores X" line. */
+ *  GET_LIMITS bitmask does not advertise it. Non-blocking: the device SILENTLY
+ *  IGNORES that field, and `message` is a "firmware ignores X" line. Blocking (a
+ *  behavior family the image was built without): the device refuses the whole
+ *  config, so the app must not save it; `message` says what to remove. */
 export interface CapabilityWarning {
     feature: FeatureName
     message: string
+    blocking: boolean
 }
 
-/** Human label for each warnable feature (what the firmware will ignore). */
-const FEATURE_LABEL: Record<FeatureName, string> = {
+/** What each behavior family covers, for "built without X" messages and UI. */
+export const BEHAVIOR_FAMILY_LABEL: Readonly<Record<BehaviorFamily, string>> = {
+    tapHold: 'tap-hold keys (mod-tap, layer-tap, auto shift, tap-toggle, tapping-term tuning)',
+    combos: 'combos',
+    macros: 'macros (incl. recorded macros)',
+    sequences: 'tap-dances and leader sequences',
+    unicode: 'Unicode keys',
+    conditionals: 'conditional layers',
+    keyOverrides: 'key overrides',
+}
+
+const FAMILY_BY_BIT = new Map<number, BehaviorFamily>(
+    (Object.entries(BEHAVIOR_FAMILY_BIT) as [BehaviorFamily, number][]).map(
+        ([f, bit]) => [bit, f],
+    ),
+)
+
+/** Human label for each warnable feature (what the firmware will ignore). The
+ *  other bits name tables / actions a config never requires through here. */
+const FEATURE_LABEL: Partial<Record<FeatureName, string>> = {
     holdTriggerOnRelease: 'hold-trigger-on-release tap-holds',
     capsWordIdle: 'the caps-word idle timeout',
     stickyReleaseAfter: 'the sticky-key release timeout',
@@ -95,6 +125,68 @@ function usesExtKeys(config: ConfigKeymap): boolean {
     return [...macroKeys, ...overrideKeys, ...leaderKeys].some(isExtKey)
 }
 
+/** The family each family-owned action belongs to (fw behavior_table.h); any
+ *  other action is core. */
+const ACTION_FAMILY: Partial<Record<CanonAction['type'], BehaviorFamily>> = {
+    tap_hold: 'tapHold',
+    hold_tap: 'tapHold',
+    auto_shift: 'tapHold',
+    tap_toggle: 'tapHold',
+    tune_tap_term: 'tapHold',
+    macro: 'macros',
+    macro_record: 'macros',
+    macro_play: 'macros',
+    tap_dance: 'sequences',
+    leader: 'sequences',
+    unicode: 'unicode',
+}
+
+/** Every action the compiled blob will carry: the roots (layer keys, encoders,
+ *  sliders, combo and leader outputs) plus the tap-dance / mod-morph bodies they
+ *  reach. An unreferenced composite is never compiled, so it is skipped. */
+function compiledActions(config: ConfigKeymap): CanonAction[] {
+    const tapDances = new Map((config.tapDances ?? []).map((t) => [t.id, t]))
+    const modMorphs = new Map((config.modMorphs ?? []).map((m) => [m.id, m]))
+    const seen = new Set<string>()
+    const roots = allActions({ ...config, tapDances: [], modMorphs: [] })
+    const out: CanonAction[] = []
+    const visit = (a: CanonAction): void => {
+        out.push(a)
+        const key = 'ref' in a ? `${a.type}:${a.ref}` : undefined
+        if (key === undefined || seen.has(key)) return
+        seen.add(key)
+        const body =
+            a.type === 'tap_dance'
+                ? tapDances.get(a.ref)?.taps.map((t) => t.action)
+                : a.type === 'mod_morph'
+                  ? modMorphs.get(a.ref)?.bindings
+                  : undefined
+        for (const b of body ?? []) visit(b)
+    }
+    for (const a of roots) visit(a)
+    return out
+}
+
+/** The behavior families a config uses — the ones whose actions it binds, or
+ *  whose table it fills. A parameterized macro that is never bound compiles to
+ *  nothing; a plain macro is always written to the macro table. */
+export function configRequiredFamilies(config: ConfigKeymap): Set<BehaviorFamily> {
+    const out = new Set<BehaviorFamily>()
+    for (const a of compiledActions(config)) {
+        const f = ACTION_FAMILY[a.type]
+        if (f) out.add(f)
+    }
+    const plainMacro = (config.macros ?? []).some(
+        (m) => !m.steps.some((s) => s.type === 'param'),
+    )
+    if (plainMacro) out.add('macros')
+    if (config.combos?.length) out.add('combos')
+    if (config.leaderSequences?.length) out.add('sequences')
+    if (config.conditionalLayers?.length) out.add('conditionals')
+    if (config.keyOverrides?.length) out.add('keyOverrides')
+    return out
+}
+
 /**
  * The LimitsFeature bitmask a config exercises — the optional firmware features
  * that must be present for the config to behave exactly as authored. Absent /
@@ -124,30 +216,53 @@ export function configRequiredFeatures(config: ConfigKeymap): number {
     // one drops it.
     if (usesExtKeys(config)) req |= LimitsFeature.kbdExt
 
+    // Each behavior family the config uses: its bit must be set (or the device
+    // predate family advertisement — see effectiveFeatureBitmask).
+    for (const f of configRequiredFamilies(config)) req |= BEHAVIOR_FAMILY_BIT[f]
+
     return req
 }
 
+/** The warning for one missing feature bit: a family the image was built
+ *  without blocks the save; anything else is a field the firmware ignores. */
+function warningFor(name: FeatureName, bit: number): CapabilityWarning {
+    const family = FAMILY_BY_BIT.get(bit)
+    if (family)
+        return {
+            feature: name,
+            blocking: true,
+            message:
+                `This keyboard's firmware was built without ${BEHAVIOR_FAMILY_LABEL[family]}, ` +
+                'so it will refuse this config — remove them, or flash firmware that includes them.',
+        }
+    return {
+        feature: name,
+        blocking: false,
+        message: `This firmware ignores ${FEATURE_LABEL[name] ?? name} — update the firmware to use it.`,
+    }
+}
+
 /**
- * The features a config needs that the device's GET_LIMITS bitmask lacks — each
- * a field the firmware will SILENTLY IGNORE on push. Empty when the device
- * covers everything the config uses. Pass the device's `featureBitmask` (0 for
- * pre-Phase-2 firmware, which then warns about every optional field in use).
+ * The features a config needs that the device's GET_LIMITS bitmask lacks. Each
+ * is either a field the firmware will SILENTLY IGNORE on push, or (`blocking`)
+ * a behavior family the image was built without, which makes the device refuse
+ * the config. Empty when the device covers everything the config uses. Pass the
+ * device's `featureBitmask` (0 for pre-Phase-2 firmware, which then warns about
+ * every optional field in use; firmware without the BEHAVIOR_FAMILIES bit has
+ * every family, so it never gets a blocking warning).
  */
 export function capabilityWarnings(
     config: ConfigKeymap,
     deviceFeatureBitmask: number,
 ): CapabilityWarning[] {
-    const missing = configRequiredFeatures(config) & ~deviceFeatureBitmask
+    const missing =
+        configRequiredFeatures(config) & ~effectiveFeatureBitmask(deviceFeatureBitmask)
     const out: CapabilityWarning[] = []
     for (const [name, bit] of Object.entries(LimitsFeature) as [
         FeatureName,
         number,
     ][]) {
-        if (missing & bit)
-            out.push({
-                feature: name,
-                message: `This firmware ignores ${FEATURE_LABEL[name]} — update the firmware to use it.`,
-            })
+        if (missing & bit) out.push(warningFor(name, bit))
     }
     return out
 }
