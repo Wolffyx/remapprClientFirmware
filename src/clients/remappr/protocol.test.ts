@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
     EVT_ROLE,
+    Fn,
     HwCap,
     parseClusterDiag,
     InputClass,
@@ -12,6 +13,7 @@ import {
     INPUT_NONE,
     parseInputLayoutPage,
     parseKeyLayoutChunk,
+    parsePersonalityMap,
     parseRoleEvent,
     parseUchEvent,
     reportsHwCap,
@@ -185,5 +187,26 @@ describe('parseInputLayoutPage (input-layout plan §2)', () => {
         expect(() => parseInputLayoutPage(Uint8Array.of(1, 0, 0))).toThrow(
             /too short/,
         )
+    })
+})
+
+describe('GET_PERSONALITY_MAP function_bits tail (§3.4)', () => {
+    // role, personality, proto 2, one namespace record, then u32 hw_caps.
+    const head = [0, 1, 2, 1, 0x00, 0xff, 0xff, 0x02, 0, 0, 0]
+
+    it('reads the u32 after hw_caps', () => {
+        const pm = parsePersonalityMap(Uint8Array.from([...head, 0x07, 0, 0, 0]))
+        expect(pm.hwCaps).toBe(0x02)
+        expect(pm.functionBits).toBe(Fn.KBD | Fn.CONSUMER | Fn.SYSCTRL)
+    })
+
+    it('leaves it undefined on firmware from before the tail', () => {
+        const pm = parsePersonalityMap(Uint8Array.from(head))
+        expect(pm.hwCaps).toBe(0x02)
+        expect(pm.functionBits).toBeUndefined()
+    })
+
+    it('keeps the firmware bit values (include/remappr/function.h)', () => {
+        expect(Fn).toEqual({ KBD: 0x01, CONSUMER: 0x02, SYSCTRL: 0x04, POINTER: 0x08, GAMEPAD: 0x10 })
     })
 })
