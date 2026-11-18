@@ -941,12 +941,26 @@ export function parseLinkLimits(d: Uint8Array): LinkLimitKnob[] {
     return out
 }
 
+/** Functions (firmware include/remappr/function.h, universal device model
+ *  §2.3): the host interfaces an image built, GET_PERSONALITY_MAP's u32 tail
+ *  after `hw_caps` (§3.4). A wire ABI: append only. */
+export const Fn = {
+    KBD: 1 << 0, // boot + NKRO keyboard
+    CONSUMER: 1 << 1, // consumer control (media keys)
+    SYSCTRL: 1 << 2, // system control (power, sleep)
+    POINTER: 1 << 3, // mouse
+    GAMEPAD: 1 << 4, // gamepad / joystick
+} as const
+
 export interface PersonalityMap {
     role: number
     personality: number
     protoMajor: number
     namespaces: { namespace: number; verbMask: number }[]
     hwCaps: number
+    /** The functions the image built; undefined on firmware from before the
+     *  tail (it ends at `hw_caps`). */
+    functionBits?: number
 }
 
 export function parsePersonalityMap(d: Uint8Array): PersonalityMap {
@@ -961,12 +975,14 @@ export function parsePersonalityMap(d: Uint8Array): PersonalityMap {
         })
         off += 3
     }
+    const hasFunctions = d.byteLength >= off + 8
     return {
         role: d[0],
         personality: d[1],
         protoMajor: d[2],
         namespaces,
         hwCaps: dv.getUint32(off, true),
+        ...(hasFunctions ? { functionBits: dv.getUint32(off + 4, true) } : {}),
     }
 }
 
