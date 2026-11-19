@@ -80,6 +80,8 @@ import {
     CFG_ROLE_COORD,
     FWD_MODE_PHYSICAL,
     CLUSTER_MODE_ALONE,
+    CLUSTER_POWER_FOLLOW,
+    CLUSTER_POWER_OWN,
     CLUSTER_TBL_HDR_LEN,
     CLUSTER_UID_MAX,
     CLUSTER_NODE_WIRE,
@@ -1061,6 +1063,7 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
         pers.role ||
         pers.forwardMode ||
         pers.clusterMode ||
+        pers.clusterPower ||
         cluster?.nodes ||
         cluster?.sides ||
         linkProfile ||
@@ -1072,6 +1075,7 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
                   ...(pers.role ? { role: pers.role } : {}),
                   ...(pers.forwardMode ? { forwardMode: pers.forwardMode } : {}),
                   ...(pers.clusterMode ? { clusterMode: pers.clusterMode } : {}),
+                  ...(pers.clusterPower ? { clusterPower: pers.clusterPower } : {}),
                   ...(mouse ? { mouse } : {}),
                   ...(cluster?.nodes ? { cluster: cluster.nodes } : {}),
                   ...(cluster?.sides ? { clusterSides: cluster.sides } : {}),
@@ -1261,11 +1265,11 @@ function readMouse(
 function readPersonality(
     bytes: Uint8Array,
     t: TableFrame,
-): Pick<ConfigNode, 'personality' | 'role' | 'forwardMode' | 'clusterMode'> {
+): Pick<ConfigNode, 'personality' | 'role' | 'forwardMode' | 'clusterMode' | 'clusterPower'> {
     const len = t.end - t.start
     if (len < 1) return {}
     const r = ByteReader.frame(bytes, t)
-    const out: Pick<ConfigNode, 'personality' | 'role' | 'forwardMode' | 'clusterMode'> = {}
+    const out: Pick<ConfigNode, 'personality' | 'role' | 'forwardMode' | 'clusterMode' | 'clusterPower'> = {}
     const p = ({ 1: 'keyboard', 2: 'mouse' } as Record<
         number,
         ConfigNode['personality']
@@ -1278,6 +1282,13 @@ function readPersonality(
     }
     if (len > 2 && r.u8() === FWD_MODE_PHYSICAL) out.forwardMode = 'physical'
     if (len > 3 && r.u8() === CLUSTER_MODE_ALONE) out.clusterMode = 'alone'
+    if (len > 4) {
+        const cp = ({ [CLUSTER_POWER_FOLLOW]: 'follow', [CLUSTER_POWER_OWN]: 'own' } as Record<
+            number,
+            ConfigNode['clusterPower']
+        >)[r.u8()]
+        if (cp) out.clusterPower = cp
+    }
     return out
 }
 
