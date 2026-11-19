@@ -20,6 +20,12 @@ import {
     buildClusterSetIdArg,
     buildClusterSetSideArg,
     buildClusterSplitArg,
+    buildClusterRelay,
+    unwrapClusterRelay,
+    CLUSTER_RELAY_FRAME_MAX,
+    buildUniversal,
+    buildRequest,
+    parseUch,
     ClusterSide,
     KNOWN_NS_VERSION,
     Namespace,
@@ -289,5 +295,32 @@ describe('CLUSTER namespace (§7.1)', () => {
         expect(e.shortId).toBe(5)
         expect(Array.from(e.uid)).toEqual([0xaa, 0xbb])
         expect(() => parseClusterEvent(Uint8Array.from([5, 0, 2, 0xaa]))).toThrow(/truncated/)
+    })
+})
+
+describe('CLUSTER.RELAY nesting (§7.3, §7.4)', () => {
+    it('nests a member frame for the attached node', () => {
+        const member = buildUniversal(0x0c, 7, buildRequest(0x01, 9, new Uint8Array()), 2)
+        const outer = buildClusterRelay(5, 3, member, 1)
+        const uch = parseUch(outer, 1)
+        expect(uch.namespace).toBe(0x0c)
+        expect(uch.requestId).toBe(5)
+        expect(uch.targetNode).toBe(1) // the dongle pipe of the attached node
+        expect(outer[9]).toBe(0x07) // RELAY
+        expect(outer[11] | (outer[12] << 8)).toBe(member.length)
+        expect(Array.from(outer.subarray(13))).toEqual(Array.from(member))
+        expect(parseUch(outer, 14).targetNode).toBe(2) // the member's short-id
+        expect(outer.length).toBe(member.length + 13)
+    })
+
+    it('refuses a frame too big for one report', () => {
+        expect(() => buildClusterRelay(1, 1, new Uint8Array(CLUSTER_RELAY_FRAME_MAX + 1))).toThrow(/too big/)
+    })
+
+    it('unwraps the member reply by its request id', () => {
+        const reply = buildUniversal(0x0c, 7, Uint8Array.of(0x01, 9, 0, 0, 0, 0))
+        expect(unwrapClusterRelay(reply, 7)).toBe(reply)
+        expect(() => unwrapClusterRelay(reply, 8)).toThrow(/another member request/)
+        expect(() => unwrapClusterRelay(Uint8Array.of(0, 1), 7)).toThrow(/no member frame/)
     })
 })

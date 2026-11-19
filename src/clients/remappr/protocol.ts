@@ -1086,7 +1086,50 @@ export const ClusterVerb = {
     SET_ID: 0x03,
     SET_SIDE: 0x04,
     SPLIT: 0x05,
+    /** 0x06 MERGE is reserved: the app merges by sending SET_ID to each
+     *  member, sealed with its session (firmware ruling 2026-11-19). */
+    /** Carry a whole frame to another member (§7.3); answers later. */
+    RELAY: 0x07,
 } as const
+
+/** What nesting a frame in CLUSTER.RELAY costs (firmware cluster_ns.h, §7.4):
+ *  tag + UCH + request header in, + response header back. Take it off the
+ *  member's GET_LIMITS chunk sizes for a relayed member (ruling 2026-11-19). */
+export const CLUSTER_RELAY_REQ_OVERHEAD = 13
+export const CLUSTER_RELAY_RESP_OVERHEAD = 15
+/** The largest member frame one relay carries (a 64-byte report). */
+export const CLUSTER_RELAY_FRAME_MAX = 64 - CLUSTER_RELAY_REQ_OVERHEAD
+
+/** A CLUSTER.RELAY request: `memberFrame` (a whole 0xE2 frame whose UCH
+ *  target_node is the member's cluster short-id) nested for the node the app
+ *  is attached to (`targetNode`: 0, or its dongle pipe short-id). Reads only in
+ *  plaintext; a member takes writes only sealed with its own session (Q13). */
+export function buildClusterRelay(
+    requestId: number,
+    seq: number,
+    memberFrame: Uint8Array,
+    targetNode = 0,
+): Uint8Array {
+    if (memberFrame.length > CLUSTER_RELAY_FRAME_MAX)
+        throw new Error(`member frame ${memberFrame.length} B too big to relay (max ${CLUSTER_RELAY_FRAME_MAX})`)
+    return buildUniversal(
+        Namespace.CLUSTER,
+        requestId,
+        buildRequest(ClusterVerb.RELAY, seq, memberFrame),
+        targetNode,
+    )
+}
+
+/** One member reply frame out of a (reassembled) CLUSTER.RELAY reply's data.
+ *  A fragmented member reply arrives as several relay replies: feed each
+ *  frame to the usual FRAG reassembly, keyed on the member request id. */
+export function unwrapClusterRelay(data: Uint8Array, memberRequestId: number): Uint8Array {
+    if (data.length < 1 + UCH_LEN || data[0] !== UNIVERSAL_TAG)
+        throw new Error('relay reply carries no member frame')
+    const uch = parseUch(data, 1)
+    if (uch.requestId !== memberRequestId) throw new Error('relay reply for another member request')
+    return data
+}
 
 /** Where a cluster id came from (enum remappr_cluster_id_source). */
 export const ClusterIdSource = { NONE: 0, MINTED: 1, BUILD: 2, APP: 3 } as const
