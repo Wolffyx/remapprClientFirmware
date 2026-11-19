@@ -22,9 +22,13 @@ const limitsPayload = (mask?: number): Uint8Array =>
     ])
 
 describe('feature bits', () => {
-    it('names bits 0-21 as the firmware does, in one table', () => {
-        expect(Object.values(Feature)).toEqual(Array.from({ length: 22 }, (_, i) => 1 << i))
+    it('names bits 0-21 and 23 as the firmware does, in one table', () => {
+        expect(Object.values(Feature)).toEqual([
+            ...Array.from({ length: 22 }, (_, i) => 1 << i),
+            1 << 23, // bit 22 (CLUSTER_POWER) lands with D3 part 7
+        ])
         expect(Feature.CLUSTER_MODE).toBe(1 << 21) // §5.4, after the families
+        expect(Feature.TBL_CLUSTER_V2).toBe(1 << 23) // §5.3
         expect([Feature.KBD_EXT, Feature.BEHAVIOR_FAMILIES, Feature.TAP_HOLD]).toEqual([1 << 12, 1 << 13, 1 << 14])
         expect([Feature.COMBOS, Feature.MACROS, Feature.SEQUENCES]).toEqual([1 << 15, 1 << 16, 1 << 17])
         expect([Feature.UNICODE, Feature.CONDITIONALS, Feature.KEY_OVERRIDES]).toEqual([1 << 18, 1 << 19, 1 << 20])

@@ -1099,6 +1099,40 @@ describe('decodeRemapprBlob TBL_CLUSTER (id 21, §N4c mode-A)', () => {
             ),
         )
     })
+
+    const sidesJson = (sides: string): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "C", "target": "zmk" }, ${kb(2)},
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+        "node": { "forwardMode": "physical", "clusterSides": ${sides} }
+    }`
+
+    it('lowers the side map as TBL_CLUSTER v2 and decodes it back (§5.3)', () => {
+        const cfg = parseKeymap(
+            sidesJson(`[
+                { "side": 0, "rows": 5, "cols": 6, "encoders": 1 },
+                { "side": 1, "rows": 4, "cols": 6, "sliders": 2 }
+            ]`),
+        )
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node?.cluster).toBeUndefined()
+        expect(config?.node?.clusterSides).toEqual([
+            { side: 0, rows: 5, cols: 6, encoders: 1 },
+            { side: 1, rows: 4, cols: 6, sliders: 2 },
+        ])
+        roundTrips(sidesJson(`[{ "side": 0, "rows": 1, "cols": 2 }, { "side": 1, "rows": 1, "cols": 3 }]`))
+    })
+
+    it('refuses a side map out of order', () => {
+        const cfg = parseKeymap(
+            sidesJson(`[{ "side": 1, "rows": 1, "cols": 1 }, { "side": 0, "rows": 1, "cols": 1 }]`),
+        )
+        const { diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.some((d) => d.level === 'error')).toBe(true)
+    })
 })
 
 describe('decodeRemapprBlob node power (TBL_POWER, sleep-wake design)', () => {
