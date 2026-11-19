@@ -1040,6 +1040,22 @@ describe('decodeRemapprBlob node role + forwardMode (§N4b/§N4c TBL_PERSONALITY
         )
     })
 
+    it('lowers cluster power into byte 4 and decodes it back (§5.8)', () => {
+        const cfg = parseKeymap(nodeJson('{ "clusterPower": "own" }'))
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        expect(decodeRemapprBlob(blob).config?.node?.clusterPower).toBe('own')
+
+        // auto is the default: no byte 4, no table, nothing reconstructed.
+        const auto = buildRemapprBlob(parseKeymap(nodeJson('{ "clusterPower": "auto" }')), {
+            configVersion: 1,
+        })
+        expect(decodeRemapprBlob(auto.blob).config?.node?.clusterPower).toBeUndefined()
+        expect(auto.blob.length).toBe(
+            buildRemapprBlob(parseKeymap(nodeJson('{}')), { configVersion: 1 }).blob.length,
+        )
+    })
+
     it('emits no TBL_PERSONALITY for a default node (resolved, no role)', () => {
         const cfg = parseKeymap(nodeJson('{ "forwardMode": "resolved" }'))
         const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })

@@ -1444,6 +1444,12 @@ export interface ConfigNode {
      *  while the link is down) or 'alone' (always resolve and type locally).
      *  Needs firmware that sets GET_LIMITS Feature.CLUSTER_MODE. */
     clusterMode?: 'auto' | 'alone'
+    /** Cluster power (§5.8, TBL_PERSONALITY byte 4): 'auto' (the default:
+     *  follow on a wired link), 'follow' (a follower takes the coordinator's
+     *  power level while coordinated) or 'own' (each member its own clock; a
+     *  held key still keeps the coordinator awake). Needs firmware that sets
+     *  GET_LIMITS Feature.CLUSTER_POWER. */
+    clusterPower?: 'auto' | 'follow' | 'own'
     /** Mode-A cluster address map (§N4c, TBL_CLUSTER) — the coordinator's UID→
      *  address assignment for each cluster node. Present on a mode-A coordinator. */
     cluster?: ConfigClusterNode[]

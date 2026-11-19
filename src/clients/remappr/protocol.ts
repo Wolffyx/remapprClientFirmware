@@ -784,7 +784,9 @@ export const Feature = {
     KEY_OVERRIDES: 1 << 20,
     /** TBL_PERSONALITY cluster_mode byte (universal device model §5.4). */
     CLUSTER_MODE: 1 << 21,
-    /** TBL_CLUSTER v2 with the side map (§5.3). Bit 22 is CLUSTER_POWER (D3 part 7). */
+    /** TBL_PERSONALITY cluster_power byte (§5.8). */
+    CLUSTER_POWER: 1 << 22,
+    /** TBL_CLUSTER v2 with the side map (§5.3). */
     TBL_CLUSTER_V2: 1 << 23,
 } as const
 
@@ -813,6 +815,7 @@ export const LimitsFeature = {
     conditionals: Feature.CONDITIONALS,
     keyOverrides: Feature.KEY_OVERRIDES,
     clusterMode: Feature.CLUSTER_MODE,
+    clusterPower: Feature.CLUSTER_POWER,
     tblClusterV2: Feature.TBL_CLUSTER_V2,
 } as const
 

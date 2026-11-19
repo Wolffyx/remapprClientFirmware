@@ -58,6 +58,19 @@ describe('configRequiredFeatures', () => {
         expect(configRequiredFeatures(node('auto'))).toBe(0)
     })
 
+    it('a cluster power policy needs the CLUSTER_POWER bit; auto needs nothing (§5.8)', () => {
+        const node = (p: string): ConfigKeymap =>
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "N", "target": "zmk" }, ${kb(1)},
+                "layers": [{ "name": "base", "bindings": ["A"] }],
+                "node": { "clusterPower": "${p}" }
+            }`)
+        expect(configRequiredFeatures(node('follow')) & LimitsFeature.clusterPower).toBeTruthy()
+        expect(configRequiredFeatures(node('own')) & LimitsFeature.clusterPower).toBeTruthy()
+        expect(configRequiredFeatures(node('auto'))).toBe(0)
+    })
+
     it('a side map needs the TBL_CLUSTER_V2 bit (§5.3)', () => {
         const cfg = parseKeymap(`{
             "schemaVersion": 1, "kind": "remappr.keymap",
