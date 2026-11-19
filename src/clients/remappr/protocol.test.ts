@@ -17,6 +17,8 @@ import {
     parseClusterInfo,
     parseClusterMembers,
     parseClusterEvent,
+    parseClusterConfigRefused,
+    ClusterRefuse,
     buildClusterSetIdArg,
     buildClusterSetSideArg,
     buildClusterSplitArg,
@@ -295,6 +297,11 @@ describe('CLUSTER namespace (§7.1)', () => {
         expect(e.shortId).toBe(5)
         expect(Array.from(e.uid)).toEqual([0xaa, 0xbb])
         expect(() => parseClusterEvent(Uint8Array.from([5, 0, 2, 0xaa]))).toThrow(/truncated/)
+        const r = parseClusterConfigRefused(
+            Uint8Array.from([2, 0, 9, 0x96, 0, 0, 0, 0xd4, 0xc3, 0xb2, 0xa1, ClusterRefuse.TABLE]),
+        )
+        expect(r).toEqual({ shortId: 2, version: 0x96, crc: 0xa1b2c3d4, reason: ClusterRefuse.TABLE })
+        expect(() => parseClusterConfigRefused(Uint8Array.from([2, 0, 9, 1]))).toThrow(/truncated/)
     })
 })
 

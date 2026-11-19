@@ -1153,6 +1153,16 @@ export const ClusterEvent = {
     MEMBER_JOINED: 0x01,
     MEMBER_LEFT: 0x02,
     COORDINATOR_CHANGED: 0x03,
+    /** §5.5: this member kept its own config instead of the coordinator's. */
+    CONFIG_REFUSED: 0x04,
+} as const
+/** Why a member kept its own config (CONFIG_REFUSED reason byte, §5.5 / §5.9). */
+export const ClusterRefuse = {
+    DEVICE: 0x01,
+    TABLE: 0x02,
+    SIZE: 0x03,
+    MAJOR: 0x04,
+    STORE: 0x05,
 } as const
 /** The SUBSCRIBE_EVENTS class bit for NS_CLUSTER events. */
 export const EVT_CLASS_CLUSTER = 1 << 1
@@ -1263,6 +1273,24 @@ export function buildClusterSplitArg(): Uint8Array {
 export function parseClusterEvent(d: Uint8Array): { shortId: number; uid: Uint8Array } {
     if (d.length < 3 || d.length < 3 + d[2]) throw new Error('cluster event truncated')
     return { shortId: d[0] | (d[1] << 8), uid: d.slice(3, 3 + d[2]) }
+}
+
+/** A CONFIG_REFUSED event payload: `u16 short_id, u8 9, u32 version, u32 crc,
+ *  u8 reason` (ClusterRefuse). */
+export function parseClusterConfigRefused(d: Uint8Array): {
+    shortId: number
+    version: number
+    crc: number
+    reason: number
+} {
+    if (d.length < 12 || d[2] < 9) throw new Error('config-refused event truncated')
+    const v = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    return {
+        shortId: v.getUint16(0, true),
+        version: v.getUint32(3, true),
+        crc: v.getUint32(7, true),
+        reason: d[11],
+    }
 }
 
 /** GET_CONFIG_METADATA reply: a 20-byte RMBC header of the selected slot. */
