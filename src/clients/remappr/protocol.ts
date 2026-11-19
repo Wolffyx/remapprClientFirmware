@@ -204,6 +204,9 @@ export const Namespace = {
     /** Host-pushed values (clock, CPU, media, text) that a device's screens
      *  show (include/remappr/host_values.h). Served only when listed. */
     HOST: 0x0b,
+    /** Cluster identity and members (firmware universal device model §7.1,
+     *  include/remappr/cluster_ns.h). Served only when listed. */
+    CLUSTER: 0x0c,
 } as const
 
 export const UchFlag = {
@@ -1070,6 +1073,140 @@ export const KNOWN_NS_VERSION: Readonly<Record<number, number>> = {
     [Namespace.INPUT]: 1,
     [Namespace.SENSOR]: 1,
     [Namespace.HOST]: 1,
+    [Namespace.CLUSTER]: 1,
+}
+
+/* ── CLUSTER namespace (0x0C) ───────────────────────────────────────────── */
+
+/** enum remappr_cluster_verb (cluster_ns.h). SET_ID, SET_SIDE and SPLIT are
+ *  sealed; MERGE and RELAY come with the relay (firmware D3 part 4). */
+export const ClusterVerb = {
+    GET_INFO: 0x01,
+    GET_MEMBERS: 0x02,
+    SET_ID: 0x03,
+    SET_SIDE: 0x04,
+    SPLIT: 0x05,
+} as const
+
+/** Where a cluster id came from (enum remappr_cluster_id_source). */
+export const ClusterIdSource = { NONE: 0, MINTED: 1, BUILD: 2, APP: 3 } as const
+/** Side values: a member index (0 = left, 1 = right); 0xff = unknown. */
+export const ClusterSide = { LEFT: 0, RIGHT: 1, NONE: 0xff } as const
+/** NS_CLUSTER event ids (SUBSCRIBE_EVENTS class bit 1). */
+export const ClusterEvent = {
+    MEMBER_JOINED: 0x01,
+    MEMBER_LEFT: 0x02,
+    COORDINATOR_CHANGED: 0x03,
+} as const
+/** The SUBSCRIBE_EVENTS class bit for NS_CLUSTER events. */
+export const EVT_CLASS_CLUSTER = 1 << 1
+/** GET_MEMBERS: at most this many records per page (fits the 48-byte chunk). */
+export const CLUSTER_MEMBERS_PER_PAGE = 2
+const CLUSTER_INFO_LEN = 17
+const CLUSTER_MEMBER_LEN = 23
+
+export interface ClusterInfo {
+    /** 0n: in no cluster. */
+    id: bigint
+    idSource: number
+    /** true: coordinated (a cluster link is up); false: alone. */
+    coordinated: boolean
+    /** true: mode A (physical positions); false: mode B (resolved HID). */
+    physical: boolean
+    coordinator: number
+    memberCount: number
+    myShortId: number
+    mySide: number
+    /** The id is a locked build id: SET_ID and SPLIT are refused. */
+    locked: boolean
+    /** A member runs alone because of its firmware version. */
+    skew: boolean
+}
+
+export function parseClusterInfo(d: Uint8Array): ClusterInfo {
+    if (d.length < CLUSTER_INFO_LEN) throw new Error(`cluster info is ${d.length} B, needs ${CLUSTER_INFO_LEN}`)
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    return {
+        id: dv.getBigUint64(0, true),
+        idSource: d[8],
+        coordinated: d[9] === 0,
+        physical: d[10] !== 0,
+        coordinator: dv.getUint16(11, true),
+        memberCount: d[13],
+        myShortId: d[14],
+        mySide: d[15],
+        locked: (d[16] & 0x01) !== 0,
+        skew: (d[16] & 0x02) !== 0,
+    }
+}
+
+export interface ClusterMember {
+    shortId: number
+    /** The member's 64-bit UID as the firmware sends it (u64 LE). */
+    uid: Uint8Array
+    side: number
+    functionBits: number
+    /** 0: the answering node itself; 1: over the node bus. */
+    link: number
+    role: number
+    /** 0..100, or null when unknown. */
+    battery: number | null
+    fw: [number, number, number]
+    /** Its first position in the cluster keymap; null until placed. */
+    positionBase: number | null
+}
+
+/** One GET_MEMBERS page: `u8 total, u8 count, count × 23-byte record`. Page
+ *  with `start` until `start + count == total`. */
+export function parseClusterMembers(d: Uint8Array): { total: number; members: ClusterMember[] } {
+    if (d.length < 2) throw new Error('cluster members page too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const count = d[1]
+    if (d.length < 2 + count * CLUSTER_MEMBER_LEN) throw new Error('cluster members page truncated')
+    const members: ClusterMember[] = []
+    for (let i = 0; i < count; i++) {
+        const o = 2 + i * CLUSTER_MEMBER_LEN
+        const soc = d[o + 17]
+        const base = dv.getUint16(o + 21, true)
+        members.push({
+            shortId: dv.getUint16(o, true),
+            uid: d.slice(o + 2, o + 10),
+            side: d[o + 10],
+            functionBits: dv.getUint32(o + 11, true),
+            link: d[o + 15],
+            role: d[o + 16],
+            battery: soc === 0xff ? null : soc,
+            fw: [d[o + 18], d[o + 19], d[o + 20]],
+            positionBase: base === 0xffff ? null : base,
+        })
+    }
+    return { total: d[0], members }
+}
+
+/** SET_ID arg: u64 LE; 0n clears the id. */
+export function buildClusterSetIdArg(id: bigint): Uint8Array {
+    const out = new Uint8Array(8)
+    new DataView(out.buffer).setBigUint64(0, id, true)
+    return out
+}
+
+/** SET_SIDE arg for the node it is sent to (short_id 0 = itself; another
+ *  member is reached through CLUSTER.RELAY, firmware D3 part 4). */
+export function buildClusterSetSideArg(side: number): Uint8Array {
+    if (!Number.isInteger(side) || side < 0 || side > 0xff) throw new Error(`side ${side} out of range`)
+    return Uint8Array.of(0, 0, side)
+}
+
+/** SPLIT arg for the node it is sent to. The device refuses (ERR_STATE) while
+ *  it is wired to its cluster. */
+export function buildClusterSplitArg(): Uint8Array {
+    return Uint8Array.of(0, 0)
+}
+
+/** An NS_CLUSTER event payload: `u16 short_id, u8 uid_len, uid[]`. */
+export function parseClusterEvent(d: Uint8Array): { shortId: number; uid: Uint8Array } {
+    if (d.length < 3 || d.length < 3 + d[2]) throw new Error('cluster event truncated')
+    return { shortId: d[0] | (d[1] << 8), uid: d.slice(3, 3 + d[2]) }
 }
 
 /* ── HOST namespace (0x0B) ──────────────────────────────────────────────── */
