@@ -693,21 +693,14 @@ const remapprWestYml = (selfPath: string): string =>
         ``,
     ].join('\n')
 
-/** The firmware app a personality runs (remappr-firmware/app/<app>). */
-const FIRMWARE_APP: Record<string, string> = {
-    keyboard: 'keyboard_node',
-    mouse: 'mouse',
-    joystick: 'joystick',
-    dongle: 'dongle',
-}
-
 // pattern-check: skip — shield-file passthrough + manifest/README templates, no abstraction
 function remapprBoardBundle(config: ConfigKeymap): ProjectBundle {
     const { files: shield, diagnostics } =
         getCompiler('remappr-board').compile(config)
     const slug = sanitize(config.keyboard.id || config.meta.name)
     const rootName = `${slug}-remappr-shield`
-    const app = FIRMWARE_APP[config.node?.personality ?? 'keyboard'] ?? 'keyboard_node'
+    // The one firmware app (app/remappr) builds every image; the personality names its preset.
+    const preset = config.node?.personality ?? 'keyboard'
     const readme = [
         `# ${config.meta.name} — Remappr shield`,
         ``,
@@ -723,10 +716,10 @@ function remapprBoardBundle(config: ConfigKeymap): ProjectBundle {
         `west init -l <this-project>`,
         `west update`,
         `\`\`\``,
-        `3. Build the ${app} app with this shield (the shield is set for the`,
-        `   app image only, so the bootloader image does not take it):`,
+        `3. Build the ${preset} preset with this shield (the shield is set for`,
+        `   the app image only, so the bootloader image does not take it):`,
         `\`\`\`sh`,
-        `west build -p --sysbuild -s remappr-firmware/app/${app} -b <your_board> -- -D${app}_SHIELD=${slug}`,
+        `west build -p --sysbuild -s remappr-firmware/app/remappr -b <your_board> -- -DFILE_SUFFIX=${preset} -Dremappr_SHIELD=${slug}`,
         `\`\`\``,
         `\`zephyr/module.yml\` exposes \`boards/shields/${slug}/\` (board_root); the`,
         `firmware module provides the app + the \`remappr,*\` drivers.`,
@@ -735,16 +728,16 @@ function remapprBoardBundle(config: ConfigKeymap): ProjectBundle {
         `Copy \`boards/shields/${slug}/\` into a \`remappr-firmware\` checkout (its`,
         `\`board_root\` already covers that path) and build from there:`,
         `\`\`\`sh`,
-        `west build -p --sysbuild -s app/${app} -b <your_board> -- -D${app}_SHIELD=${slug}`,
+        `west build -p --sysbuild -s app/remappr -b <your_board> -- -DFILE_SUFFIX=${preset} -Dremappr_SHIELD=${slug}`,
         `\`\`\``,
         ``,
         `## Notes`,
-        `- Any Zephyr board works: keyboard_node's \`app.overlay\` carries the USB`,
-        `  HID and control interfaces for a board with no overlay of its own in`,
-        `  \`app/keyboard_node/boards/\`, and every hardware fact of the board comes`,
-        `  from this shield. That needs a remappr-firmware with`,
-        `  \`dts/remappr/keyboard-hid.dtsi\`; on an older one only the boards with`,
-        `  an overlay there link.`,
+        `- Any Zephyr board works for a keyboard: \`app/remappr/app_keyboard.overlay\``,
+        `  carries the USB HID and control interfaces for a board with no`,
+        `  \`app/remappr/boards/<board>_keyboard.overlay\`, and every hardware fact`,
+        `  of the board comes from this shield. That needs a remappr-firmware with`,
+        `  \`app/remappr\` and \`dts/remappr/keyboard-hid.dtsi\`; on an older one only`,
+        `  the boards with an overlay there link.`,
         `- \`${slug}.overlay\` holds the kscan matrix + input-keymap + remappr,keymap`,
         `  (physical layout + a default keymap), plus any RGB / encoder nodes.`,
         `  \`Kconfig.shield\` / \`Kconfig.defconfig\` register the shield and default`,

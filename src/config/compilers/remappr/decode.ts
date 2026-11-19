@@ -36,6 +36,7 @@ import type {
     CanonTapDance,
     CanonTapDanceStep,
     ConfigClusterNode,
+    ConfigClusterSide,
     ConfigKeymap,
     ConfigLinkProfile,
     ConfigLinkProfileOverride,
@@ -79,9 +80,14 @@ import {
     CFG_ROLE_VALID,
     CFG_ROLE_COORD,
     FWD_MODE_PHYSICAL,
+    CLUSTER_MODE_ALONE,
+    CLUSTER_POWER_FOLLOW,
+    CLUSTER_POWER_OWN,
     CLUSTER_TBL_HDR_LEN,
     CLUSTER_UID_MAX,
     CLUSTER_NODE_WIRE,
+    CLUSTER_SIDE_WIRE,
+    CLUSTER_TBL_V2_HDR_LEN,
     LINK_PROFILE_TBL_HDR_LEN,
     LINK_PROFILE_OVR_WIRE,
     LinkProfileId,
@@ -1083,7 +1089,10 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
         pers.personality ||
         pers.role ||
         pers.forwardMode ||
-        cluster ||
+        pers.clusterMode ||
+        pers.clusterPower ||
+        cluster?.nodes ||
+        cluster?.sides ||
         linkProfile ||
         radio ||
         power ||
@@ -1092,8 +1101,11 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
                   ...(pers.personality ? { personality: pers.personality } : {}),
                   ...(pers.role ? { role: pers.role } : {}),
                   ...(pers.forwardMode ? { forwardMode: pers.forwardMode } : {}),
+                  ...(pers.clusterMode ? { clusterMode: pers.clusterMode } : {}),
+                  ...(pers.clusterPower ? { clusterPower: pers.clusterPower } : {}),
                   ...(mouse ? { mouse } : {}),
-                  ...(cluster ? { cluster } : {}),
+                  ...(cluster?.nodes ? { cluster: cluster.nodes } : {}),
+                  ...(cluster?.sides ? { clusterSides: cluster.sides } : {}),
                   ...(linkProfile ? { linkProfile } : {}),
                   ...(radio ? { radio } : {}),
                   ...(power ? { power } : {}),
@@ -1280,11 +1292,11 @@ function readMouse(
 function readPersonality(
     bytes: Uint8Array,
     t: TableFrame,
-): Pick<ConfigNode, 'personality' | 'role' | 'forwardMode'> {
+): Pick<ConfigNode, 'personality' | 'role' | 'forwardMode' | 'clusterMode' | 'clusterPower'> {
     const len = t.end - t.start
     if (len < 1) return {}
     const r = ByteReader.frame(bytes, t)
-    const out: Pick<ConfigNode, 'personality' | 'role' | 'forwardMode'> = {}
+    const out: Pick<ConfigNode, 'personality' | 'role' | 'forwardMode' | 'clusterMode' | 'clusterPower'> = {}
     const p = ({ 1: 'keyboard', 2: 'mouse' } as Record<
         number,
         ConfigNode['personality']
@@ -1296,6 +1308,14 @@ function readPersonality(
             out.role = roleFlags & CFG_ROLE_COORD ? 'coordinator' : 'follower'
     }
     if (len > 2 && r.u8() === FWD_MODE_PHYSICAL) out.forwardMode = 'physical'
+    if (len > 3 && r.u8() === CLUSTER_MODE_ALONE) out.clusterMode = 'alone'
+    if (len > 4) {
+        const cp = ({ [CLUSTER_POWER_FOLLOW]: 'follow', [CLUSTER_POWER_OWN]: 'own' } as Record<
+            number,
+            ConfigNode['clusterPower']
+        >)[r.u8()]
+        if (cp) out.clusterPower = cp
+    }
     return out
 }
 
@@ -1308,15 +1328,26 @@ function readCluster(
     bytes: Uint8Array,
     t: TableFrame,
     diag: DiagnosticBag,
-): ConfigClusterNode[] | undefined {
-    if (t.end - t.start < CLUSTER_TBL_HDR_LEN) {
+): { nodes?: ConfigClusterNode[]; sides?: ConfigClusterSide[] } | undefined {
+    if (t.version !== 1 && t.version !== 2) {
+        diag.error(`cluster table version ${t.version} is not supported`)
+        return undefined
+    }
+    // v2 (§5.3) adds u8 side_count + a reserved byte, and the side map after the nodes.
+    const hdr = t.version === 2 ? CLUSTER_TBL_V2_HDR_LEN : CLUSTER_TBL_HDR_LEN
+    if (t.end - t.start < hdr) {
         diag.error('cluster table header truncated')
         return undefined
     }
     const r = ByteReader.frame(bytes, t)
     const count = r.u8()
     r.u8() // flags (reserved)
-    if (t.start + CLUSTER_TBL_HDR_LEN + count * CLUSTER_NODE_WIRE > t.end) {
+    const sideCount = t.version === 2 ? r.u8() : 0
+    if (t.version === 2) r.u8() // reserved
+    if (
+        t.start + hdr + count * CLUSTER_NODE_WIRE + sideCount * CLUSTER_SIDE_WIRE >
+        t.end
+    ) {
         diag.error('cluster table truncated')
         return undefined
     }
@@ -1345,7 +1376,25 @@ function readCluster(
             ...(pointerBase ? { pointerBase } : {}),
         })
     }
-    return nodes.length ? nodes : undefined
+    const sides: ConfigClusterSide[] = []
+    for (let i = 0; i < sideCount; i++) {
+        const side = r.u8()
+        const rows = r.u8()
+        const cols = r.u8()
+        const encoders = r.u8()
+        const sliders = r.u8()
+        sides.push({
+            side,
+            rows,
+            cols,
+            ...(encoders ? { encoders } : {}),
+            ...(sliders ? { sliders } : {}),
+        })
+    }
+    return {
+        ...(nodes.length ? { nodes } : {}),
+        ...(sides.length ? { sides } : {}),
+    }
 }
 
 // pattern-check: skip pure wire-decode fn mirroring the TBL_LINK_PROFILE layout

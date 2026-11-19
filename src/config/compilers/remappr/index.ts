@@ -29,6 +29,7 @@ import {
 import type {
     CanonAction,
     CanonSemanticAction,
+    ConfigClusterSide,
     ConfigKeymap,
 } from '../../types'
 import {
@@ -53,6 +54,11 @@ import {
     CFG_ROLE_VALID,
     CFG_ROLE_COORD,
     FWD_MODE_PHYSICAL,
+    CLUSTER_MODE_ALONE,
+    CLUSTER_MODE_AUTO,
+    CLUSTER_POWER_AUTO,
+    CLUSTER_POWER_FOLLOW,
+    CLUSTER_POWER_OWN,
     FWD_MODE_RESOLVED,
     CLUSTER_UID_MAX,
     LinkProfileId,
@@ -60,6 +66,7 @@ import {
     type SliderRecord,
     type ActionBindingRecord,
     type ClusterNodeRecord,
+    type ClusterSideRecord,
     type LinkProfileOverrideRecord,
     type BehaviorRecord,
     type ComboRecord,
@@ -127,7 +134,7 @@ export interface RemapprCompileLimits {
     maxPositions?: number
     /** Keys in one combo (CONFIG_REMAPPR_BEHAVIOR_COMBO_KEYS, 8). */
     comboMaxKeys?: number
-    /** The keyboard node's config pools (app/keyboard_node kb_config.c):
+    /** The keyboard node's config pools (app/remappr src/node/keyboard/kb_config.c):
      *  combo records (cfg_combos, 32), their key positions together
      *  (cfg_combo_pos, 128) and slider bindings (cfg_sliders, 8). */
     combosMax?: number
@@ -1752,19 +1759,36 @@ function encodeBlob(
         nodeCfg?.forwardMode === 'physical'
             ? FWD_MODE_PHYSICAL
             : FWD_MODE_RESOLVED
+    const clusterMode =
+        nodeCfg?.clusterMode === 'alone' ? CLUSTER_MODE_ALONE : CLUSTER_MODE_AUTO
+    const clusterPower = {
+        auto: CLUSTER_POWER_AUTO,
+        follow: CLUSTER_POWER_FOLLOW,
+        own: CLUSTER_POWER_OWN,
+    }[nodeCfg?.clusterPower ?? 'auto']
     // Skip the table when nothing but defaults would ride it, so a plain config
-    // (no personality/role, resolved forwarding) stays byte-stable.
+    // (no personality/role, resolved forwarding, automatic cluster mode) stays
+    // byte-stable.
     if (
         personalityCode !== undefined ||
         roleFlags !== 0 ||
-        fwdMode !== FWD_MODE_RESOLVED
+        fwdMode !== FWD_MODE_RESOLVED ||
+        clusterMode !== CLUSTER_MODE_AUTO ||
+        clusterPower !== CLUSTER_POWER_AUTO
     ) {
-        builder.personalityTable(personalityCode ?? 0, roleFlags, fwdMode)
+        builder.personalityTable(
+            personalityCode ?? 0,
+            roleFlags,
+            fwdMode,
+            clusterMode,
+            clusterPower,
+        )
     }
     // TBL_CLUSTER (§N4c mode-A): the coordinator's UID→address map. Each uid is a
     // hex string; a uid over the 16-byte wire field is truncated with a warning.
-    const clusterNodes = nodeCfg?.cluster
-    if (clusterNodes && clusterNodes.length > 0) {
+    const clusterNodes = nodeCfg?.cluster ?? []
+    const sides = clusterSideRecords(nodeCfg?.clusterSides, diag)
+    if (clusterNodes.length > 0 || sides.length > 0) {
         const records: ClusterNodeRecord[] = clusterNodes.map((c, i) => {
             const uid = hexToBytes(c.uid)
             if (uid.length > CLUSTER_UID_MAX)
@@ -1781,7 +1805,7 @@ function encodeBlob(
                 pointerBase: c.pointerBase ?? 0,
             }
         })
-        builder.clusterTable(records)
+        builder.clusterTable(records, sides)
     }
     // TBL_LINK_PROFILE (§8 N6): the node-bus link/latency profile — a base
     // profile + per-knob overrides (USART baud, §6 election cadence, power tier).
@@ -1930,3 +1954,31 @@ export const remapprCompiler: KeymapCompiler = {
 }
 
 registerCompiler(remapprCompiler)
+
+// pattern-check: skip one lowering helper beside the TBL_CLUSTER emit
+/** The §5.3 side map as TBL_CLUSTER v2 side entries. The firmware sums the
+ *  spans in order, so the sides must ascend with no repeat. */
+function clusterSideRecords(
+    sides: readonly ConfigClusterSide[] | undefined,
+    diag: DiagnosticBag,
+): ClusterSideRecord[] {
+    const out: ClusterSideRecord[] = []
+    for (const [i, s] of (sides ?? []).entries()) {
+        if (i > 0 && s.side <= out[i - 1].side) {
+            diag.error(`Cluster side ${s.side} must come after side ${out[i - 1].side}.`, [
+                'node',
+                'clusterSides',
+                i,
+            ])
+            return []
+        }
+        out.push({
+            side: s.side,
+            rows: s.rows,
+            cols: s.cols,
+            encoders: s.encoders ?? 0,
+            sliders: s.sliders ?? 0,
+        })
+    }
+    return out
+}
