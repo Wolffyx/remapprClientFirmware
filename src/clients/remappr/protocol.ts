@@ -954,6 +954,13 @@ export interface PersonalityMap {
     /** The functions the image built; undefined on firmware from before the
      *  tail (it ends at `hw_caps`). */
     functionBits?: number
+    /** The node's cluster id (§5.1), 0n when it is in no cluster; undefined on
+     *  firmware from before the tail. */
+    clusterId?: bigint
+    /** The node's stable 64-bit UID (§9.4) as the firmware sends it (u64 LE),
+     *  empty when the chip has no id; undefined on firmware from before the
+     *  tail. The app's device key. */
+    uid?: Uint8Array
 }
 
 export function parsePersonalityMap(d: Uint8Array): PersonalityMap {
@@ -969,6 +976,10 @@ export function parsePersonalityMap(d: Uint8Array): PersonalityMap {
         off += 3
     }
     const hasFunctions = d.byteLength >= off + 8
+    // u64 cluster_id, u8 uid_len, uid[uid_len] after function_bits (§3.4).
+    const idAt = off + 8
+    const uidLen = d.byteLength >= idAt + 9 ? d[idAt + 8] : -1
+    const hasIdentity = uidLen >= 0 && d.byteLength >= idAt + 9 + uidLen
     return {
         role: d[0],
         personality: d[1],
@@ -976,6 +987,12 @@ export function parsePersonalityMap(d: Uint8Array): PersonalityMap {
         namespaces,
         hwCaps: dv.getUint32(off, true),
         ...(hasFunctions ? { functionBits: dv.getUint32(off + 4, true) } : {}),
+        ...(hasIdentity
+            ? {
+                  clusterId: dv.getBigUint64(idAt, true),
+                  uid: d.slice(idAt + 9, idAt + 9 + uidLen),
+              }
+            : {}),
     }
 }
 

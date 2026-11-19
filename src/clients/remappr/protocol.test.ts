@@ -190,7 +190,7 @@ describe('parseInputLayoutPage (input-layout plan §2)', () => {
     })
 })
 
-describe('GET_PERSONALITY_MAP function_bits tail (§3.4)', () => {
+describe('GET_PERSONALITY_MAP tails (§3.4)', () => {
     // role, personality, proto 2, one namespace record, then u32 hw_caps.
     const head = [0, 1, 2, 1, 0x00, 0xff, 0xff, 0x02, 0, 0, 0]
 
@@ -204,6 +204,26 @@ describe('GET_PERSONALITY_MAP function_bits tail (§3.4)', () => {
         const pm = parsePersonalityMap(Uint8Array.from(head))
         expect(pm.hwCaps).toBe(0x02)
         expect(pm.functionBits).toBeUndefined()
+    })
+
+    it('reads the cluster_id and uid after function_bits', () => {
+        const fns = [...head, 0x07, 0, 0, 0]
+        const id = [0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]
+        const uid = [0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7]
+        const pm = parsePersonalityMap(Uint8Array.from([...fns, ...id, 8, ...uid]))
+        expect(pm.functionBits).toBe(0x07)
+        expect(pm.clusterId).toBe(0x1122334455667788n)
+        expect(Array.from(pm.uid!)).toEqual(uid)
+
+        const none = parsePersonalityMap(Uint8Array.from([...fns, 0, 0, 0, 0, 0, 0, 0, 0, 0]))
+        expect(none.clusterId).toBe(0n)
+        expect(none.uid!.length).toBe(0)
+
+        // Firmware from before the tail, or a uid cut short: no identity.
+        expect(parsePersonalityMap(Uint8Array.from(fns)).clusterId).toBeUndefined()
+        const cut = parsePersonalityMap(Uint8Array.from([...fns, ...id, 8, 0xa0]))
+        expect(cut.clusterId).toBeUndefined()
+        expect(cut.uid).toBeUndefined()
     })
 
     it('keeps the firmware bit values (include/remappr/function.h)', () => {
