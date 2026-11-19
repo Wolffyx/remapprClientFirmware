@@ -69,6 +69,7 @@ const FEATURE_LABEL: Partial<Record<FeatureName, string>> = {
     layerTailV3: 'extended timing defaults',
     kbdExt: 'international, LANG and keyboard-page volume keys (usages 0x78..0xA7)',
     clusterMode: 'the cluster mode (always alone)',
+    tblClusterV2: 'the cluster side map (side-stable key numbering)',
 }
 
 /** Keyboard usages only a KBD_EXT build sends (0x78..0xA7). */
@@ -219,6 +220,8 @@ export function configRequiredFeatures(config: ConfigKeymap): number {
 
     // A non-default cluster mode rides TBL_PERSONALITY byte 3 (§5.4).
     if (config.node?.clusterMode === 'alone') req |= LimitsFeature.clusterMode
+    // A side map rides TBL_CLUSTER v2 (§5.3).
+    if (config.node?.clusterSides?.length) req |= LimitsFeature.tblClusterV2
 
     // Each behavior family the config uses: its bit must be set (or the device
     // predate family advertisement — see effectiveFeatureBitmask).

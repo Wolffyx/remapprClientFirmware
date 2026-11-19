@@ -58,6 +58,16 @@ describe('configRequiredFeatures', () => {
         expect(configRequiredFeatures(node('auto'))).toBe(0)
     })
 
+    it('a side map needs the TBL_CLUSTER_V2 bit (§5.3)', () => {
+        const cfg = parseKeymap(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "N", "target": "zmk" }, ${kb(1)},
+            "layers": [{ "name": "base", "bindings": ["A"] }],
+            "node": { "clusterSides": [{ "side": 0, "rows": 1, "cols": 1 }] }
+        }`)
+        expect(configRequiredFeatures(cfg)).toBe(LimitsFeature.tblClusterV2)
+    })
+
     it('detects hold-trigger-on-release on a hold-tap definition too', () => {
         // Minimal config touching only the fields the scanner reads.
         const defOnly = {

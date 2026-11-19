@@ -1234,6 +1234,20 @@ export interface ConfigClusterNode {
     pointerBase?: number
 }
 
+// pattern-check: skip plain wire-DTO interface mirroring one TBL_CLUSTER v2 side entry
+/** One side of the cluster side map (universal device model §5.3, TBL_CLUSTER
+ *  v2): its key space and its encoders and sliders. Sides go in ascending
+ *  order, and each starts where the sides before it end, so a coordinator
+ *  swap moves no key. */
+export interface ConfigClusterSide {
+    /** 0 = left, 1 = right, 2 and up for an N-member cluster. */
+    side: number
+    rows: number
+    cols: number
+    encoders?: number
+    sliders?: number
+}
+
 // pattern-check: skip plain wire-DTO mirroring one TBL_LINK_PROFILE override record
 /** One per-knob override in a link profile (§8, N6, TBL_LINK_PROFILE): replaces
  *  the base profile's value for `knob`. Mirrors struct
@@ -1330,6 +1344,10 @@ export interface ConfigNode {
     /** Mode-A cluster address map (§N4c, TBL_CLUSTER) — the coordinator's UID→
      *  address assignment for each cluster node. Present on a mode-A coordinator. */
     cluster?: ConfigClusterNode[]
+    /** Side map (§5.3, TBL_CLUSTER v2): each side's key, encoder and slider
+     *  range, in ascending side order. Needs firmware that sets GET_LIMITS
+     *  Feature.TBL_CLUSTER_V2. */
+    clusterSides?: ConfigClusterSide[]
     /** Node-bus link/latency profile (§8, N6, TBL_LINK_PROFILE) — base profile +
      *  per-knob overrides for the USART baud / §6 election cadence / power tier. */
     linkProfile?: ConfigLinkProfile

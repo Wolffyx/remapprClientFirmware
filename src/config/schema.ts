@@ -1714,6 +1714,17 @@ export const ClusterNodeSchema = z
     })
     .describe("One cluster node's UID→address-base assignment (§N4c mode-A).")
 
+// pattern-check: skip plain zod wire-DTO schema mirroring one TBL_CLUSTER v2 side entry
+export const ClusterSideSchema = z
+    .object({
+        side: z.number().int().min(0).max(254),
+        rows: z.number().int().min(0).max(255),
+        cols: z.number().int().min(0).max(255),
+        encoders: z.number().int().min(0).max(255).optional(),
+        sliders: z.number().int().min(0).max(255).optional(),
+    })
+    .describe("One side of the cluster side map (§5.3): its key, encoder and slider span.")
+
 // pattern-check: skip plain zod wire-DTO schema mirroring TBL_LINK_PROFILE
 export const LinkProfileSchema = z
     .object({
@@ -1895,6 +1906,7 @@ export const NodeSchema = z
         forwardMode: z.enum(['resolved', 'physical']).optional(),
         clusterMode: z.enum(['auto', 'alone']).optional(),
         cluster: z.array(ClusterNodeSchema).optional(),
+        clusterSides: z.array(ClusterSideSchema).optional(),
         linkProfile: LinkProfileSchema.optional(),
         radio: RadioSettingsSchema.optional(),
         power: PowerSettingsSchema.optional(),

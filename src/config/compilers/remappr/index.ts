@@ -28,6 +28,7 @@ import {
 import type {
     CanonAction,
     CanonSemanticAction,
+    ConfigClusterSide,
     ConfigKeymap,
 } from '../../types'
 import {
@@ -65,6 +66,7 @@ import {
     type SliderRecord,
     type ActionBindingRecord,
     type ClusterNodeRecord,
+    type ClusterSideRecord,
     type LinkProfileOverrideRecord,
     type BehaviorRecord,
     type ComboRecord,
@@ -1808,8 +1810,9 @@ function encodeBlob(
     }
     // TBL_CLUSTER (§N4c mode-A): the coordinator's UID→address map. Each uid is a
     // hex string; a uid over the 16-byte wire field is truncated with a warning.
-    const clusterNodes = nodeCfg?.cluster
-    if (clusterNodes && clusterNodes.length > 0) {
+    const clusterNodes = nodeCfg?.cluster ?? []
+    const sides = clusterSideRecords(nodeCfg?.clusterSides, diag)
+    if (clusterNodes.length > 0 || sides.length > 0) {
         const records: ClusterNodeRecord[] = clusterNodes.map((c, i) => {
             const uid = hexToBytes(c.uid)
             if (uid.length > CLUSTER_UID_MAX)
@@ -1826,7 +1829,7 @@ function encodeBlob(
                 pointerBase: c.pointerBase ?? 0,
             }
         })
-        builder.clusterTable(records)
+        builder.clusterTable(records, sides)
     }
     // TBL_LINK_PROFILE (§8 N6): the node-bus link/latency profile — a base
     // profile + per-knob overrides (USART baud, §6 election cadence, power tier).
@@ -1972,3 +1975,31 @@ export const remapprCompiler: KeymapCompiler = {
 }
 
 registerCompiler(remapprCompiler)
+
+// pattern-check: skip one lowering helper beside the TBL_CLUSTER emit
+/** The §5.3 side map as TBL_CLUSTER v2 side entries. The firmware sums the
+ *  spans in order, so the sides must ascend with no repeat. */
+function clusterSideRecords(
+    sides: readonly ConfigClusterSide[] | undefined,
+    diag: DiagnosticBag,
+): ClusterSideRecord[] {
+    const out: ClusterSideRecord[] = []
+    for (const [i, s] of (sides ?? []).entries()) {
+        if (i > 0 && s.side <= out[i - 1].side) {
+            diag.error(`cluster side ${s.side} must come after side ${out[i - 1].side}`, [
+                'node',
+                'clusterSides',
+                i,
+            ])
+            return []
+        }
+        out.push({
+            side: s.side,
+            rows: s.rows,
+            cols: s.cols,
+            encoders: s.encoders ?? 0,
+            sliders: s.sliders ?? 0,
+        })
+    }
+    return out
+}
