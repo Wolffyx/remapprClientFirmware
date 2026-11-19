@@ -125,7 +125,7 @@ export interface RemapprCompileLimits {
     maxPositions?: number
     /** Keys in one combo (CONFIG_REMAPPR_BEHAVIOR_COMBO_KEYS, 8). */
     comboMaxKeys?: number
-    /** The keyboard node's config pools (app/keyboard_node kb_config.c):
+    /** The keyboard node's config pools (app/remappr src/node/keyboard/kb_config.c):
      *  combo records (cfg_combos, 32), their key positions together
      *  (cfg_combo_pos, 128) and slider bindings (cfg_sliders, 8). */
     combosMax?: number

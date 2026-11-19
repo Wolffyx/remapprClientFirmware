@@ -90,13 +90,14 @@ describe('the shield bundle builds for any board', () => {
     const readme = (json: string): string =>
         String(files(json).find((f) => f.filename.endsWith('README.md'))!.content)
 
-    it('sets the shield for the app image only, the app per personality', () => {
+    it('sets the shield for the app image only, the preset per personality', () => {
         const kb = readme(pad({ matrix: { rows: ['P0.03'], cols: ['P1.01', 'P1.02'] } }))
-        expect(kb).toContain('-Dkeyboard_node_SHIELD=pad')
+        expect(kb).toContain('-s remappr-firmware/app/remappr ')
+        expect(kb).toContain('-DFILE_SUFFIX=keyboard -Dremappr_SHIELD=pad')
+        expect(kb).toContain('-s app/remappr ')
         expect(kb).not.toContain('-DSHIELD=')
         const mouse = readme(pad({}, { personality: 'mouse' }))
-        expect(mouse).toContain('remappr-firmware/app/mouse')
-        expect(mouse).toContain('-Dmouse_SHIELD=pad')
+        expect(mouse).toContain('-DFILE_SUFFIX=mouse -Dremappr_SHIELD=pad')
     })
 
     it('says what a board with no overlay of its own needs', () => {
