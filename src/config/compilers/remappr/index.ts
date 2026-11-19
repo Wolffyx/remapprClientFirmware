@@ -52,6 +52,8 @@ import {
     CFG_ROLE_VALID,
     CFG_ROLE_COORD,
     FWD_MODE_PHYSICAL,
+    CLUSTER_MODE_ALONE,
+    CLUSTER_MODE_AUTO,
     FWD_MODE_RESOLVED,
     CLUSTER_UID_MAX,
     LinkProfileId,
@@ -1792,14 +1794,17 @@ function encodeBlob(
         : 0
     const fwdMode =
         nodeCfg?.forwardMode === 'physical' ? FWD_MODE_PHYSICAL : FWD_MODE_RESOLVED
+    const clusterMode = nodeCfg?.clusterMode === 'alone' ? CLUSTER_MODE_ALONE : CLUSTER_MODE_AUTO
     // Skip the table when nothing but defaults would ride it, so a plain config
-    // (no personality/role, resolved forwarding) stays byte-stable.
+    // (no personality/role, resolved forwarding, automatic cluster mode) stays
+    // byte-stable.
     if (
         personalityCode !== undefined ||
         roleFlags !== 0 ||
-        fwdMode !== FWD_MODE_RESOLVED
+        fwdMode !== FWD_MODE_RESOLVED ||
+        clusterMode !== CLUSTER_MODE_AUTO
     ) {
-        builder.personalityTable(personalityCode ?? 0, roleFlags, fwdMode)
+        builder.personalityTable(personalityCode ?? 0, roleFlags, fwdMode, clusterMode)
     }
     // TBL_CLUSTER (§N4c mode-A): the coordinator's UID→address map. Each uid is a
     // hex string; a uid over the 16-byte wire field is truncated with a warning.

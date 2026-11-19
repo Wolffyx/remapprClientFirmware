@@ -1022,6 +1022,24 @@ describe('decodeRemapprBlob node role + forwardMode (§N4b/§N4c TBL_PERSONALITY
         expect(config?.node?.forwardMode).toBeUndefined()
     })
 
+    it('lowers cluster mode alone into byte 3 and decodes it back (§5.4)', () => {
+        const cfg = parseKeymap(nodeJson('{ "role": "follower", "clusterMode": "alone" }'))
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const { config } = decodeRemapprBlob(blob)
+        expect(config?.node?.clusterMode).toBe('alone')
+        expect(config?.node?.role).toBe('follower')
+
+        // auto is the default: not reconstructed, and alone it emits no table.
+        const auto = buildRemapprBlob(parseKeymap(nodeJson('{ "clusterMode": "auto" }')), {
+            configVersion: 1,
+        })
+        expect(decodeRemapprBlob(auto.blob).config?.node?.clusterMode).toBeUndefined()
+        expect(auto.blob.length).toBe(
+            buildRemapprBlob(parseKeymap(nodeJson('{}')), { configVersion: 1 }).blob.length,
+        )
+    })
+
     it('emits no TBL_PERSONALITY for a default node (resolved, no role)', () => {
         const cfg = parseKeymap(nodeJson('{ "forwardMode": "resolved" }'))
         const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })

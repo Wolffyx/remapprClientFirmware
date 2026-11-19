@@ -137,6 +137,12 @@ export const CFG_ROLE_COORD = 0x02
  *  (resolved HID, the default) vs mode A (raw matrix positions). */
 export const FWD_MODE_RESOLVED = 0
 export const FWD_MODE_PHYSICAL = 1
+/** TBL_PERSONALITY byte 3 cluster_mode (firmware cluster_id.h
+ *  REMAPPR_CLUSTER_MODE_*, universal device model §5.4): coordinated with
+ *  automatic fallback (the default; every older blob's 0) vs always alone.
+ *  Honoured only where GET_LIMITS sets Feature.CLUSTER_MODE. */
+export const CLUSTER_MODE_AUTO = 0
+export const CLUSTER_MODE_ALONE = 1
 /** TBL_CLUSTER framing (config_blob.h): 2-byte header, 16-byte UID field,
  *  25-byte per-node stride. */
 export const CLUSTER_TBL_HDR_LEN = 2
@@ -1182,12 +1188,12 @@ export class BlobBuilder {
      *  u8 fwd_mode (byte 2, §N4c), u8 reserved. Defaults keep every byte after
      *  the personality zero, so a personality-only call is byte-identical to the
      *  original 4-byte table the firmware decode_personality expects. */
-    personalityTable(personality: number, roleFlags = 0, fwdMode = 0): this {
+    personalityTable(personality: number, roleFlags = 0, fwdMode = 0, clusterMode = 0): this {
         this.tableBegin(TableId.Personality, 1)
         this.w.u8(personality)
         this.w.u8(roleFlags)
         this.w.u8(fwdMode)
-        this.w.u8(0) // reserved
+        this.w.u8(clusterMode)
         this.tableEnd()
         return this
     }
