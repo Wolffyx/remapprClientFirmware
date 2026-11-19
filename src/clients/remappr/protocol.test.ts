@@ -14,6 +14,15 @@ import {
     parseInputLayoutPage,
     parseKeyLayoutChunk,
     parsePersonalityMap,
+    parseClusterInfo,
+    parseClusterMembers,
+    parseClusterEvent,
+    buildClusterSetIdArg,
+    buildClusterSetSideArg,
+    buildClusterSplitArg,
+    ClusterSide,
+    KNOWN_NS_VERSION,
+    Namespace,
     parseRoleEvent,
     parseUchEvent,
     reportsHwCap,
@@ -228,5 +237,57 @@ describe('GET_PERSONALITY_MAP tails (§3.4)', () => {
 
     it('keeps the firmware bit values (include/remappr/function.h)', () => {
         expect(Fn).toEqual({ KBD: 0x01, CONSUMER: 0x02, SYSCTRL: 0x04, POINTER: 0x08, GAMEPAD: 0x10 })
+    })
+})
+
+describe('CLUSTER namespace (§7.1)', () => {
+    it('is known at ns_version 1', () => {
+        expect(Namespace.CLUSTER).toBe(0x0c)
+        expect(KNOWN_NS_VERSION[Namespace.CLUSTER]).toBe(1)
+    })
+
+    it('parses GET_CLUSTER_INFO', () => {
+        const d = Uint8Array.from([
+            0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 3, 0, 1, 0x02, 0x01, 3, 2, 1, 0x01,
+        ])
+        const i = parseClusterInfo(d)
+        expect(i.id).toBe(0x1122334455667788n)
+        expect(i.idSource).toBe(3)
+        expect(i.coordinated).toBe(true)
+        expect(i.physical).toBe(true)
+        expect(i.coordinator).toBe(0x0102)
+        expect(i.mySide).toBe(ClusterSide.RIGHT)
+        expect(i.locked).toBe(true)
+        expect(i.skew).toBe(false)
+        expect(() => parseClusterInfo(d.slice(0, 16))).toThrow(/needs 17/)
+    })
+
+    it('parses a GET_MEMBERS page', () => {
+        const rec = [0x05, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 1, 0x0f, 0, 0, 0, 1, 4, 0xff, 1, 2, 3, 0xff, 0xff]
+        const p = parseClusterMembers(Uint8Array.from([3, 1, ...rec]))
+        expect(p.total).toBe(3)
+        expect(p.members).toHaveLength(1)
+        const m = p.members[0]
+        expect(m.shortId).toBe(5)
+        expect(Array.from(m.uid)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+        expect(m.functionBits).toBe(0x0f)
+        expect(m.battery).toBeNull()
+        expect(m.fw).toEqual([1, 2, 3])
+        expect(m.positionBase).toBeNull()
+        expect(() => parseClusterMembers(Uint8Array.from([3, 1, ...rec.slice(0, 22)]))).toThrow(/truncated/)
+    })
+
+    it('builds the identity verb args', () => {
+        expect(Array.from(buildClusterSetIdArg(0x0102030405060708n))).toEqual([8, 7, 6, 5, 4, 3, 2, 1])
+        expect(Array.from(buildClusterSetSideArg(ClusterSide.NONE))).toEqual([0, 0, 0xff])
+        expect(Array.from(buildClusterSplitArg())).toEqual([0, 0])
+        expect(() => buildClusterSetSideArg(256)).toThrow(/out of range/)
+    })
+
+    it('parses a membership event', () => {
+        const e = parseClusterEvent(Uint8Array.from([0x05, 0x00, 2, 0xaa, 0xbb]))
+        expect(e.shortId).toBe(5)
+        expect(Array.from(e.uid)).toEqual([0xaa, 0xbb])
+        expect(() => parseClusterEvent(Uint8Array.from([5, 0, 2, 0xaa]))).toThrow(/truncated/)
     })
 })
