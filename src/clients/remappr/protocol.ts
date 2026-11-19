@@ -777,6 +777,8 @@ export const Feature = {
     CONDITIONALS: 1 << 19,
     /** TBL_KEY_OVERRIDE. */
     KEY_OVERRIDES: 1 << 20,
+    /** TBL_PERSONALITY cluster_mode byte (universal device model §5.4). */
+    CLUSTER_MODE: 1 << 21,
 } as const
 
 /** The {@link Feature} bits under the camelCase names the config layer keys its
@@ -803,6 +805,7 @@ export const LimitsFeature = {
     unicode: Feature.UNICODE,
     conditionals: Feature.CONDITIONALS,
     keyOverrides: Feature.KEY_OVERRIDES,
+    clusterMode: Feature.CLUSTER_MODE,
 } as const
 
 /** A behavior family a keyboard image may build out (fw lib/behavior/Kconfig).

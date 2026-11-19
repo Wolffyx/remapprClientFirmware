@@ -46,6 +46,18 @@ describe('configRequiredFeatures', () => {
         expect(req & LimitsFeature.holdTriggerOnRelease).toBeTruthy()
     })
 
+    it('cluster mode alone needs the CLUSTER_MODE bit; auto needs nothing (§5.4)', () => {
+        const node = (mode: string): ConfigKeymap =>
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "N", "target": "zmk" }, ${kb(1)},
+                "layers": [{ "name": "base", "bindings": ["A"] }],
+                "node": { "clusterMode": "${mode}" }
+            }`)
+        expect(configRequiredFeatures(node('alone')) & LimitsFeature.clusterMode).toBeTruthy()
+        expect(configRequiredFeatures(node('auto'))).toBe(0)
+    })
+
     it('detects hold-trigger-on-release on a hold-tap definition too', () => {
         // Minimal config touching only the fields the scanner reads.
         const defOnly = {

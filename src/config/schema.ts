@@ -1893,6 +1893,7 @@ export const NodeSchema = z
         mouse: MouseSchema.optional(),
         role: z.enum(['coordinator', 'follower']).optional(),
         forwardMode: z.enum(['resolved', 'physical']).optional(),
+        clusterMode: z.enum(['auto', 'alone']).optional(),
         cluster: z.array(ClusterNodeSchema).optional(),
         linkProfile: LinkProfileSchema.optional(),
         radio: RadioSettingsSchema.optional(),

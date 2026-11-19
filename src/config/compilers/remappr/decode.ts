@@ -78,6 +78,7 @@ import {
     CFG_ROLE_VALID,
     CFG_ROLE_COORD,
     FWD_MODE_PHYSICAL,
+    CLUSTER_MODE_ALONE,
     CLUSTER_TBL_HDR_LEN,
     CLUSTER_UID_MAX,
     CLUSTER_NODE_WIRE,
@@ -1056,6 +1057,7 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
         pers.personality ||
         pers.role ||
         pers.forwardMode ||
+        pers.clusterMode ||
         cluster ||
         linkProfile ||
         radio ||
@@ -1065,6 +1067,7 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
                   ...(pers.personality ? { personality: pers.personality } : {}),
                   ...(pers.role ? { role: pers.role } : {}),
                   ...(pers.forwardMode ? { forwardMode: pers.forwardMode } : {}),
+                  ...(pers.clusterMode ? { clusterMode: pers.clusterMode } : {}),
                   ...(mouse ? { mouse } : {}),
                   ...(cluster ? { cluster } : {}),
                   ...(linkProfile ? { linkProfile } : {}),
@@ -1253,11 +1256,11 @@ function readMouse(
 function readPersonality(
     bytes: Uint8Array,
     t: TableFrame,
-): Pick<ConfigNode, 'personality' | 'role' | 'forwardMode'> {
+): Pick<ConfigNode, 'personality' | 'role' | 'forwardMode' | 'clusterMode'> {
     const len = t.end - t.start
     if (len < 1) return {}
     const r = ByteReader.frame(bytes, t)
-    const out: Pick<ConfigNode, 'personality' | 'role' | 'forwardMode'> = {}
+    const out: Pick<ConfigNode, 'personality' | 'role' | 'forwardMode' | 'clusterMode'> = {}
     const p = ({ 1: 'keyboard', 2: 'mouse' } as Record<
         number,
         ConfigNode['personality']
@@ -1269,6 +1272,7 @@ function readPersonality(
             out.role = roleFlags & CFG_ROLE_COORD ? 'coordinator' : 'follower'
     }
     if (len > 2 && r.u8() === FWD_MODE_PHYSICAL) out.forwardMode = 'physical'
+    if (len > 3 && r.u8() === CLUSTER_MODE_ALONE) out.clusterMode = 'alone'
     return out
 }
 
