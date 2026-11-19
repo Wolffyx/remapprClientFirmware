@@ -69,6 +69,7 @@ const FEATURE_LABEL: Partial<Record<FeatureName, string>> = {
     layerTailV3: 'extended timing defaults',
     kbdExt: 'international, LANG and keyboard-page volume keys (usages 0x78..0xA7)',
     clusterMode: 'the cluster mode (always alone)',
+    clusterPower: 'the cluster power policy',
     tblClusterV2: 'the cluster side map (side-stable key numbering)',
 }
 
@@ -220,6 +221,9 @@ export function configRequiredFeatures(config: ConfigKeymap): number {
 
     // A non-default cluster mode rides TBL_PERSONALITY byte 3 (§5.4).
     if (config.node?.clusterMode === 'alone') req |= LimitsFeature.clusterMode
+    // A non-default cluster power policy rides TBL_PERSONALITY byte 4 (§5.8).
+    const cp = config.node?.clusterPower
+    if (cp && cp !== 'auto') req |= LimitsFeature.clusterPower
     // A side map rides TBL_CLUSTER v2 (§5.3).
     if (config.node?.clusterSides?.length) req |= LimitsFeature.tblClusterV2
 

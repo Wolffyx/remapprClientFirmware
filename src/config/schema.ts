@@ -1905,6 +1905,7 @@ export const NodeSchema = z
         role: z.enum(['coordinator', 'follower']).optional(),
         forwardMode: z.enum(['resolved', 'physical']).optional(),
         clusterMode: z.enum(['auto', 'alone']).optional(),
+        clusterPower: z.enum(['auto', 'follow', 'own']).optional(),
         cluster: z.array(ClusterNodeSchema).optional(),
         clusterSides: z.array(ClusterSideSchema).optional(),
         linkProfile: LinkProfileSchema.optional(),

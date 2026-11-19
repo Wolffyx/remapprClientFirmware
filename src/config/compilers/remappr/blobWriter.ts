@@ -143,6 +143,12 @@ export const FWD_MODE_PHYSICAL = 1
  *  Honoured only where GET_LIMITS sets Feature.CLUSTER_MODE. */
 export const CLUSTER_MODE_AUTO = 0
 export const CLUSTER_MODE_ALONE = 1
+/** TBL_PERSONALITY byte 4 cluster_power (firmware cluster_id.h
+ *  REMAPPR_CLUSTER_POWER_*, §5.8). Honoured only where GET_LIMITS sets
+ *  Feature.CLUSTER_POWER. */
+export const CLUSTER_POWER_AUTO = 0
+export const CLUSTER_POWER_FOLLOW = 1
+export const CLUSTER_POWER_OWN = 2
 /** TBL_CLUSTER framing (config_blob.h): 2-byte header, 16-byte UID field,
  *  25-byte per-node stride. */
 export const CLUSTER_TBL_HDR_LEN = 2
@@ -1200,15 +1206,23 @@ export class BlobBuilder {
 
     // pattern-check: skip one more table-emit method on the existing Builder
     /** TBL_PERSONALITY (id 16): u8 personality, u8 role_flags (byte 1, §N4b),
-     *  u8 fwd_mode (byte 2, §N4c), u8 reserved. Defaults keep every byte after
-     *  the personality zero, so a personality-only call is byte-identical to the
-     *  original 4-byte table the firmware decode_personality expects. */
-    personalityTable(personality: number, roleFlags = 0, fwdMode = 0, clusterMode = 0): this {
+     *  u8 fwd_mode (byte 2, §N4c), u8 cluster_mode (byte 3, §5.4), then u8
+     *  cluster_power (byte 4, §5.8) only when it is not AUTO. Defaults keep every
+     *  byte after the personality zero, so a personality-only call is
+     *  byte-identical to the original 4-byte table. */
+    personalityTable(
+        personality: number,
+        roleFlags = 0,
+        fwdMode = 0,
+        clusterMode = 0,
+        clusterPower = CLUSTER_POWER_AUTO,
+    ): this {
         this.tableBegin(TableId.Personality, 1)
         this.w.u8(personality)
         this.w.u8(roleFlags)
         this.w.u8(fwdMode)
         this.w.u8(clusterMode)
+        if (clusterPower !== CLUSTER_POWER_AUTO) this.w.u8(clusterPower)
         this.tableEnd()
         return this
     }
