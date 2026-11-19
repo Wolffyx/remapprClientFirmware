@@ -137,11 +137,21 @@ export const CFG_ROLE_COORD = 0x02
  *  (resolved HID, the default) vs mode A (raw matrix positions). */
 export const FWD_MODE_RESOLVED = 0
 export const FWD_MODE_PHYSICAL = 1
+/** TBL_PERSONALITY byte 3 cluster_mode (firmware cluster_id.h
+ *  REMAPPR_CLUSTER_MODE_*, universal device model §5.4): coordinated with
+ *  automatic fallback (the default; every older blob's 0) vs always alone.
+ *  Honoured only where GET_LIMITS sets Feature.CLUSTER_MODE. */
+export const CLUSTER_MODE_AUTO = 0
+export const CLUSTER_MODE_ALONE = 1
 /** TBL_CLUSTER framing (config_blob.h): 2-byte header, 16-byte UID field,
  *  25-byte per-node stride. */
 export const CLUSTER_TBL_HDR_LEN = 2
 export const CLUSTER_UID_MAX = 16
 export const CLUSTER_NODE_WIRE = 25
+/** TBL_CLUSTER v2 (§5.3): the header adds u8 side_count + a reserved byte, and
+ *  5-byte side entries follow the node entries. */
+export const CLUSTER_TBL_V2_HDR_LEN = 4
+export const CLUSTER_SIDE_WIRE = 5
 
 /** TBL_LINK_PROFILE framing (config_blob.h, §8 N6): 2-byte header
  *  { u8 profile_id, u8 override_count } then override_count × 5-byte records
@@ -182,6 +192,17 @@ export interface ClusterNodeRecord {
     cols: number
     encoderBase: number
     pointerBase: number
+}
+
+// pattern-check: skip plain wire-DTO interface mirroring one TBL_CLUSTER v2 side entry
+/** One side of a TBL_CLUSTER v2 side map (§5.3). Bases are implicit: each side
+ *  starts where the sides before it (ascending) end. */
+export interface ClusterSideRecord {
+    side: number
+    rows: number
+    cols: number
+    encoders: number
+    sliders: number
 }
 
 // pattern-check: skip plain wire-DTO for one TBL_LINK_PROFILE override record
@@ -1070,12 +1091,12 @@ export class BlobBuilder {
      *  u8 fwd_mode (byte 2, §N4c), u8 reserved. Defaults keep every byte after
      *  the personality zero, so a personality-only call is byte-identical to the
      *  original 4-byte table the firmware decode_personality expects. */
-    personalityTable(personality: number, roleFlags = 0, fwdMode = 0): this {
+    personalityTable(personality: number, roleFlags = 0, fwdMode = 0, clusterMode = 0): this {
         this.tableBegin(TableId.Personality, 1)
         this.w.u8(personality)
         this.w.u8(roleFlags)
         this.w.u8(fwdMode)
-        this.w.u8(0) // reserved
+        this.w.u8(clusterMode)
         this.tableEnd()
         return this
     }
@@ -1085,10 +1106,15 @@ export class BlobBuilder {
      *  then node_count × 25-byte entries { u8 uid_len, u8 uid[16], u16
      *  position_base, u8 rows, u8 cols, u16 encoder_base, u16 pointer_base } —
      *  matching firmware decode_cluster.c. */
-    clusterTable(nodes: ClusterNodeRecord[]): this {
-        this.tableBegin(TableId.Cluster, 1)
+    clusterTable(nodes: ClusterNodeRecord[], sides?: ClusterSideRecord[]): this {
+        // v2 (§5.3) only with a side map, so a v1 config stays byte-stable.
+        this.tableBegin(TableId.Cluster, sides?.length ? 2 : 1)
         this.w.u8(nodes.length)
         this.w.u8(0) // flags (reserved)
+        if (sides?.length) {
+            this.w.u8(sides.length)
+            this.w.u8(0) // reserved
+        }
         for (const n of nodes) {
             const uid = n.uid.subarray(0, CLUSTER_UID_MAX)
             this.w.u8(uid.length)
@@ -1098,6 +1124,13 @@ export class BlobBuilder {
             this.w.u8(n.cols)
             this.w.u16(n.encoderBase)
             this.w.u16(n.pointerBase)
+        }
+        for (const s of sides ?? []) {
+            this.w.u8(s.side)
+            this.w.u8(s.rows)
+            this.w.u8(s.cols)
+            this.w.u8(s.encoders)
+            this.w.u8(s.sliders)
         }
         this.tableEnd()
         return this

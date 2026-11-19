@@ -1022,6 +1022,24 @@ describe('decodeRemapprBlob node role + forwardMode (§N4b/§N4c TBL_PERSONALITY
         expect(config?.node?.forwardMode).toBeUndefined()
     })
 
+    it('lowers cluster mode alone into byte 3 and decodes it back (§5.4)', () => {
+        const cfg = parseKeymap(nodeJson('{ "role": "follower", "clusterMode": "alone" }'))
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const { config } = decodeRemapprBlob(blob)
+        expect(config?.node?.clusterMode).toBe('alone')
+        expect(config?.node?.role).toBe('follower')
+
+        // auto is the default: not reconstructed, and alone it emits no table.
+        const auto = buildRemapprBlob(parseKeymap(nodeJson('{ "clusterMode": "auto" }')), {
+            configVersion: 1,
+        })
+        expect(decodeRemapprBlob(auto.blob).config?.node?.clusterMode).toBeUndefined()
+        expect(auto.blob.length).toBe(
+            buildRemapprBlob(parseKeymap(nodeJson('{}')), { configVersion: 1 }).blob.length,
+        )
+    })
+
     it('emits no TBL_PERSONALITY for a default node (resolved, no role)', () => {
         const cfg = parseKeymap(nodeJson('{ "forwardMode": "resolved" }'))
         const { blob } = buildRemapprBlob(cfg, { configVersion: 1 })
@@ -1080,6 +1098,40 @@ describe('decodeRemapprBlob TBL_CLUSTER (id 21, §N4c mode-A)', () => {
                 `[{ "uid": "deadbeef", "positionBase": 8, "rows": 4, "cols": 5 }]`,
             ),
         )
+    })
+
+    const sidesJson = (sides: string): string => `{
+        "schemaVersion": 1, "kind": "remappr.keymap",
+        "meta": { "name": "C", "target": "zmk" }, ${kb(2)},
+        "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+        "node": { "forwardMode": "physical", "clusterSides": ${sides} }
+    }`
+
+    it('lowers the side map as TBL_CLUSTER v2 and decodes it back (§5.3)', () => {
+        const cfg = parseKeymap(
+            sidesJson(`[
+                { "side": 0, "rows": 5, "cols": 6, "encoders": 1 },
+                { "side": 1, "rows": 4, "cols": 6, "sliders": 2 }
+            ]`),
+        )
+        const { blob, diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const { code, config } = decodeRemapprBlob(blob)
+        expect(code).toBe(DecodeCode.OK)
+        expect(config?.node?.cluster).toBeUndefined()
+        expect(config?.node?.clusterSides).toEqual([
+            { side: 0, rows: 5, cols: 6, encoders: 1 },
+            { side: 1, rows: 4, cols: 6, sliders: 2 },
+        ])
+        roundTrips(sidesJson(`[{ "side": 0, "rows": 1, "cols": 2 }, { "side": 1, "rows": 1, "cols": 3 }]`))
+    })
+
+    it('refuses a side map out of order', () => {
+        const cfg = parseKeymap(
+            sidesJson(`[{ "side": 1, "rows": 1, "cols": 1 }, { "side": 0, "rows": 1, "cols": 1 }]`),
+        )
+        const { diagnostics } = buildRemapprBlob(cfg, { configVersion: 1 })
+        expect(diagnostics.some((d) => d.level === 'error')).toBe(true)
     })
 })
 
