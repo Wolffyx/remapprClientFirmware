@@ -459,6 +459,13 @@ export const GeometrySchema = z.object({
         .describe(
             'Physical-layout variant id this key belongs to ("" = common).',
         ),
+    side: z
+        .number()
+        .int()
+        .min(0)
+        .max(254)
+        .optional()
+        .describe('Cluster side of a split board (0 left, 1 right); keys grouped by side.'),
     pin: z
         .string()
         .optional()
@@ -1171,6 +1178,52 @@ export const BoardSchema = z
         'Board definition used to generate the firmware build files (never sent to the device).',
     )
 
+/** One half of a split board (§3.6): its own board fields over the shared ones. */
+export const BoardSideSchema = BoardSchema.extend({
+    side: z.number().int().min(0).max(254).describe('0 left, 1 right, 2+ for N members.'),
+})
+
+const SIDE_GATED =
+    'a part tagged with "side" needs side-gated parts in the firmware (universal ' +
+    'device model §2.2), which it does not have yet: list it under board.sides instead'
+
+/** Paths of the parts in one board block that carry `side`. */
+function sideTagged(block: Record<string, unknown>, path: (string | number)[]): (string | number)[][] {
+    return Object.entries(block).flatMap(([field, value]) => {
+        if (field === 'sides') return []
+        const items: unknown[] = Array.isArray(value) ? value : [value]
+        return items.flatMap((item, i) =>
+            item !== null && typeof item === 'object' && 'side' in item
+                ? [[...path, field, ...(Array.isArray(value) ? [i] : [])]]
+                : [],
+        )
+    })
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+
+export const BoardWithSidesSchema = z.preprocess(
+    (raw, ctx) => {
+        // On the raw JSON: each part schema drops the keys it does not know, so
+        // a `side` on a part would vanish and the part land on every half.
+        if (!isRecord(raw)) return raw
+        const sides = Array.isArray(raw.sides) ? raw.sides : []
+        const paths = [
+            ...sideTagged(raw, []),
+            ...sides.flatMap((s, i) => (isRecord(s) ? sideTagged(s, ['sides', i]) : [])),
+        ]
+        for (const path of paths) ctx.addIssue({ code: 'custom', message: SIDE_GATED, path, input: raw })
+        return raw
+    },
+    BoardSchema.extend({
+        sides: z
+            .array(BoardSideSchema)
+            .optional()
+            .describe('A split board: one shield per side, each side its own fields.'),
+    }),
+)
+
 // pattern-check: skip declarative zod schema for one mouse button action
 const DPI = z.number().int().min(1).max(0xffff)
 export const MouseButtonActionSchema = z
@@ -1641,6 +1694,15 @@ export const BoardNodeBusPortSchema = z
                 'The detect pin reads low while a node is plugged in (pulled up). ' +
                     'Default: high, pulled down.',
             ),
+        sideStrap: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Side strap pin fixed by the PCB: asserted = right half.'),
+        sideStrapActiveLow: z
+            .boolean()
+            .optional()
+            .describe('The strap reads low on the right half (default high).'),
         label: z.string().min(1).max(16).optional().describe('Port name for logs.'),
         currentSpeed: z
             .number()
@@ -2186,7 +2248,7 @@ const BaseKeymapSchema = z.object({
     // Whole-node config sections (v2) — validated + preserved, consumed later.
     node: NodeSchema.optional(),
     firmware: FirmwareSettingsSchema.optional(),
-    board: BoardSchema.optional(),
+    board: BoardWithSidesSchema.optional(),
 })
 
 /* ── cross-reference + structural checks ───────────────────────────────── */

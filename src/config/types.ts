@@ -232,6 +232,9 @@ export interface CanonGeometry {
     /** Physical-layout variant id this key belongs to ("" / absent = common to
      *  all variants). Set by the builder; compilers ignore unknown variants. */
     variant?: string
+    /** Cluster side this key is wired to (0 left, 1 right, 2+ for N members)
+     *  on a board with `board.sides`; keys are grouped by side, ascending. */
+    side?: number
     /** Per-key electrical matrix position `[row, col]` — the generalized field
      *  every firmware needs (QMK `matrix:[r,c]`, VIA/Vial KLE legend, ZMK
      *  `RC(r,c)`). Friendly + co-located authoring source; when present it is
@@ -1018,6 +1021,9 @@ export interface ConfigBoard {
     powerOff?: BoardPowerOff
     /** Node-bus ports (remappr,node-bus-port), one per inter-node UART. */
     nodeBus?: BoardNodeBusPort[]
+    /** A split board's halves (§3.6): each side's own board fields over the
+     *  shared ones above. Board-gen emits one shield per side. */
+    sides?: BoardSide[]
     /** The radio chip on SPI (remappr,spi-link). */
     radioLink?: BoardRadioLink
     /** 2.4 GHz radio facts (remappr,radio-config). */
@@ -1130,6 +1136,16 @@ export interface BoardPowerOff {
 
 // pattern-check: skip plain data interfaces for the node-bus and radio board fields
 /** One node-bus port on a UART. */
+/** One member of a split board: the board fields that differ on this side
+ *  (controller, matrix pins, parts, node-bus ports). */
+export interface BoardSide extends ConfigBoard {
+    /** 0 left, 1 right, 2+ for an N-member cluster; matches the keys' `side`. */
+    side: number
+    /** A side does not nest sides. (Not `Omit`: over the index signature it
+     *  would drop every named field.) */
+    sides?: never
+}
+
 export interface BoardNodeBusPort {
     /** Node label of the UART ("usart2"). */
     uart: string
@@ -1139,6 +1155,10 @@ export interface BoardNodeBusPort {
     detect?: string
     /** The detect pin is low while a node is plugged in (default high). */
     detectActiveLow?: boolean
+    /** Side strap pin, fixed by the PCB (§5.2): asserted = right. */
+    sideStrap?: string
+    /** The strap reads low on the right half (default high). */
+    sideStrapActiveLow?: boolean
     label?: string
     currentSpeed?: number
     /** The UART's pinctrl phandles. */

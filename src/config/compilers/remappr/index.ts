@@ -89,6 +89,7 @@ import { mouseRecord } from './mouse'
 import { mergePartEntries, sensorEntries } from './sensor'
 import { type MatrixField, type MatrixFold, matrixPartEntries } from './matrix'
 import type { SensorInfo } from '../../../devices/types'
+import { clusterSidesFor } from './boardSides'
 import type { CanonicalKeyId } from '../../../catalog/types'
 import type {
     CanonHoldTapDef,
@@ -1787,7 +1788,7 @@ function encodeBlob(
     // TBL_CLUSTER (§N4c mode-A): the coordinator's UID→address map. Each uid is a
     // hex string; a uid over the 16-byte wire field is truncated with a warning.
     const clusterNodes = nodeCfg?.cluster ?? []
-    const sides = clusterSideRecords(nodeCfg?.clusterSides, diag)
+    const sides = clusterSideRecords(clusterSidesFor(config, diag), diag)
     if (clusterNodes.length > 0 || sides.length > 0) {
         const records: ClusterNodeRecord[] = clusterNodes.map((c, i) => {
             const uid = hexToBytes(c.uid)
