@@ -6,6 +6,7 @@
 
 import type {
     CanonAction,
+    SliderMap,
     CanonHoldTapDef,
     CanonMacro,
     CanonModMorph,
@@ -119,17 +120,10 @@ export function emitEncoderSensors(
         warnedPress = true
     }
 
-    // Per-key encoder model: positions tagged element:'encoder', in index order.
-    // The sensor index is this order, so every layer that binds ANY encoder must
-    // emit a token for ALL of them (missing → transparent) to stay aligned.
-    const trans: CanonAction = { type: 'transparent' }
-    const encoderKeys = config.keyboard.keys
-        .map((k, i) => (k.element === 'encoder' ? i : -1))
-        .filter((i) => i >= 0)
-
+    // Slots in order = sensor order (aligned to keyboard.encoders[]). A knob
+    // key's press is its own binding, so only an unlinked slot can carry one.
     config.layers.forEach((layer, li) => {
         const tokens: string[] = []
-        // Legacy slot-indexed encoders[] (aligned to keyboard.encoders[]).
         layer.encoders?.forEach((e, ei) => {
             if (e.press) warnPress(['layers', li, 'encoders', ei, 'press'])
             tokens.push(
@@ -141,28 +135,6 @@ export function emitEncoderSensors(
                 ]),
             )
         })
-        // Per-key encoderBindings (builder element model).
-        if (
-            encoderKeys.length &&
-            Object.keys(layer.encoderBindings ?? {}).length
-        ) {
-            encoderKeys.forEach((ki) => {
-                const e = layer.encoderBindings?.[ki] ?? {
-                    cw: trans,
-                    ccw: trans,
-                }
-                if (e.press)
-                    warnPress(['layers', li, 'encoderBindings', ki, 'press'])
-                tokens.push(
-                    pairToken(e.cw, e.ccw, `${li}_k${ki}`, [
-                        'layers',
-                        li,
-                        'encoderBindings',
-                        ki,
-                    ]),
-                )
-            })
-        }
         if (tokens.length) byLayer.set(li, tokens.join(' '))
     })
 
@@ -173,17 +145,19 @@ export function emitEncoderSensors(
 // analog axis, so this emits a NOT-GENERATED guidance block (the io-channels /
 // zephyr,user wiring lives in the board overlay) plus the per-layer value-map
 // remappr DID capture, so the firmware author has the intent in one place.
-// Returns [] when no position carries element:'slider'.
+// Returns [] when the keyboard has no slider slots.
 export function emitSliderInputs(config: ConfigKeymap, ctx: Ctx): string[] {
-    const sliderKeys = config.keyboard.keys
-        .map((k, i) => (k.element === 'slider' ? i : -1))
-        .filter((i) => i >= 0)
-    if (!sliderKeys.length) return []
+    const slots = config.keyboard.sliders ?? []
+    if (!slots.length) return []
 
-    const mapNote: Record<string, string> = {
+    const mapNote: Record<SliderMap, string> = {
         volume: 'HID consumer volume (e.g. &kp C_VOL_UP/DOWN via a custom driver)',
-        brightness: 'display/backlight brightness',
+        brightness: 'the computer screen brightness (consumer BRI up/down)',
+        backlight: 'the keyboard backlight level',
+        rgb_brightness: 'the underglow brightness',
+        rgb_hue: 'the underglow colour',
         mouse_wheel: 'mouse wheel (MOVE_Y / scroll report)',
+        keys: 'the up / down bindings below, once per step',
         custom: 'custom behavior (see binding below)',
     }
     const out: string[] = [
@@ -196,22 +170,26 @@ export function emitSliderInputs(config: ConfigKeymap, ctx: Ctx): string[] {
         `     * in one place; wire the hardware side yourself.`,
         `     *`,
     ]
-    sliderKeys.forEach((ki) => {
-        const pin = config.keyboard.keys[ki]?.pin
+    slots.forEach((slot, si) => {
+        const ki = slot.key
+        const pin = ki === undefined ? undefined : config.keyboard.keys[ki]?.pin
         out.push(
-            `     *   slider @ key ${ki}${pin ? ` (ADC pin ${pin})` : ''}:`,
+            `     *   slider ${si}${ki === undefined ? '' : ` @ key ${ki}`}${pin ? ` (ADC pin ${pin})` : ''}:`,
         )
         config.layers.forEach((layer, li) => {
-            const s = layer.sliderBindings?.[ki]
+            const s = layer.sliders?.[si]
             if (!s) return
             const range =
                 s.min !== undefined || s.max !== undefined
                     ? ` [${s.min ?? '…'}..${s.max ?? '…'}]`
                     : ''
+            const path = ['layers', li, 'sliders', si]
             const custom =
                 s.map === 'custom' && s.action
-                    ? ` → ${emitBinding(s.action, ctx, ['layers', li, 'sliderBindings', ki, 'action'])}`
-                    : ''
+                    ? ` → ${emitBinding(s.action, ctx, [...path, 'action'])}`
+                    : s.map === 'keys'
+                      ? ` → up ${s.up ? emitBinding(s.up, ctx, [...path, 'up']) : '—'}, down ${s.down ? emitBinding(s.down, ctx, [...path, 'down']) : '—'}${s.steps ? `, ${s.steps} steps` : ''}`
+                      : ''
             out.push(
                 `     *     ${layer.name}: ${s.map}${range} — ${mapNote[s.map]}${custom}`,
             )
@@ -228,9 +206,23 @@ export function emitSliderInputs(config: ConfigKeymap, ctx: Ctx): string[] {
     return out
 }
 
-export function emitHoldTapDefs(defs: CanonHoldTapDef[]): string[] {
+/** Config key indices as `.keymap` positions; keys outside the default layout
+ *  are left out (the caller compares lengths to tell). */
+export function keymapPositionList(
+    keys: readonly number[],
+    ctx: Ctx,
+): number[] {
+    const positions = ctx.positions
+    if (!positions) return [...keys]
+    return keys.flatMap((k) => {
+        const p = positions.get(k)
+        return p === undefined ? [] : [p]
+    })
+}
+
+export function emitHoldTapDefs(defs: CanonHoldTapDef[], ctx: Ctx): string[] {
     const out: string[] = ['    behaviors {']
-    for (const h of defs) {
+    defs.forEach((h, hi) => {
         const id = sanitize(h.id)
         out.push(
             `        ${id}: ${id} {`,
@@ -247,15 +239,23 @@ export function emitHoldTapDefs(defs: CanonHoldTapDef[]): string[] {
             out.push(
                 `            require-prior-idle-ms = <${h.requirePriorIdleMs}>;`,
             )
-        if (h.holdTriggerKeyPositions?.length)
+        const wanted = h.holdTriggerKeyPositions ?? []
+        const trigger = keymapPositionList(wanted, ctx)
+        if (trigger.length < wanted.length) {
+            ctx.diag.warn(
+                `hold-tap "${h.id}": trigger keys outside the default layout were left out`,
+                ['holdTaps', hi, 'holdTriggerKeyPositions'],
+            )
+        }
+        if (trigger.length)
             out.push(
-                `            hold-trigger-key-positions = <${h.holdTriggerKeyPositions.join(' ')}>;`,
+                `            hold-trigger-key-positions = <${trigger.join(' ')}>;`,
             )
         if (h.holdTriggerOnRelease)
             out.push(`            hold-trigger-on-release;`)
         if (h.retroTap) out.push(`            retro-tap;`)
         out.push(`        };`)
-    }
+    })
     out.push('    };')
     return out
 }

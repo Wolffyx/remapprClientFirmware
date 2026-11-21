@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "kind": "remappr.keymap",
+  "meta": { "name": "Split U5", "target": "zmk" },
+  "keyboard": {
+    "id": "split_u5",
+    "name": "Split U5",
+    "keys": [
+      { "x": 0, "y": 0, "matrix": [0, 0] },
+      { "x": 1, "y": 0, "matrix": [0, 1] }
+    ]
+  },
+  "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+  "node": { "personality": "keyboard", "role": "coordinator" },
+  "board": {
+    "controller": "nucleo_u5a5zj_q",
+    "matrix": { "diode": "row2col", "rows": ["PE11"], "cols": ["PF15", "PE13"] },
+    "nodeBus": [
+      {
+        "uart": "usart2",
+        "direction": "downstream",
+        "label": "dn",
+        "currentSpeed": 1000000,
+        "pinctrl": ["&usart2_tx_pd5", "&usart2_rx_pd6"],
+        "dmas": "<&gpdma1 2 27 STM32_DMA_PERIPH_TX>, <&gpdma1 3 26 STM32_DMA_PERIPH_RX>"
+      }
+    ],
+    "radioLink": {
+      "spi": "spi1",
+      "cs": "PD14",
+      "dataReady": "PD15",
+      "reset": "PF12"
+    }
+  }
+}

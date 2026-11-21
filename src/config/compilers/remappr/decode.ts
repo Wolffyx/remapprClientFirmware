@@ -36,9 +36,13 @@ import type {
     CanonTapDance,
     CanonTapDanceStep,
     ConfigClusterNode,
+    ConfigClusterSide,
     ConfigKeymap,
     ConfigLinkProfile,
     ConfigLinkProfileOverride,
+    ConfigPowerSettings,
+    ConfigDisplay,
+    ConfigRadioSettings,
     ConfigMouse,
     ConfigNode,
     Direction,
@@ -61,6 +65,8 @@ import {
     LightingActionCode,
     LightingTargetCode,
     LockAction,
+    CLUSTER_PSK_LEN,
+    MACRO_FLAG_PRIVATE,
     MacroOp,
     MouseButtonCode,
     MouseDirCode,
@@ -74,15 +80,30 @@ import {
     CFG_ROLE_VALID,
     CFG_ROLE_COORD,
     FWD_MODE_PHYSICAL,
+    CLUSTER_MODE_ALONE,
+    CLUSTER_POWER_FOLLOW,
+    CLUSTER_POWER_OWN,
     CLUSTER_TBL_HDR_LEN,
     CLUSTER_UID_MAX,
     CLUSTER_NODE_WIRE,
+    CLUSTER_SIDE_WIRE,
+    CLUSTER_TBL_V2_HDR_LEN,
     LINK_PROFILE_TBL_HDR_LEN,
     LINK_PROFILE_OVR_WIRE,
     LinkProfileId,
+    POWER_TBL_LEN,
+    RADIO_TBL_LEN,
     bytesToHex,
     type BehaviorRecord,
 } from './blobWriter'
+import { readPower } from './power'
+import { needsWire, recordToWire } from './wire'
+import { readRadio } from './radio'
+import { readMouseTable } from './mouse'
+import { matrixDefaultsFromParts } from './matrix'
+import { readPartEntries } from './sensor'
+import { readDisplayTable, withDisplaySettings } from './display'
+import { readSliders } from './slider'
 
 const HID_PAGE_KEYBOARD = 7
 const HID_PAGE_CONSUMER = 12
@@ -102,6 +123,7 @@ export const DecodeCode = {
     REFERENCE: -9,
     CAPABILITY: -10,
     BUDGET: -11,
+    DEVICE: -12,
 } as const
 
 export type DecodeCodeValue = (typeof DecodeCode)[keyof typeof DecodeCode]
@@ -119,6 +141,7 @@ const DECODE_CODE_NAME: Record<number, string> = {
     [-9]: 'REFERENCE',
     [-10]: 'CAPABILITY',
     [-11]: 'BUDGET',
+    [-12]: 'DEVICE',
 }
 
 /** Human label for a decode result code, e.g. "CRC mismatch (-4)". */
@@ -137,24 +160,54 @@ export interface DecodeResult {
 
 /* ── little-endian reader ───────────────────────────────────────────────── */
 
-class ByteReader {
+// pattern-check: skip — bounds check added to the existing reader (bug fix)
+/** A read ran past the end of its table frame (or of the buffer). Decoders turn
+ *  it into TABLE_FRAME, as the firmware does for a short table. */
+export class FrameOverrun extends Error {
+    constructor(pos: number, end: number) {
+        super(`read past the end of the table (offset ${pos}, end ${end})`)
+        this.name = 'FrameOverrun'
+    }
+}
+
+export class ByteReader {
     pos = 0
-    constructor(private readonly b: Uint8Array) {}
+    private readonly end: number
+    /** `end` bounds every read (exclusive); a read past it throws FrameOverrun
+     *  instead of running into the next table or reading `undefined` as 0. */
+    constructor(
+        private readonly b: Uint8Array,
+        end: number = b.length,
+    ) {
+        this.end = Math.min(end, b.length)
+    }
+    /** A reader over one table frame's payload, positioned at its start. */
+    static frame(b: Uint8Array, t: { start: number; end: number }): ByteReader {
+        const r = new ByteReader(b, t.end)
+        r.seek(t.start)
+        return r
+    }
     get length(): number {
-        return this.b.length
+        return this.end
     }
     remaining(): number {
-        return this.b.length - this.pos
+        return this.end - this.pos
+    }
+    private need(n: number): void {
+        if (this.pos + n > this.end) throw new FrameOverrun(this.pos, this.end)
     }
     u8(): number {
+        this.need(1)
         return this.b[this.pos++]
     }
     u16(): number {
+        this.need(2)
         const v = this.b[this.pos] | (this.b[this.pos + 1] << 8)
         this.pos += 2
         return v
     }
     u32(): number {
+        this.need(4)
         const v =
             (this.b[this.pos] |
                 (this.b[this.pos + 1] << 8) |
@@ -208,9 +261,12 @@ function systemUsageToKey(usage: number): CanonicalKeyId | null {
 }
 
 /** Single modifier-mask bit → Modifier (lowest set bit wins). */
+// Exactly one modifier: a multi-mod mask has no single-modifier canonical form,
+// so its cell decodes as unmodeled and is carried as read (wire.ts) instead of
+// keeping only the lowest modifier.
 function maskToMod(mask: number): Modifier | null {
-    for (let i = 0; i < 8; i++) if (mask & (1 << i)) return MODIFIERS[i]
-    return null
+    const i = MODIFIERS.findIndex((_, bit) => mask === 1 << bit)
+    return i < 0 ? null : MODIFIERS[i]
 }
 
 /** Modifier mask → Modifier[] (for KEY_MODS hold). */
@@ -249,13 +305,30 @@ function keyPress(usage: number, mods: Modifier[]): CanonKeyPress {
     return kp
 }
 
-// The inverse of lowerAction: one 16-byte behavior record → a CanonAction. Types
-// the canonical model can't yet express (composites, the 23..36 vocabulary,
-// extended system/mouse/lighting sub-codes) decode to `none` + a diagnostic.
+/** A sticky record's release-after (its tapping_term_ms), when set. */
+const releaseAfter = (rec: BehaviorRecord): { releaseAfterMs?: number } =>
+    rec.tappingTermMs ? { releaseAfterMs: rec.tappingTermMs } : {}
+
+// One behavior record → a CanonAction. When the canonical form cannot hold the
+// record in full, the action carries the record as `_wire` (wire.ts), and the
+// compiler writes it back, so a save keeps what the binding really does.
 function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
+    const action = behaviorToCanon(rec, ctx)
+    return needsWire(rec, action.type)
+        ? { ...action, _wire: recordToWire(rec) }
+        : action
+}
+
+// The inverse of lowerAction: one 16-byte behavior record → a CanonAction. Types
+// the canonical model can't yet express (extended system / mouse / lighting
+// sub-codes, multi-mod sticky and mod-tap) decode to `none` + a diagnostic.
+function behaviorToCanon(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
     const { diag, path } = ctx
     const unmodeled = (what: string): CanonAction => {
-        diag.warn(`behavior ${what} has no canonical form yet — decoded as none`, path)
+        diag.warn(
+            `behavior ${what} has no canonical form yet — shown as none, kept as read`,
+            path,
+        )
         return { type: 'none' }
     }
     const keyOf = (usage: number): CanonicalKeyId | null => {
@@ -319,7 +392,12 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
         case BehaviorType.ToggleLayer:
             return { type: 'layer', mode: 'toggle', layer: ctx.layerName(rec.hold) }
         case BehaviorType.StickyLayer:
-            return { type: 'layer', mode: 'sticky', layer: ctx.layerName(rec.hold) }
+            return {
+                type: 'layer',
+                mode: 'sticky',
+                layer: ctx.layerName(rec.hold),
+                ...releaseAfter(rec),
+            }
         case BehaviorType.StickyMod: {
             const mod = maskToMod(rec.hold)
             if (!mod) return unmodeled('sticky_mod')
@@ -327,13 +405,17 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
             // key.keyboard_left_shift), whose usage is 0xE0 + bit index.
             const usage = 0xe0 + MODIFIERS.indexOf(mod)
             const k = usageToKey(usage)
-            return k ? { type: 'sticky_key', key: k } : unmodeled('sticky_mod')
+            return k
+                ? { type: 'sticky_key', key: k, ...releaseAfter(rec) }
+                : unmodeled('sticky_mod')
         }
         case BehaviorType.StickyKey: {
             // One-shot non-mod key (BH_STICKY_KEY); the modifier form decodes
             // from StickyMod above — both round-trip to canonical sticky_key.
             const k = keyOf(rec.tap)
-            return k ? { type: 'sticky_key', key: k } : unmodeled('sticky_key')
+            return k
+                ? { type: 'sticky_key', key: k, ...releaseAfter(rec) }
+                : unmodeled('sticky_key')
         }
         case BehaviorType.KeyToggle: {
             const k = keyOf(rec.tap)
@@ -350,6 +432,7 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
             if (name === 'reset') return { type: 'reset' }
             if (name === 'bootloader') return { type: 'bootloader' }
             if (name === 'soft_off') return { type: 'soft_off' }
+            if (name === 'battery_show') return { type: 'battery_show' }
             if (name === 'ext_power_toggle')
                 return { type: 'ext_power', action: 'toggle' }
             if (name === 'ext_power_on')
@@ -415,7 +498,16 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
         case BehaviorType.AutoShift: {
             const k = keyOf(rec.tap)
             return k
-                ? { type: 'auto_shift', key: k, mods: maskToMods(rec.hold) }
+                ? {
+                      type: 'auto_shift',
+                      key: k,
+                      mods: maskToMods(rec.hold),
+                      ...(rec.tappingTermMs ? { timeoutMs: rec.tappingTermMs } : {}),
+                      ...(rec.quickTapMs ? { quickTapMs: rec.quickTapMs } : {}),
+                      ...(rec.requirePriorIdleMs
+                          ? { requirePriorIdleMs: rec.requirePriorIdleMs }
+                          : {}),
+                  }
                 : { type: 'none' }
         }
         case BehaviorType.AltRepeat:
@@ -429,7 +521,11 @@ function behaviorToAction(rec: BehaviorRecord, ctx: DecodeCtx): CanonAction {
                 mods: maskToMods(rec.tap),
             }
         case BehaviorType.LayerTapToggle:
-            return { type: 'tap_toggle', layer: ctx.layerName(rec.hold) }
+            return {
+                type: 'tap_toggle',
+                layer: ctx.layerName(rec.hold),
+                ...(rec.tappingTermMs ? { tappingTermMs: rec.tappingTermMs } : {}),
+            }
         case BehaviorType.ToSaved:
             return { type: 'set_base_saved', layer: ctx.layerName(rec.hold) }
         case BehaviorType.AutoLayer:
@@ -595,7 +691,7 @@ function tapHold(
 
 /* ── table walk ─────────────────────────────────────────────────────────── */
 
-interface TableFrame {
+export interface TableFrame {
     id: number
     version: number
     start: number // payload start
@@ -633,11 +729,28 @@ function parseBehaviorRecord(r: ByteReader): BehaviorRecord {
  * walks the table frames. Header-level failures return a `code` and no config;
  * intra-table reference issues surface as diagnostics with a best-effort config.
  */
-export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
-    const diag = new DiagnosticBag()
-    const fail = (code: DecodeCodeValue): DecodeResult => ({
+/** A blob's validated header and its table frames (payloads not yet read). */
+export interface BlobFrames {
+    code: DecodeCodeValue
+    /** Header config_version; meaningful when `code === OK`. */
+    configVersion: number
+    frames: TableFrame[]
+    /** The CRC did not match because the device blanked a secret on read-back
+     *  (a private macro's steps, the cluster key), not because the bytes are
+     *  damaged. Present on OK only. */
+    redacted?: boolean
+}
+
+/**
+ * Validate the 20-byte header (magic / min_reader / CRC32-over-body) exactly
+ * like the firmware, then split the body into table frames. Shared by the
+ * keymap decoder and the device decoder (device.ts).
+ */
+export function readBlobFrames(bytes: Uint8Array): BlobFrames {
+    const fail = (code: DecodeCodeValue): BlobFrames => ({
         code,
-        diagnostics: diag.all,
+        configVersion: 0,
+        frames: [],
     })
 
     // ── header ──
@@ -653,7 +766,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const crcStored = h.u32()
     if (bodyLen > bytes.length - BLOB_HEADER_LEN) return fail(DecodeCode.TRUNCATED)
     const body = bytes.subarray(BLOB_HEADER_LEN, BLOB_HEADER_LEN + bodyLen)
-    if (crc32(body) !== crcStored) return fail(DecodeCode.CRC)
+    const crcOk = crc32(body) === crcStored
 
     // ── table frames ──
     const frames: TableFrame[] = []
@@ -670,6 +783,73 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         frames.push({ id, version, start, end: start + len })
         off = start + len
     }
+    // A 1..7-byte remainder cannot hold a table header; the firmware validator
+    // refuses it (config_blob.c), so a blob the device would reject never
+    // decodes here as if it were fine.
+    if (off !== bodyEnd) return fail(DecodeCode.TABLE_FRAME)
+    if (crcOk) return { code: DecodeCode.OK, configVersion, frames }
+    // READ_CONFIG_CHUNK blanks the secrets (§17, §6 N5b) under a CRC the
+    // device computed over the real bytes, so a blob read off a device that
+    // holds one never matches its CRC.
+    if (!holdsBlankedSecret(bytes, frames)) return fail(DecodeCode.CRC)
+    return { code: DecodeCode.OK, configVersion, frames, redacted: true }
+}
+
+const allZero = (b: Uint8Array): boolean => b.every((v) => v === 0)
+
+/** Whether a blanked secret sits in `bytes`: a TBL_MACRO v2 private macro with
+ *  all-zero steps, or a TBL_CLUSTER_SEC with an all-zero key. */
+function holdsBlankedSecret(bytes: Uint8Array, frames: TableFrame[]): boolean {
+    return frames.some((t) => {
+        if (t.id === TableId.ClusterSec) {
+            const key = bytes.subarray(t.start, t.start + CLUSTER_PSK_LEN)
+            return t.end - t.start >= CLUSTER_PSK_LEN && allZero(key)
+        }
+        return t.id === TableId.Macro && t.version >= 2 && hasBlankedPrivateMacro(bytes, t)
+    })
+}
+
+// Walk a TBL_MACRO v2 like the firmware redactor (decode_macros.c) does.
+function hasBlankedPrivateMacro(bytes: Uint8Array, t: TableFrame): boolean {
+    if (t.end - t.start < 2) return false
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const count = dv.getUint16(t.start, true)
+    let p = t.start + 2
+    for (let i = 0; i < count && p + 4 <= t.end; i++) {
+        const steps = dv.getUint16(p, true) * 4
+        const flags = bytes[p + 2]
+        p += 4
+        if (p + steps > t.end) return false
+        const blanked = steps > 0 && allZero(bytes.subarray(p, p + steps))
+        if ((flags & MACRO_FLAG_PRIVATE) !== 0 && blanked) return true
+        p += steps
+    }
+    return false
+}
+
+export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
+    try {
+        return decodeBlobTables(bytes)
+    } catch (e) {
+        if (!(e instanceof FrameOverrun)) throw e
+        const diag = new DiagnosticBag()
+        diag.error(e.message)
+        return { code: DecodeCode.TABLE_FRAME, diagnostics: diag.all }
+    }
+}
+
+// The decode proper. Every table reader is bounded to its frame, so a short
+// table throws FrameOverrun, which decodeRemapprBlob reports as TABLE_FRAME.
+function decodeBlobTables(bytes: Uint8Array): DecodeResult {
+    const diag = new DiagnosticBag()
+    const fail = (code: DecodeCodeValue): DecodeResult => ({
+        code,
+        diagnostics: diag.all,
+    })
+
+    const parsed = readBlobFrames(bytes)
+    if (parsed.code !== DecodeCode.OK) return fail(parsed.code)
+    const { configVersion, frames } = parsed
     const table = (id: number): TableFrame | undefined =>
         frames.find((f) => f.id === id)
 
@@ -678,8 +858,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     if (!layerT) return fail(DecodeCode.MISSING)
     if (layerT.version !== 1) return fail(DecodeCode.TABLE_VER)
     if (layerT.end - layerT.start < 8) return fail(DecodeCode.TABLE_FRAME)
-    const lr = new ByteReader(bytes)
-    lr.seek(layerT.start)
+    const lr = ByteReader.frame(bytes, layerT)
     const numLayers = lr.u16()
     const numPositions = lr.u16()
     const defaultTermMs = lr.u16()
@@ -710,6 +889,21 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         matrixPollPeriodMs = lr.u16()
     }
     if (numLayers === 0 || numPositions === 0) return fail(DecodeCode.BOUNDS)
+    // Matrix timing a MATRIX part holds (TBL_PART) wins over the tail, as on
+    // the device (compilers/remappr/matrix.ts).
+    const partT = table(TableId.Sensor)
+    const partEntries = partT
+        ? readPartEntries(bytes, partT.start, partT.end)
+        : []
+    if (typeof partEntries === 'string') diag.warn(`part table: ${partEntries}`)
+    const matrix =
+        typeof partEntries === 'string'
+            ? {}
+            : matrixDefaultsFromParts(partEntries)
+    matrixPressDebounceMs = matrix.matrixPressDebounceMs ?? matrixPressDebounceMs
+    matrixReleaseDebounceMs =
+        matrix.matrixReleaseDebounceMs ?? matrixReleaseDebounceMs
+    matrixPollPeriodMs = matrix.matrixPollPeriodMs ?? matrixPollPeriodMs
 
     // ── BEHAVIOR (required) ──
     const behT = table(TableId.Behavior)
@@ -735,8 +929,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const numCells = numLayers * numPositions
     if (bindT.end - bindT.start !== numCells * 2) return fail(DecodeCode.TABLE_FRAME)
     const cells: number[] = []
-    const br = new ByteReader(bytes)
-    br.seek(bindT.start)
+    const br = ByteReader.frame(bytes, bindT)
     for (let i = 0; i < numCells; i++) {
         const idx = br.u16()
         if (idx >= behaviors.length) {
@@ -828,6 +1021,10 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
     const encoderT = table(TableId.Encoder)
     if (encoderT) readEncoders(bytes, encoderT, decoded, layers, diag)
 
+    // ── SLIDER (optional, slider part design §4b) → layer.sliders[] in place ──
+    const sliderT = table(TableId.Slider)
+    if (sliderT) readSliders(bytes, sliderT, decoded, layers, diag)
+
     // ── RGB (optional, id 7) → per-key colors (decode-only; preps Phase 4c emit) ──
     const rgbT = table(TableId.Rgb)
     const perKey = rgbT
@@ -853,6 +1050,25 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         ? readLinkProfile(bytes, linkProfileT, diag)
         : undefined
 
+    // ── RADIO (optional, id 26, device-config plan) → node.radio ──
+    const radioT = table(TableId.Radio)
+    const radio = radioT ? readRadioTable(bytes, radioT, diag) : undefined
+
+    // ── DISPLAY (optional, id 31, display part design §3) → node.displays. A
+    //    table this client cannot show in full stays out of the config, and a
+    //    save carries it as read (carry.ts). ──
+    const displayT = table(TableId.Display)
+    const shown = displayT ? readDisplays(bytes, displayT, diag) : undefined
+    // Their parts' own settings ride in TBL_PART.
+    const displays =
+        shown && typeof partEntries !== 'string'
+            ? withDisplaySettings(shown, partEntries)
+            : shown
+
+    // ── POWER (optional, id 30, sleep-wake design) → node.power ──
+    const powerT = table(TableId.Power)
+    const power = powerT ? readPowerTable(bytes, powerT, diag) : undefined
+
     // ── ACTION_BINDING (optional, id 17, §F) → top-level actionBindings[] ──
     const actionT = table(TableId.ActionBinding)
     const actionBindings = actionT ? readActionBindings(bytes, actionT) : []
@@ -873,15 +1089,27 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
         pers.personality ||
         pers.role ||
         pers.forwardMode ||
-        cluster ||
-        linkProfile
+        pers.clusterMode ||
+        pers.clusterPower ||
+        cluster?.nodes ||
+        cluster?.sides ||
+        linkProfile ||
+        radio ||
+        power ||
+        displays
             ? {
                   ...(pers.personality ? { personality: pers.personality } : {}),
                   ...(pers.role ? { role: pers.role } : {}),
                   ...(pers.forwardMode ? { forwardMode: pers.forwardMode } : {}),
+                  ...(pers.clusterMode ? { clusterMode: pers.clusterMode } : {}),
+                  ...(pers.clusterPower ? { clusterPower: pers.clusterPower } : {}),
                   ...(mouse ? { mouse } : {}),
-                  ...(cluster ? { cluster } : {}),
+                  ...(cluster?.nodes ? { cluster: cluster.nodes } : {}),
+                  ...(cluster?.sides ? { clusterSides: cluster.sides } : {}),
                   ...(linkProfile ? { linkProfile } : {}),
+                  ...(radio ? { radio } : {}),
+                  ...(power ? { power } : {}),
+                  ...(displays ? { displays } : {}),
               }
             : undefined
 
@@ -936,8 +1164,7 @@ export function decodeRemapprBlob(bytes: Uint8Array): DecodeResult {
 
 // u16 count + count × 16-byte records (BEHAVIOR / SUBS framing). null on overrun.
 function readRecordTable(bytes: Uint8Array, t: TableFrame): BehaviorRecord[] | null {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     if (t.start + 2 + count * 16 > t.end) return null
     const out: BehaviorRecord[] = []
@@ -957,8 +1184,7 @@ function readPosholds(
     diag: DiagnosticBag,
 ): void {
     if (t.end - t.start < 2) return
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     for (let i = 0; i < count; i++) {
         if (r.pos + 4 > t.end) {
@@ -992,9 +1218,8 @@ const rgbHex = (r: number, g: number, b: number): string =>
 
 // TBL_RGB (id 7): 8-byte header { u8 mode, u8 flags(bit0=perLayer), u8 num_layers,
 // u8 pad, u16 num_positions, u16 pad } + RGB888 colors row-major [layer][pos].
-// Returns a sparse position→"#rrggbb" map from layer 0 (black/off omitted), or
-// undefined for an effects-only (mode 0) / empty / truncated table. A per-layer
-// table is collapsed to layer 0 with a diagnostic (per-layer authoring is Phase 4c).
+// Returns a sparse position→"#rrggbb" map (black/off omitted), or undefined for
+// an effects-only (mode 0) / empty / truncated / per-layer table.
 function readRgb(
     bytes: Uint8Array,
     t: TableFrame,
@@ -1006,8 +1231,7 @@ function readRgb(
         diag.error('rgb table header truncated')
         return undefined
     }
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const mode = r.u8()
     const perLayer = (r.u8() & 1) !== 0
     const hdrLayers = r.u8()
@@ -1021,10 +1245,13 @@ function readRgb(
         diag.error('rgb color data truncated')
         return undefined
     }
-    if (perLayer && layers > 1)
-        diag.warn(
-            'per-layer RGB decoded as layer 0 only (per-layer authoring is Phase 4c)',
-        )
+    // The config holds one color map, so a per-layer table stays out of it and
+    // a save carries the table as read (compilers/remappr/carry.ts) instead of
+    // flattening it to layer 0.
+    if (perLayer) {
+        diag.warn('per-layer RGB is kept as read; it is not editable here yet')
+        return undefined
+    }
     const out: Record<number, string> = {}
     for (let pos = 0; pos < positions; pos++) {
         const rr = r.u8()
@@ -1035,40 +1262,25 @@ function readRgb(
     return Object.keys(out).length ? out : undefined
 }
 
-// TBL_MOUSE (id 8, §4b): u16 cpi, u16 auto_layer_timeout_ms, u8 accel_point_count,
-// u8 flags, then N × { u16 speed_in, u16 mult_x100 }. Bounds-checked so a foreign
-// or truncated blob can't throw; returns undefined when the table carries no
-// pointer settings. The inverse of blobWriter.mouseTable / index.ts node.mouse.
+// TBL_MOUSE (id 8, §4b; version 2 adds inverts / swap / scroll divisor / button
+// map): the shared reader in compilers/remappr/mouse.ts. Bounds-checked so a
+// foreign or truncated blob can't throw; returns undefined when the table
+// carries no pointer settings.
 function readMouse(
     bytes: Uint8Array,
     t: TableFrame,
     diag: DiagnosticBag,
 ): ConfigMouse | undefined {
-    if (t.end - t.start < 6) {
-        diag.error('mouse table header truncated')
+    if (t.version < 1 || t.version > 3) {
+        diag.error(`mouse table version ${t.version} not supported`)
         return undefined
     }
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
-    const cpi = r.u16()
-    const autoLayerTimeoutMs = r.u16()
-    const count = r.u8()
-    r.u8() // flags (reserved)
-    if (t.start + 6 + count * 4 > t.end) {
-        diag.error('mouse accel curve truncated')
+    const m = readMouseTable(bytes, t.start, t.end, t.version)
+    if (typeof m === 'string') {
+        diag.error(m)
         return undefined
     }
-    const accel: Array<[number, number]> = []
-    for (let i = 0; i < count; i++) {
-        const speedIn = r.u16()
-        const multX100 = r.u16()
-        accel.push([speedIn, multX100])
-    }
-    const out: ConfigMouse = {}
-    if (cpi) out.cpi = cpi
-    if (autoLayerTimeoutMs) out.autoLayerTimeoutMs = autoLayerTimeoutMs
-    if (accel.length) out.accel = accel
-    return Object.keys(out).length ? out : undefined
+    return Object.keys(m).length ? m : undefined
 }
 
 // pattern-check: skip pure wire-decode fn mirroring the TBL_PERSONALITY layout
@@ -1080,12 +1292,11 @@ function readMouse(
 function readPersonality(
     bytes: Uint8Array,
     t: TableFrame,
-): Pick<ConfigNode, 'personality' | 'role' | 'forwardMode'> {
+): Pick<ConfigNode, 'personality' | 'role' | 'forwardMode' | 'clusterMode' | 'clusterPower'> {
     const len = t.end - t.start
     if (len < 1) return {}
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
-    const out: Pick<ConfigNode, 'personality' | 'role' | 'forwardMode'> = {}
+    const r = ByteReader.frame(bytes, t)
+    const out: Pick<ConfigNode, 'personality' | 'role' | 'forwardMode' | 'clusterMode' | 'clusterPower'> = {}
     const p = ({ 1: 'keyboard', 2: 'mouse' } as Record<
         number,
         ConfigNode['personality']
@@ -1097,6 +1308,14 @@ function readPersonality(
             out.role = roleFlags & CFG_ROLE_COORD ? 'coordinator' : 'follower'
     }
     if (len > 2 && r.u8() === FWD_MODE_PHYSICAL) out.forwardMode = 'physical'
+    if (len > 3 && r.u8() === CLUSTER_MODE_ALONE) out.clusterMode = 'alone'
+    if (len > 4) {
+        const cp = ({ [CLUSTER_POWER_FOLLOW]: 'follow', [CLUSTER_POWER_OWN]: 'own' } as Record<
+            number,
+            ConfigNode['clusterPower']
+        >)[r.u8()]
+        if (cp) out.clusterPower = cp
+    }
     return out
 }
 
@@ -1109,16 +1328,26 @@ function readCluster(
     bytes: Uint8Array,
     t: TableFrame,
     diag: DiagnosticBag,
-): ConfigClusterNode[] | undefined {
-    if (t.end - t.start < CLUSTER_TBL_HDR_LEN) {
+): { nodes?: ConfigClusterNode[]; sides?: ConfigClusterSide[] } | undefined {
+    if (t.version !== 1 && t.version !== 2) {
+        diag.error(`cluster table version ${t.version} is not supported`)
+        return undefined
+    }
+    // v2 (§5.3) adds u8 side_count + a reserved byte, and the side map after the nodes.
+    const hdr = t.version === 2 ? CLUSTER_TBL_V2_HDR_LEN : CLUSTER_TBL_HDR_LEN
+    if (t.end - t.start < hdr) {
         diag.error('cluster table header truncated')
         return undefined
     }
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u8()
     r.u8() // flags (reserved)
-    if (t.start + CLUSTER_TBL_HDR_LEN + count * CLUSTER_NODE_WIRE > t.end) {
+    const sideCount = t.version === 2 ? r.u8() : 0
+    if (t.version === 2) r.u8() // reserved
+    if (
+        t.start + hdr + count * CLUSTER_NODE_WIRE + sideCount * CLUSTER_SIDE_WIRE >
+        t.end
+    ) {
         diag.error('cluster table truncated')
         return undefined
     }
@@ -1147,7 +1376,25 @@ function readCluster(
             ...(pointerBase ? { pointerBase } : {}),
         })
     }
-    return nodes.length ? nodes : undefined
+    const sides: ConfigClusterSide[] = []
+    for (let i = 0; i < sideCount; i++) {
+        const side = r.u8()
+        const rows = r.u8()
+        const cols = r.u8()
+        const encoders = r.u8()
+        const sliders = r.u8()
+        sides.push({
+            side,
+            rows,
+            cols,
+            ...(encoders ? { encoders } : {}),
+            ...(sliders ? { sliders } : {}),
+        })
+    }
+    return {
+        ...(nodes.length ? { nodes } : {}),
+        ...(sides.length ? { sides } : {}),
+    }
 }
 
 // pattern-check: skip pure wire-decode fn mirroring the TBL_LINK_PROFILE layout
@@ -1163,8 +1410,7 @@ function readLinkProfile(
         diag.error('link-profile table header truncated')
         return undefined
     }
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const profileId = r.u8()
     const count = r.u8()
     if (
@@ -1194,6 +1440,64 @@ function readLinkProfile(
     return overrides.length ? { profile, overrides } : { profile }
 }
 
+// pattern-check: skip frame checks around the shared radio reader
+// TBL_RADIO (id 26): the 8-byte radio settings (compilers/remappr/radio.ts).
+// A wrong version or a short frame is reported, not thrown.
+function readRadioTable(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigRadioSettings | undefined {
+    if (t.version !== 1) {
+        diag.error(`radio table version ${t.version} not supported`)
+        return undefined
+    }
+    if (t.end - t.start < RADIO_TBL_LEN) {
+        diag.error('radio table truncated')
+        return undefined
+    }
+    return readRadio(bytes, t.start)
+}
+
+// pattern-check: skip frame checks around the shared display reader
+// TBL_DISPLAY (id 31): the pages per display (compilers/remappr/display.ts).
+function readDisplays(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigDisplay[] | undefined {
+    if (t.version !== 1) {
+        diag.warn(`display table version ${t.version} not supported — kept as read`)
+        return undefined
+    }
+    const displays = readDisplayTable(bytes, t.start, t.end)
+    if (typeof displays === 'string') {
+        diag.warn(`${displays} — kept as read`)
+        return undefined
+    }
+    return displays
+}
+
+// pattern-check: skip frame checks around the shared power reader
+// TBL_POWER (id 30): the 16-byte timeouts (compilers/remappr/power.ts). A
+// longer frame is a later version's; a wrong version or a short frame is
+// reported, not thrown.
+function readPowerTable(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigPowerSettings | undefined {
+    if (t.version !== 1) {
+        diag.error(`power table version ${t.version} not supported`)
+        return undefined
+    }
+    if (t.end - t.start < POWER_TBL_LEN) {
+        diag.error('power table truncated')
+        return undefined
+    }
+    return readPower(bytes, t.start)
+}
+
 interface DecodedNames {
     macros: Map<number, string>
     tapDances: Map<number, string>
@@ -1214,8 +1518,7 @@ function readNames(
         modMorphs: new Map(),
     }
     if (t.end - t.start < 2) return out
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const dec = new TextDecoder()
     for (let i = 0; i < count; i++) {
@@ -1249,26 +1552,47 @@ function readMacros(
     t: TableFrame,
     diag: DiagnosticBag,
 ): CanonMacro[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const v2 = t.version >= 2
     const out: CanonMacro[] = []
     for (let mi = 0; mi < count; mi++) {
         const numSteps = r.u16()
+        let flags = 0
         if (v2) {
-            r.u8() // flags
+            flags = r.u8()
             r.u8() // reserved
         }
-        const steps: CanonMacroStep[] = []
+        const isPrivate = (flags & MACRO_FLAG_PRIVATE) !== 0
+        const start = r.pos
+        const raw: [number, number][] = []
         for (let si = 0; si < numSteps; si++) {
             const op = r.u8()
             r.u8() // pad
-            const arg = r.u16()
+            raw.push([op, r.u16()])
+        }
+        // The device blanks a private macro's step bytes on read-back (§17).
+        if (isPrivate && numSteps > 0 && allZero(bytes.subarray(start, r.pos))) {
+            out.push({
+                id: `macro_${mi}`,
+                params: 0,
+                steps: [],
+                private: true,
+                _redacted: true,
+            })
+            continue
+        }
+        const steps: CanonMacroStep[] = []
+        for (const [op, arg] of raw) {
             const step = macroStep(op, arg, diag)
             if (step) steps.push(step)
         }
-        out.push({ id: `macro_${mi}`, params: 0, steps })
+        out.push({
+            id: `macro_${mi}`,
+            params: 0,
+            steps,
+            ...(isPrivate ? { private: true } : {}),
+        })
     }
     return out
 }
@@ -1300,10 +1624,12 @@ function readCombos(
     layerName: (i: number) => string,
     diag: DiagnosticBag,
 ): CanonCombo[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const out: CanonCombo[] = []
+    // The compiler writes a combo on several layers as consecutive records that
+    // differ only in their layer; they read back as that one combo.
+    let prev: { sig: string; combo: CanonCombo } | undefined
     for (let ci = 0; ci < count; ci++) {
         const np = r.u16()
         const timeoutMs = r.u16()
@@ -1312,6 +1638,11 @@ function readCombos(
         const outIdx = r.u16()
         const keys: number[] = []
         for (let i = 0; i < np; i++) keys.push(r.u16())
+        const sig = `${keys.join(',')}|${timeoutMs}|${outIdx}`
+        if (layer !== 0xff && prev?.combo.layers && prev.sig === sig) {
+            prev.combo.layers.push(layerName(layer))
+            continue
+        }
         const action =
             outIdx < decoded.length ? decoded[outIdx] : ({ type: 'none' } as CanonAction)
         if (outIdx >= decoded.length)
@@ -1319,6 +1650,7 @@ function readCombos(
         const combo: CanonCombo = { name: `combo_${ci}`, keys, action, timeoutMs }
         if (layer !== 0xff) combo.layers = [layerName(layer)]
         out.push(combo)
+        prev = { sig, combo }
     }
     return out
 }
@@ -1334,8 +1666,7 @@ function readEncoders(
     layers: CanonLayer[],
     diag: DiagnosticBag,
 ): void {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const resolve = (
         idx: number,
@@ -1379,8 +1710,7 @@ function readConditionals(
     t: TableFrame,
     layerName: (i: number) => string,
 ): CanonConditionalLayer[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const out: CanonConditionalLayer[] = []
     for (let i = 0; i < count; i++) {
@@ -1401,8 +1731,7 @@ function readActionBindings(
     bytes: Uint8Array,
     t: TableFrame,
 ): CanonActionBinding[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     r.u16() // num_positions — implied by the keymap geometry
     const out: CanonActionBinding[] = []
@@ -1454,7 +1783,7 @@ function readAutocorrect(
             truncated = true
             return
         }
-        const r = new ByteReader(bytes)
+        const r = new ByteReader(bytes, t.end)
         r.seek(t.start + off)
 
         const need = (n: number): boolean => {
@@ -1562,6 +1891,10 @@ function raiseSemanticAction(
             if (val !== 0) a.val = val
             return a
         }
+        case 7:
+            return arg0 !== 0
+                ? { kind: 'device', action: code, value: arg0 }
+                : { kind: 'device', action: code }
         default:
             return { kind: 'none' }
     }
@@ -1577,8 +1910,7 @@ function readKeyOverrides(
     layerName: (i: number) => string,
     diag: DiagnosticBag,
 ): CanonKeyOverride[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const out: CanonKeyOverride[] = []
     for (let i = 0; i < count; i++) {
@@ -1630,8 +1962,7 @@ function readLeaders(
     decoded: CanonAction[],
     diag: DiagnosticBag,
 ): CanonLeaderSequence[] {
-    const r = new ByteReader(bytes)
-    r.seek(t.start)
+    const r = ByteReader.frame(bytes, t)
     const count = r.u16()
     const out: CanonLeaderSequence[] = []
     for (let i = 0; i < count; i++) {

@@ -4,22 +4,38 @@
 // editor's keyboard model. Config-as-source-of-truth: device read → decode →
 // lower to a neutral editing buffer; edits mutate the buffer; commit raises →
 // compiles → seals the blob back.
+import { REMAPPR_SLIDER_MAPS } from '../../config/compilers/remappr/slider'
+import {
+    activeLayoutSource,
+    createIdentity,
+    usbIdentifier,
+    type IdentityApi,
+} from '@firmware/identity'
 import { filterCatalogByCodec } from '../../catalog/filter'
 import type { KeyCatalog } from '../../catalog/types'
 import type {
     Capabilities,
     ClusterApi,
+    DeviceConfigApi,
     DynamicEntriesApi,
+    EncoderApi,
+    FirmwareBehaviorFlags,
     KeyboardService,
     KeyTestApi,
     MacroApi,
+    MouseMotionApi,
     NodesApi,
+    HostValuesApi,
+    ScreensApi,
+    SensorApi,
+    SliderApi,
     UnicodeApi,
 } from '../../service'
 import type {
     ActionType,
     AdapterNotification,
     DeviceInfo,
+    EncoderAction,
     ExportedFile,
     KeyAction,
     Keymap,
@@ -27,7 +43,9 @@ import type {
     Layer,
     LockState,
     PhysicalLayout,
+    SliderAction,
 } from '../../types'
+import type { DeviceKind, SensorInfo } from '../../devices/types'
 import { ProtocolError } from '../../errors'
 import {
     type CanonAutocorrectEntry,
@@ -43,6 +61,8 @@ import {
     serializeKeymap,
 } from '../../config'
 import { buildRemapprBlob } from '../../config/compilers/remappr'
+import { MATRIX_FIELDS } from '../../config/compilers/remappr/matrix'
+import { type DeviceCaps, preflightConfigBlob } from '../../config/preflight'
 
 import {
     buildRemapprActionTypes,
@@ -55,7 +75,12 @@ import {
 } from './actions'
 import { remapprCodec } from './codec'
 import type { ConfigEditingApi } from '../../configEditing'
-import { lowerConfigToNeutral, raiseNeutralToConfig } from './configBridge'
+import {
+    lowerConfigToNeutral,
+    raiseNeutralToConfig,
+    withKnobSlots,
+    withSliderSlots,
+} from './configBridge'
 import {
     actionsToMacro,
     comboToEntry,
@@ -65,8 +90,9 @@ import {
     tapDanceToEntry,
 } from './dynamicBridge'
 import type { RemapprRpc } from './rpc'
-import type { RemapprSession } from './auth'
 import {
+    BEHAVIOR_FAMILIES,
+    type BehaviorFamilies,
     BLOB_ALIGN,
     Cmd,
     CommonVerb,
@@ -74,10 +100,24 @@ import {
     type Limits,
     type LinkLimitKnob,
     Namespace,
+    parseDeviceInfo,
     parseLinkLimits,
+    powerCapability,
     Status,
     statusName,
 } from './protocol'
+
+/**
+ * The Capabilities.behaviors flags for a keyboard's built-in behavior families
+ * (GET_LIMITS bits 14-20). Null families — firmware that predates family
+ * advertisement — has every family. A family built out also clears the
+ * older flags for what it owns: leader (sequences) and auto shift (tap-hold).
+ */
+export function behaviorFlagsFor(families: BehaviorFamilies | null): FirmwareBehaviorFlags {
+    const flags: FirmwareBehaviorFlags = {}
+    for (const f of BEHAVIOR_FAMILIES) flags[f] = families?.[f] ?? true
+    return { ...flags, leader: flags.sequences, autoShift: flags.tapHold }
+}
 
 type NotificationHandler = (notification: AdapterNotification) => void
 type PendingChangesHandler = (pending: boolean) => void
@@ -85,9 +125,6 @@ type ClosedHandler = (reason?: unknown) => void
 
 export interface RemapprServiceDeps {
     rpc: RemapprRpc
-    /** Control-auth session for sealed writes. Omitted for read-only node views,
-     *  which never seal. */
-    session?: RemapprSession
     deviceInfo: DeviceInfo
     /** Decoded active config (source of truth); the editing buffer lowers from it. */
     config: ConfigKeymap
@@ -102,13 +139,27 @@ export interface RemapprServiceDeps {
      *  edit throws and there is no keyTest. Does NOT decide transport ownership —
      *  see `sharesTransport`. */
     readOnly?: boolean
+    /** Why the service is read-only, when it is not the behind-dongle default
+     *  (e.g. the device's config could not be decoded). Every rejected edit
+     *  throws this message, and `capabilities.readOnlyReason` carries it. */
+    readOnlyReason?: string
+    /** The config blob read off the device. commit() carries the tables the
+     *  config does not model (sensor, display, slider, cluster key, per-layer
+     *  RGB, unknown ids) from it into the blob it writes. */
+    deviceBlob?: Uint8Array
     /** True when this service borrows another service's transport (a behind-dongle
      *  node view rides the dongle's RPC), so disconnect() must NOT tear it down.
      *  False/omitted for a service that owns its transport (a direct keyboard or
      *  the dongle itself), which closes it on disconnect. */
     sharesTransport?: boolean
-    /** Device class surfaced to the renderer (`'dongle'` lands on the roster). */
-    kind?: 'keyboard' | 'dongle'
+    /** Device class surfaced to the renderer (`'dongle'` lands on the roster,
+     *  `'mouse'` on the mouse page). */
+    kind?: DeviceKind
+    /** Device-document config facade — set on a dongle or mouse with a config
+     *  store; omitted on a keyboard (its config is the keymap). */
+    device?: DeviceConfigApi
+    /** Live mouse controls — set on a mouse. */
+    motion?: MouseMotionApi
     /** Behind-dongle roster facade — set on the dongle's own service, omitted on a
      *  node view (no nesting). */
     nodes?: NodesApi
@@ -118,6 +169,17 @@ export interface RemapprServiceDeps {
     /** §5.2-E unicode input-method facade — set on a directly-attached node
      *  advertising Cap.UNICODE; omitted otherwise. */
     unicode?: UnicodeApi
+    /** Hardware caps word (GET_PERSONALITY_MAP), for its power hardware
+     *  (battery, power off); omitted when the device reported none. */
+    hwCaps?: number
+    /** SENSOR facade — set where the firmware serves SENSOR (its parts: the
+     *  battery, sensors); omitted otherwise. */
+    sensor?: SensorApi
+    /** Values this computer pushes for the screens; absent when the
+     *  firmware does not serve the HOST namespace. */
+    hostValues?: HostValuesApi
+    /** What the screens can show and how they draw. */
+    screens?: ScreensApi
 }
 
 /** Round `b` up to a multiple of `align` with zero padding (flash alignment). */
@@ -133,9 +195,20 @@ export class RemapprKeyboardService
     implements KeyboardService, ConfigEditingApi
 {
     public readonly deviceInfo: DeviceInfo
+    /** USB ids and the layout's hash. The protocol reports no model id, so
+     *  no remappr_model identifier yet. */
+    public readonly identity: IdentityApi = createIdentity([
+        () => usbIdentifier(this.deviceInfo),
+        activeLayoutSource(() => this.getPhysicalLayouts()),
+    ])
     public readonly capabilities: Capabilities
-    /** `'dongle'` for the dongle's own service; `'keyboard'` (default) otherwise. */
-    public readonly kind: 'keyboard' | 'dongle'
+    /** `'dongle'` for the dongle's own service, `'mouse'` for a mouse;
+     *  `'keyboard'` (default) otherwise. */
+    public readonly kind: DeviceKind
+    /** Device-document config (dongle / mouse); omitted on a keyboard. */
+    public readonly device?: DeviceConfigApi
+    /** Live mouse controls; present on a mouse. */
+    public readonly motion?: MouseMotionApi
     public readonly codec = remapprCodec
     /** Live matrix readout — direct devices only; a node's relayed input plane is
      *  unsupported, so read-only views omit it. */
@@ -149,6 +222,13 @@ export class RemapprKeyboardService
     /** §5.2-E host input method for `&unicode` bindings — present on a directly-
      *  attached node advertising Cap.UNICODE; omitted otherwise. */
     public readonly unicode?: UnicodeApi
+    /** Parts (battery, sensors) where the firmware serves SENSOR. */
+    public readonly sensor?: SensorApi
+    public readonly hostValues?: HostValuesApi
+    public readonly screens?: ScreensApi
+    // The parts' descriptions, read once when a commit first needs them
+    // (descriptors are constant); a failed read is asked again next time.
+    private partsRead: Promise<readonly SensorInfo[]> | null = null
     /** Read-only macro list (§24): the active config's macros surfaced to the
      *  Macros tab by their real DT names. Editing (setMacro) lands with the
      *  round-trip; for now `readonly: true`. */
@@ -161,21 +241,32 @@ export class RemapprKeyboardService
      *  (Was accepted in deps but never assigned — the editors' feature gate stayed
      *  dark on real devices until this was wired.) */
     public readonly limits?: Limits
+    /** Knob turns per layer: present on a writable keyboard with a knob (its
+     *  input layout, or encoder bindings already in the blob). */
+    public readonly encoders?: EncoderApi
+    /** What each slider does per layer: present on a writable keyboard with a
+     *  slider (its input layout, or slider bindings already in the blob). */
+    public readonly sliders?: SliderApi
 
     private readonly rpc: RemapprRpc
-    private readonly session?: RemapprSession
     private readonly readOnly: boolean
+    private readonly readOnlyReason: string
     /** Borrowed transport (node view) — disconnect() must not close it. */
     private readonly sharesTransport: boolean
     /** Decoded config = source of truth; updated only on a successful commit. */
     private config: ConfigKeymap
     private configVersion: number
+    /** The blob the device holds, as far as this service knows: the one read at
+     *  connect, then each one it commits. Source of the carried tables. */
+    private deviceBlob?: Uint8Array
     private readonly sealedChunk: number
 
     private layers: Layer[] = []
     private layouts: PhysicalLayout[]
     private activeLayoutId: number
     private readonly keyCount: number
+    private readonly encoderCount: number
+    private readonly sliderCount: number
     private readonly maxLayers: number
     private nextLayerId = 0
     private pendingChanges = false
@@ -219,25 +310,50 @@ export class RemapprKeyboardService
 
     constructor(deps: RemapprServiceDeps) {
         this.rpc = deps.rpc
-        this.session = deps.session
-        this.readOnly = deps.readOnly ?? false
+        this.readOnly = (deps.readOnly ?? false) || deps.readOnlyReason !== undefined
+        this.readOnlyReason =
+            deps.readOnlyReason ??
+            'Read-only node view: editing a behind-dongle node is not yet ' +
+                'supported (relayed-write is HW-proof-pending).'
         this.sharesTransport = deps.sharesTransport ?? false
         this.kind = deps.kind ?? 'keyboard'
+        this.device = deps.device
+        this.motion = deps.motion
         this.nodes = deps.nodes
         this.cluster = deps.cluster
         this.unicode = deps.unicode
+        this.sensor = deps.sensor
+        this.hostValues = deps.hostValues
+        this.screens = deps.screens
         this.limits = deps.limits
         this.deviceInfo = deps.deviceInfo
-        this.config = deps.config
+        // Knob slots from the device's layout so its turns validate on export.
+        const active = deps.layouts.find((l) => l.id === deps.activeLayoutId)
+        this.config = withSliderSlots(
+            withKnobSlots(deps.config, active?.encoders),
+            active?.sliders,
+        )
         this.configVersion = deps.configVersion
+        this.deviceBlob = deps.deviceBlob
         this.layouts = deps.layouts
         this.activeLayoutId = deps.activeLayoutId
-        this.maxLayers = Math.max(deps.maxLayers, deps.config.layers.length || 1)
+        this.maxLayers = Math.max(
+            deps.maxLayers,
+            deps.config.layers.length || 1,
+        )
         this.keyCount = deps.config.layers[0]?.bindings.length ?? 0
+        this.sliderCount = this.config.keyboard.sliders?.length ?? 0
+        this.encoderCount = Math.max(
+            0,
+            ...deps.layouts.map((l) => l.encoders?.length ?? 0),
+            ...deps.config.layers.map((l) => l.encoders?.length ?? 0),
+        )
         // Legacy sealed (0xE1) data plane is 32 blob-bytes/chunk; the universal
         // path's smaller max_sealed_chunk (16) does not apply to direct writes.
         this.sealedChunk = LEGACY_SEALED_CHUNK
 
+        // Battery / power off from the hw caps; its timeouts are node.power.
+        const power = powerCapability(deps.hwCaps)
         this.capabilities = {
             lock: 'none',
             rename: !this.readOnly,
@@ -253,10 +369,30 @@ export class RemapprKeyboardService
             // written durably to device storage as a first-class feature.
             persistence: true,
             maxLayers: this.maxLayers,
+            behaviors: behaviorFlagsFor(this.limits?.families ?? null),
             readOnly: this.readOnly,
+            ...(deps.readOnlyReason ? { readOnlyReason: deps.readOnlyReason } : {}),
+            ...(power ? { power } : {}),
         }
 
         this.seedLayersFromConfig()
+
+        // pattern-check: skip — facade literal like keyTest below
+        if (!this.readOnly && this.encoderCount > 0) {
+            this.encoders = {
+                setEncoder: async (layerId, encoderIdx, direction, action) => {
+                    this.setEncoder(layerId, encoderIdx, direction, action)
+                },
+            }
+        }
+        if (!this.readOnly && this.sliderCount > 0) {
+            this.sliders = {
+                maps: REMAPPR_SLIDER_MAPS,
+                setSlider: async (layerId, slot, slider) => {
+                    this.setSlider(layerId, slot, slider)
+                },
+            }
+        }
 
         // Key-Test: legacy 0xE0 INPUT events → the set of pressed positions. Direct
         // devices only — the rpc here is the shared dongle channel, so a relayed
@@ -289,7 +425,10 @@ export class RemapprKeyboardService
             // The binding a picker click emits for macro #idx. The kind
             // constant is Remappr's own and stays here — the app just forwards
             // whatever ref it is handed.
-            macroRef: (index) => ({ kind: REMAPPR_KIND_MACRO, params: [index] }),
+            macroRef: (index) => ({
+                kind: REMAPPR_KIND_MACRO,
+                params: [index],
+            }),
             getMacro: async (idx) => {
                 const m = this.macroAt(idx)
                 if (!m) throw new ProtocolError(`No macro at index ${idx}`)
@@ -299,7 +438,10 @@ export class RemapprKeyboardService
                 this.assertWritable()
                 const m = this.config.macros?.[idx]
                 if (!m) throw new ProtocolError(`No macro at index ${idx}`)
-                this.editedMacros.set(idx, actionsToMacro(m.id, m.params, actions))
+                this.editedMacros.set(
+                    idx,
+                    actionsToMacro(m.id, m.params, actions),
+                )
                 this.markPending(true)
             },
         }
@@ -341,7 +483,9 @@ export class RemapprKeyboardService
                 throw new ProtocolError('Key overrides are not surfaced yet')
             },
             setKeyOverride: async () => {
-                throw new ProtocolError('Editing key overrides is not yet supported')
+                throw new ProtocolError(
+                    'Editing key overrides is not yet supported',
+                )
             },
         }
 
@@ -350,12 +494,7 @@ export class RemapprKeyboardService
 
     /** Reject every edit on a read-only (behind-dongle node) view. */
     private assertWritable(): void {
-        if (this.readOnly) {
-            throw new ProtocolError(
-                'Read-only node view: editing a behind-dongle node is not yet ' +
-                    'supported (relayed-write is HW-proof-pending).',
-            )
-        }
+        if (this.readOnly) throw new ProtocolError(this.readOnlyReason)
     }
 
     /* ── editing buffer ─────────────────────────────────────────────────── */
@@ -403,7 +542,11 @@ export class RemapprKeyboardService
         return {
             ...base,
             ...(base.macros
-                ? { macros: base.macros.map((m, i) => this.editedMacros.get(i) ?? m) }
+                ? {
+                      macros: base.macros.map(
+                          (m, i) => this.editedMacros.get(i) ?? m,
+                      ),
+                  }
                 : {}),
             ...(base.tapDances
                 ? {
@@ -459,10 +602,117 @@ export class RemapprKeyboardService
             id: this.nextLayerId++,
             name: l.name,
             keys: l.keys,
+            ...this.encoderFiller(l.encoders),
+            ...this.sliderFiller(l.sliders),
         }))
     }
 
-    private layerNames(): string[] {
+    /** `sliders` sized to the device's sliders, null (as on the base layer)
+     *  where the blob has none; nothing on a keyboard without sliders. A
+     *  runtime layer always carries it then, so a cleared slot raises as none. */
+    private sliderFiller(have: readonly (SliderAction | null)[] = []): {
+        sliders?: (SliderAction | null)[]
+    } {
+        if (this.sliderCount === 0) return {}
+        return {
+            sliders: Array.from(
+                { length: this.sliderCount },
+                (_, i) => have[i] ?? null,
+            ),
+        }
+    }
+
+    /** `encoders` sized to the device's knobs, unbound where the blob has
+     *  none; nothing on a keyboard without knobs. */
+    private encoderFiller(have: readonly EncoderAction[] = []): {
+        encoders?: EncoderAction[]
+    } {
+        if (this.encoderCount === 0) return {}
+        const none = (): KeyAction =>
+            buildRemapprKeyAction(
+                REMAPPR_KIND_TRANSPARENT,
+                [],
+                this.layerNames(),
+            )
+        return {
+            encoders: Array.from(
+                { length: this.encoderCount },
+                (_, i) => have[i] ?? { cw: none(), ccw: none() },
+            ),
+        }
+    }
+
+    /** One knob direction on one layer (0 = clockwise). Marks pending. */
+    private setEncoder(
+        layerId: number,
+        encoderIdx: number,
+        direction: 0 | 1,
+        action: KeyAction,
+    ): void {
+        this.assertWritable()
+        const idx = this.layerIndexById(layerId)
+        if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
+        if (encoderIdx < 0 || encoderIdx >= this.encoderCount) {
+            throw new ProtocolError(`Encoder out of range: ${encoderIdx}`)
+        }
+        const layer = this.layers[idx]
+        const encoders = (
+            layer.encoders ?? this.encoderFiller().encoders!
+        ).slice()
+        const built = buildRemapprKeyAction(
+            action.kind,
+            action.params,
+            this.layerNames(),
+            action.label?.modifiers,
+            this.compositeName(action.kind, action.params),
+        )
+        const cur = encoders[encoderIdx]!
+        encoders[encoderIdx] =
+            direction === 0
+                ? { cw: built, ccw: cur.ccw }
+                : { cw: cur.cw, ccw: built }
+        this.layers[idx] = { ...layer, encoders }
+        this.markPending(true)
+    }
+
+    /** What slider `slot` does on one layer (null = as on the base layer).
+     *  Marks pending. */
+    private setSlider(
+        layerId: number,
+        slot: number,
+        slider: SliderAction | null,
+    ): void {
+        this.assertWritable()
+        const idx = this.layerIndexById(layerId)
+        if (idx < 0) throw new ProtocolError(`Unknown layer id: ${layerId}`)
+        if (slot < 0 || slot >= this.sliderCount) {
+            throw new ProtocolError(`Slider out of range: ${slot}`)
+        }
+        const layer = this.layers[idx]
+        const sliders = this.sliderFiller(layer.sliders).sliders!
+        sliders[slot] = slider && this.builtSlider(slider)
+        this.layers[idx] = { ...layer, sliders }
+        this.markPending(true)
+    }
+
+    /** A slider's up / down built like any key action (so they raise). */
+    private builtSlider(s: SliderAction): SliderAction {
+        const build = (a: KeyAction): KeyAction =>
+            buildRemapprKeyAction(
+                a.kind,
+                a.params,
+                this.layerNames(),
+                a.label?.modifiers,
+                this.compositeName(a.kind, a.params),
+            )
+        return {
+            ...s,
+            ...(s.up ? { up: build(s.up) } : {}),
+            ...(s.down ? { down: build(s.down) } : {}),
+        }
+    }
+
+        private layerNames(): string[] {
         return this.layers.map((l) => l.name)
     }
 
@@ -472,7 +722,11 @@ export class RemapprKeyboardService
 
     private makeFiller(): KeyAction[] {
         return Array.from({ length: this.keyCount }, () =>
-            buildRemapprKeyAction(REMAPPR_KIND_TRANSPARENT, [], this.layerNames()),
+            buildRemapprKeyAction(
+                REMAPPR_KIND_TRANSPARENT,
+                [],
+                this.layerNames(),
+            ),
         )
     }
 
@@ -499,7 +753,7 @@ export class RemapprKeyboardService
     /* ── action catalog ─────────────────────────────────────────────────── */
 
     async listActionTypes(): Promise<ActionType[]> {
-        return buildRemapprActionTypes(this.maxLayers)
+        return buildRemapprActionTypes(this.maxLayers, this.limits?.families ?? null)
     }
 
     buildKeyAction(kind: string, params: number[]): KeyAction {
@@ -525,6 +779,20 @@ export class RemapprKeyboardService
                 id: l.id,
                 name: l.name,
                 keys: relabelLayer(l.keys, names),
+                ...(l.encoders
+                    ? {
+                          encoders: l.encoders.map((e) => {
+                              const [cw, ccw] = relabelLayer(
+                                  [e.cw, e.ccw],
+                                  names,
+                              )
+                              return { cw: cw!, ccw: ccw! }
+                          }),
+                      }
+                    : {}),
+                ...(l.sliders
+                    ? { sliders: l.sliders.map((b) => b && relabelSlider(b, names)) }
+                    : {}),
             })),
             availableLayers: Math.max(0, this.maxLayers - this.layers.length),
             activeLayoutId: this.activeLayoutId,
@@ -571,7 +839,8 @@ export class RemapprKeyboardService
     }
 
     async setKeys(updates: KeyUpdate[]): Promise<void> {
-        for (const u of updates) await this.setKey(u.layerId, u.position, u.action)
+        for (const u of updates)
+            await this.setKey(u.layerId, u.position, u.action)
     }
 
     async addLayer(): Promise<Layer> {
@@ -583,6 +852,8 @@ export class RemapprKeyboardService
             id: this.nextLayerId++,
             name: `Layer ${this.layers.length}`,
             keys: this.makeFiller(),
+            ...this.encoderFiller(),
+            ...this.sliderFiller(),
         }
         this.layers.push(layer)
         this.markPending(true)
@@ -693,7 +964,8 @@ export class RemapprKeyboardService
     setHoldTap(idx: number, patch: Partial<CanonHoldTapDef>): void {
         this.assertWritable()
         const cur = this.editedHoldTaps.get(idx) ?? this.config.holdTaps?.[idx]
-        if (!cur) throw new ProtocolError(`no hold-tap definition at index ${idx}`)
+        if (!cur)
+            throw new ProtocolError(`no hold-tap definition at index ${idx}`)
         this.editedHoldTaps.set(idx, { ...cur, ...patch })
         this.markPending(true)
     }
@@ -709,7 +981,8 @@ export class RemapprKeyboardService
      *  at the next commit(). Throws if `idx` is out of range. */
     setModMorph(idx: number, patch: Partial<CanonModMorph>): void {
         this.assertWritable()
-        const cur = this.editedModMorphs.get(idx) ?? this.config.modMorphs?.[idx]
+        const cur =
+            this.editedModMorphs.get(idx) ?? this.config.modMorphs?.[idx]
         if (!cur)
             throw new ProtocolError(`no mod-morph definition at index ${idx}`)
         this.editedModMorphs.set(idx, { ...cur, ...patch })
@@ -838,42 +1111,121 @@ export class RemapprKeyboardService
         // Fold pending macro / tap-dance / defaults edits into the config the
         // layers raise onto, so a committed blob carries them (and their names).
         const next = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
-        const version = this.configVersion + 1
-        const { blob } = buildRemapprBlob(next, { configVersion: version })
-        const padded = padTo(blob, BLOB_ALIGN)
-
-        await this.writeOk(Cmd.WRITE_CONFIG_BEGIN, undefined, 'WRITE_CONFIG_BEGIN')
-        for (let off = 0; off < padded.length; off += this.sealedChunk) {
-            const slice = padded.subarray(
-                off,
-                Math.min(off + this.sealedChunk, padded.length),
-            )
-            await this.writeOk(Cmd.WRITE_CONFIG_CHUNK, slice, 'WRITE_CONFIG_CHUNK')
-        }
-        const validate = await this.writeCall(Cmd.VALIDATE_CONFIG)
-        if (validate.status !== Status.OK) {
-            await this.writeCall(Cmd.ROLLBACK_CONFIG).catch(() => undefined)
+        const version = this.nextConfigVersion()
+        const { blob, diagnostics } = buildRemapprBlob(next, {
+            configVersion: version,
+            parts: await this.partsFor(next),
+            ...(this.deviceBlob ? { carryFrom: this.deviceBlob } : {}),
+        })
+        // An error-level diagnostic means the blob does not say what the user
+        // asked for (e.g. a NONE placeholder for a binding that failed to lower).
+        const errors = diagnostics.filter((d) => d.level === 'error')
+        if (errors.length > 0) {
             throw new ProtocolError(
-                `VALIDATE_CONFIG failed: ${statusName(validate.status)}`,
+                `The config was not saved: ${errors.map((d) => d.message).join('; ')}`,
             )
         }
-        await this.writeOk(Cmd.COMMIT_CONFIG, undefined, 'COMMIT_CONFIG')
+        // Check the padded size, which is what the device stores, before staging
+        // anything: an oversize push fails mid-stream.
+        const padded = padTo(blob, BLOB_ALIGN)
+        const issues = preflightConfigBlob(padded, this.deviceCaps())
+        if (issues.length > 0) {
+            throw new ProtocolError(
+                `The config was not saved: ${issues.map((i) => i.message).join('; ')}`,
+            )
+        }
+
+        try {
+            await this.pushBlob(padded)
+        } catch (e) {
+            // The device may hold another version now (main firmware keeps a
+            // config it failed to activate), so every later commit would hit
+            // ERR_VERSION. Read the active version back before reporting.
+            await this.resyncConfigVersion()
+            throw e
+        }
 
         this.config = next
         this.configVersion = version
+        this.deviceBlob = blob
         this.clearEdits()
         this.markPending(false)
     }
 
-    // pattern-check: skip — sealed-vs-plain fallback inside two existing private
-    // helpers of this service; conditional dispatch, no GoF abstraction.
-    /** A mutating verb: sealed through the §19 session when the device has one,
-     *  plaintext when the firmware advertises no auth (dev/no-auth build — the
-     *  device accepts mutating verbs in the clear there). */
+    /** The device's described parts when `config` sets matrix timing (its
+     *  MATRIX parts then hold it, compilers/remappr/matrix.ts) or a display
+     *  part's settings (checked against what the part takes); undefined
+     *  otherwise or without the PART namespace. */
+    private async partsFor(
+        config: ConfigKeymap,
+    ): Promise<readonly SensorInfo[] | undefined> {
+        const sensor = this.sensor
+        if (!sensor) return undefined
+        const matrix = MATRIX_FIELDS.some((f) => (config.defaults?.[f] ?? 0) > 0)
+        const shown = config.node?.displays?.some((d) => d.settings)
+        if (!matrix && !shown) return undefined
+        this.partsRead ??= sensor.getSensors().catch((e: unknown) => {
+            this.partsRead = null
+            throw e
+        })
+        return this.partsRead
+    }
+
+    /** The version the next commit carries. The firmware refuses 0xFFFFFFFF. */
+    private nextConfigVersion(): number {
+        const version = this.configVersion + 1
+        if (version >= 0xffffffff) {
+            throw new ProtocolError(
+                'The config was not saved: the device config version is exhausted',
+            )
+        }
+        return version
+    }
+
+    /** The capacities preflight checks against; an unknown one is skipped. A
+     *  device with no config store reports 0 and has no keyboard service. */
+    private deviceCaps(): DeviceCaps {
+        const max = this.limits?.maxConfigBytes ?? 0
+        return max > 0 ? { maxConfigBytes: max } : {}
+    }
+
+    /** BEGIN, every CHUNK, VALIDATE, COMMIT. A failure before COMMIT rolls the
+     *  staging back, so the device is not left with a half-written slot. */
+    private async pushBlob(padded: Uint8Array): Promise<void> {
+        await this.writeOk(Cmd.WRITE_CONFIG_BEGIN, undefined, 'WRITE_CONFIG_BEGIN')
+        try {
+            for (let off = 0; off < padded.length; off += this.sealedChunk) {
+                const slice = padded.subarray(
+                    off,
+                    Math.min(off + this.sealedChunk, padded.length),
+                )
+                await this.writeOk(Cmd.WRITE_CONFIG_CHUNK, slice, 'WRITE_CONFIG_CHUNK')
+            }
+            await this.writeOk(Cmd.VALIDATE_CONFIG, undefined, 'VALIDATE_CONFIG')
+        } catch (e) {
+            // Best effort: the staging error is the one worth reporting.
+            await this.writeCall(Cmd.ROLLBACK_CONFIG).catch(() => undefined)
+            throw e
+        }
+        await this.writeOk(Cmd.COMMIT_CONFIG, undefined, 'COMMIT_CONFIG')
+    }
+
+    /** Re-read the active config version after a failed commit. If the read
+     *  fails too, the version is left as it was: the commit error is what the
+     *  caller sees, and the next connect reads the version afresh. */
+    private async resyncConfigVersion(): Promise<void> {
+        const r = await this.rpc.callPlain(Cmd.GET_DEVICE_INFO).catch(() => null)
+        if (!r || r.status !== Status.OK) return
+        const info = parseDeviceInfo(r.data)
+        this.configVersion = info.hasActive ? info.configVersion : 0
+    }
+
+    /** A mutating verb: sealed through the §19 session the RPC holds (and
+     *  re-handshaken once if the device dropped it), plaintext when the
+     *  firmware advertises no auth (dev/no-auth build — the device accepts
+     *  mutating verbs in the clear there). */
     private writeCall(cmd: number, arg?: Uint8Array) {
-        return this.session
-            ? this.rpc.callSealed(this.session, cmd, arg)
-            : this.rpc.callPlain(cmd, arg)
+        return this.rpc.callWrite(cmd, arg)
     }
 
     private async writeOk(
@@ -927,7 +1279,10 @@ export class RemapprKeyboardService
     }
 
     async exportConfig(): Promise<ExportedFile[]> {
-        const live = raiseNeutralToConfig(this.layers, this.withEdits(this.config))
+        const live = raiseNeutralToConfig(
+            this.layers,
+            this.withEdits(this.config),
+        )
         return [
             {
                 filename: `${this.deviceInfo.name || 'remappr'}.keymap.json`,
@@ -963,7 +1318,22 @@ export class RemapprKeyboardService
         // (its owner does). A service that owns its transport — a direct keyboard
         // OR the dongle itself — closes it here.
         if (!this.sharesTransport) {
-            await this.rpc.close({ abortTransport: true }).catch(() => undefined)
+            await this.rpc
+                .close({ abortTransport: true })
+                .catch(() => undefined)
         }
+    }
+}
+
+/** A slider's up / down relabelled against the current layer names. */
+function relabelSlider(s: SliderAction, names: string[]): SliderAction {
+    const [up, down] = relabelLayer(
+        [s.up, s.down].filter((a): a is KeyAction => !!a),
+        names,
+    )
+    return {
+        ...s,
+        ...(s.up ? { up: up! } : {}),
+        ...(s.down ? { down: (s.up ? down : up)! } : {}),
     }
 }

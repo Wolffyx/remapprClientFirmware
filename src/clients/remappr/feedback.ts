@@ -30,7 +30,7 @@ export async function hapticPulse(
     durationMs: number,
     targetNode = 0,
 ): Promise<void> {
-    const reply = await rpc.callUniversalPlain(
+    const reply = await rpc.callMutation(
         Namespace.LIGHTING,
         LightingVerb.HAPTIC_PULSE,
         buildHapticArg(effect, intensity, durationMs),
@@ -49,7 +49,7 @@ export async function setDisplay(
     text: string,
     opts?: { clear?: boolean; invert?: boolean; targetNode?: number },
 ): Promise<void> {
-    const reply = await rpc.callUniversalPlain(
+    const reply = await rpc.callMutation(
         Namespace.LIGHTING,
         LightingVerb.SET_DISPLAY,
         buildDisplayArg(slot, text, opts),

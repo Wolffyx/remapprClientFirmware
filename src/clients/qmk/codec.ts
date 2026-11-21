@@ -1,5 +1,6 @@
 // Pattern check: Strategy (Tier 1) — applied — concrete QmkCodec implementing KeycodeCodec interface; encode/decode for QMK basic 16-bit keycodes (HID page 7 + quantum extras).
 import { HID_USAGE_BY_CANONICAL } from '../../catalog/entries'
+import { qmkNames } from '../../catalog/firmwareSpellings'
 import type { CanonicalKeyId } from '../../catalog/types'
 import type { DecodedKeycode, EncodedKeycode, KeycodeCodec } from '../../codec'
 import { QMK_CANONICAL_BY_HEX, QMK_HEX_BY_CANONICAL } from './keycodes-hex'
@@ -42,6 +43,10 @@ export class QmkCodec implements KeycodeCodec {
 
     supports(id: CanonicalKeyId): boolean {
         return this.encode(id) !== null
+    }
+
+    names(id: CanonicalKeyId): readonly string[] {
+        return qmkNames(id)
     }
 }
 

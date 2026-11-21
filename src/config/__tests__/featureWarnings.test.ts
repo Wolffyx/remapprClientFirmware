@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { parseKeymap } from '../index'
-import { capabilityWarnings, configRequiredFeatures } from '../featureWarnings'
+import { capabilityWarnings, configRequiredFamilies, configRequiredFeatures } from '../featureWarnings'
 import { LimitsFeature } from '../../clients/remappr/protocol'
-import type { ConfigKeymap } from '../types'
+import type { CanonAction, ConfigKeymap } from '../types'
 
 const kb = (n: number): string =>
     `"keyboard": { "id": "k", "name": "K", "keys": [${Array.from(
@@ -44,6 +44,41 @@ describe('configRequiredFeatures', () => {
         expect(req & LimitsFeature.macroDefaults).toBeTruthy()
         expect(req & LimitsFeature.matrixPollPeriod).toBeTruthy()
         expect(req & LimitsFeature.holdTriggerOnRelease).toBeTruthy()
+    })
+
+    it('cluster mode alone needs the CLUSTER_MODE bit; auto needs nothing (§5.4)', () => {
+        const node = (mode: string): ConfigKeymap =>
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "N", "target": "zmk" }, ${kb(1)},
+                "layers": [{ "name": "base", "bindings": ["A"] }],
+                "node": { "clusterMode": "${mode}" }
+            }`)
+        expect(configRequiredFeatures(node('alone')) & LimitsFeature.clusterMode).toBeTruthy()
+        expect(configRequiredFeatures(node('auto'))).toBe(0)
+    })
+
+    it('a cluster power policy needs the CLUSTER_POWER bit; auto needs nothing (§5.8)', () => {
+        const node = (p: string): ConfigKeymap =>
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "N", "target": "zmk" }, ${kb(1)},
+                "layers": [{ "name": "base", "bindings": ["A"] }],
+                "node": { "clusterPower": "${p}" }
+            }`)
+        expect(configRequiredFeatures(node('follow')) & LimitsFeature.clusterPower).toBeTruthy()
+        expect(configRequiredFeatures(node('own')) & LimitsFeature.clusterPower).toBeTruthy()
+        expect(configRequiredFeatures(node('auto'))).toBe(0)
+    })
+
+    it('a side map needs the TBL_CLUSTER_V2 bit (§5.3)', () => {
+        const cfg = parseKeymap(`{
+            "schemaVersion": 1, "kind": "remappr.keymap",
+            "meta": { "name": "N", "target": "zmk" }, ${kb(1)},
+            "layers": [{ "name": "base", "bindings": ["A"] }],
+            "node": { "clusterSides": [{ "side": 0, "rows": 1, "cols": 1 }] }
+        }`)
+        expect(configRequiredFeatures(cfg)).toBe(LimitsFeature.tblClusterV2)
     })
 
     it('detects hold-trigger-on-release on a hold-tap definition too', () => {
@@ -97,5 +132,94 @@ describe('capabilityWarnings', () => {
 
     it('a plain config never warns, even against pre-Phase-2 firmware', () => {
         expect(capabilityWarnings(plain, 0)).toHaveLength(0)
+    })
+})
+
+describe('behavior families', () => {
+    const F = LimitsFeature
+    // A keyboard advertising families (bit 13) with every family but `without`.
+    const allBut = (...without: number[]): number =>
+        [F.behaviorFamilies, F.tapHold, F.combos, F.macros, F.sequences, F.unicode, F.conditionals, F.keyOverrides]
+            .filter((b) => !without.includes(b))
+            .reduce((a, b) => a | b, 0)
+    const base = plain as ConfigKeymap
+    const withBindings = (...bindings: CanonAction[]): ConfigKeymap => ({
+        ...base,
+        layers: [{ ...base.layers[0], bindings }],
+    })
+    const A: CanonAction = { type: 'key_press', key: 'A' } as CanonAction
+
+    it('a plain config needs no family', () => {
+        expect([...configRequiredFamilies(plain)]).toEqual([])
+    })
+
+    it('finds each family from its actions', () => {
+        const cfg = withBindings(
+            { type: 'auto_shift', key: 'A', mods: ['LEFT_SHIFT'] } as CanonAction,
+            { type: 'macro_play', slot: 0 },
+            { type: 'leader' },
+            { type: 'unicode', codepoint: 0x263a },
+        )
+        expect([...configRequiredFamilies(cfg)].sort()).toEqual(['macros', 'sequences', 'tapHold', 'unicode'])
+    })
+
+    it('finds each table family from a non-empty table', () => {
+        const cfg: ConfigKeymap = {
+            ...base,
+            combos: [{ name: 'c', keys: [0, 1], action: A }],
+            conditionalLayers: [{ ifLayers: ['base'], thenLayer: 'base' }],
+            keyOverrides: [{ trigger: 'A', triggerMods: ['LEFT_SHIFT'], replacement: 'B' }],
+            leaderSequences: [{ sequence: ['A'], action: A }],
+            macros: [{ id: 'm', steps: [{ type: 'tap', key: 'A' }] }],
+        } as ConfigKeymap
+        expect([...configRequiredFamilies(cfg)].sort()).toEqual([
+            'combos',
+            'conditionals',
+            'keyOverrides',
+            'macros',
+            'sequences',
+        ])
+    })
+
+    it('ignores an unbound parameterized macro and an unreferenced tap-dance', () => {
+        const cfg = {
+            ...base,
+            macros: [{ id: 'm', params: 1, steps: [{ type: 'param' }] }],
+            tapDances: [{ id: 'td', taps: [{ count: 1, action: { type: 'unicode', codepoint: 65 } }] }],
+        } as ConfigKeymap
+        expect([...configRequiredFamilies(cfg)]).toEqual([])
+    })
+
+    it('follows a bound tap-dance into its taps', () => {
+        const cfg = {
+            ...withBindings({ type: 'tap_dance', ref: 'td' }),
+            tapDances: [{ id: 'td', taps: [{ count: 1, action: { type: 'unicode', codepoint: 65 } }] }],
+        } as ConfigKeymap
+        expect([...configRequiredFamilies(cfg)].sort()).toEqual(['sequences', 'unicode'])
+    })
+
+    it('blocks a config using a family the keyboard was built without', () => {
+        const cfg = { ...base, combos: [{ name: 'c', keys: [0], action: A }] } as ConfigKeymap
+        const w = capabilityWarnings(cfg, allBut(F.combos))
+        expect(w).toHaveLength(1)
+        expect(w[0]).toMatchObject({ feature: 'combos', blocking: true })
+        expect(w[0].message).toMatch(/built without combos/)
+        expect(capabilityWarnings(cfg, allBut())).toEqual([])
+    })
+
+    it('never blocks on firmware that predates family advertisement', () => {
+        const cfg = withBindings({ type: 'unicode', codepoint: 0x263a })
+        // No bit 13: every family is present, whatever bits 14-20 read.
+        expect(capabilityWarnings(cfg, 0)).toEqual([])
+        expect(capabilityWarnings(cfg, F.kbdExt)).toEqual([])
+    })
+
+    it('keeps the ignored-field warnings non-blocking', () => {
+        const w = capabilityWarnings(rich, allBut())
+        expect(w.length).toBeGreaterThan(0)
+        expect(w.every((x) => !x.blocking)).toBe(true)
+        // rich binds a tap-hold: blocking once the keyboard lacks the family.
+        const lacking = capabilityWarnings(rich, allBut(F.tapHold))
+        expect(lacking.filter((x) => x.blocking).map((x) => x.feature)).toEqual(['tapHold'])
     })
 })

@@ -4,9 +4,10 @@
 // §5.4 pointer-device motion control. MOUSE opcodes are namespace-scoped and
 // ride ONLY the 0xE2/UCH router. Every verb is manifest-gated on the firmware
 // actually having the op wired (a keyboard without a pointer sensor answers
-// ERR_CMD and doesn't list the namespace). The SET_* verbs are mutating —
-// product builds seal them (§19); served plaintext while the node's control
-// auth is dev-disabled. Pass `targetNode` to relay through a dongle.
+// ERR_CMD and doesn't list the namespace). The SET_* verbs are mutating: they
+// ride `callMutation`, sealed (§19) when the RPC holds a session, plaintext
+// when the node's control auth is off. Pass `targetNode` to relay through a
+// dongle.
 
 import {
     buildDpiArg,
@@ -17,7 +18,8 @@ import {
     statusName,
     type MotionConfig,
 } from './protocol'
-import { RELAY_READ_RETRIES, type RemapprRpc } from './rpc'
+import { repeatable, type RemapprRpc } from './rpc'
+import type { MouseMotionApi } from '../../service'
 
 export type { MotionConfig }
 
@@ -33,7 +35,7 @@ export async function getMotionConfig(
         Namespace.MOUSE,
         MouseVerb.GET_MOTION_CONFIG,
         undefined,
-        targetNode ? { targetNode, retries: RELAY_READ_RETRIES } : undefined,
+        repeatable(targetNode),
     )
     if (reply.status !== Status.OK)
         throw new Error(`GET_MOTION_CONFIG → ${statusName(reply.status)}`)
@@ -47,11 +49,11 @@ export async function setDpi(
     dpi: number,
     targetNode = 0,
 ): Promise<void> {
-    const reply = await rpc.callUniversalPlain(
+    const reply = await rpc.callMutation(
         Namespace.MOUSE,
         MouseVerb.SET_DPI,
         buildDpiArg(dpi),
-        targetNode ? { targetNode } : undefined,
+        repeatable(targetNode),
     )
     if (reply.status !== Status.OK)
         throw new Error(`SET_DPI → ${statusName(reply.status)}`)
@@ -63,11 +65,11 @@ export async function setAccelProfile(
     profile: number,
     targetNode = 0,
 ): Promise<void> {
-    const reply = await rpc.callUniversalPlain(
+    const reply = await rpc.callMutation(
         Namespace.MOUSE,
         MouseVerb.SET_ACCEL_PROFILE,
         new Uint8Array([profile]),
-        targetNode ? { targetNode } : undefined,
+        repeatable(targetNode),
     )
     if (reply.status !== Status.OK)
         throw new Error(`SET_ACCEL_PROFILE → ${statusName(reply.status)}`)
@@ -79,12 +81,45 @@ export async function setScrollMode(
     mode: number,
     targetNode = 0,
 ): Promise<void> {
-    const reply = await rpc.callUniversalPlain(
+    const reply = await rpc.callMutation(
         Namespace.MOUSE,
         MouseVerb.SET_SCROLL_MODE,
         new Uint8Array([mode]),
-        targetNode ? { targetNode } : undefined,
+        repeatable(targetNode),
     )
     if (reply.status !== Status.OK)
         throw new Error(`SET_SCROLL_MODE → ${statusName(reply.status)}`)
+}
+
+// pattern-check: skip — facade object over the wrappers above, like buildNodesApi
+/** The `service.motion` facade for a mouse. `writable` false keeps the reads
+ *  and rejects every SET_*. `targetNode` addresses a node behind the dongle. */
+export function buildMouseMotionApi(
+    rpc: RemapprRpc,
+    opts: { targetNode?: number; writable: boolean },
+): MouseMotionApi {
+    const node = opts.targetNode ?? 0
+    const guard = (): void => {
+        if (!opts.writable) {
+            throw new Error(
+                'Read-only view: connect the mouse over USB to change it.',
+            )
+        }
+    }
+    return {
+        writable: opts.writable,
+        getConfig: () => getMotionConfig(rpc, node),
+        async setDpi(dpi) {
+            guard()
+            await setDpi(rpc, dpi, node)
+        },
+        async setAccelProfile(profile) {
+            guard()
+            await setAccelProfile(rpc, profile, node)
+        },
+        async setScrollMode(mode) {
+            guard()
+            await setScrollMode(rpc, mode, node)
+        },
+    }
 }

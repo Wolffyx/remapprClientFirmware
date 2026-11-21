@@ -8,7 +8,9 @@ import { describe, expect, it } from 'vitest'
 import { parseKeymap, type ConfigNode } from '../../config'
 
 import type { RemapprRpc } from './rpc'
+import { HwCap } from './protocol'
 import { RemapprKeyboardService, type RemapprServiceDeps } from './service'
+import { plainMutations } from './plainRpc.fixture'
 
 // A node seeded as a mode-B keyboard follower — enough to prove a role/forwardMode
 // edit merges without dropping the pre-existing personality field.
@@ -21,15 +23,16 @@ const CONFIG = parseKeymap(`{
     "node": { "personality": "keyboard", "forwardMode": "resolved" }
 }`)
 
-const stubRpc = {
+const stubRpc = plainMutations({
     onClosed: () => () => undefined,
     subscribeInput: () => () => undefined,
     close: async () => undefined,
     callPlain: async () => ({ status: 0, data: new Uint8Array() }),
-} as unknown as RemapprRpc
+}) as unknown as RemapprRpc
 
-function makeService(readOnly = false): RemapprKeyboardService {
+function makeService(readOnly = false, hwCaps?: number): RemapprKeyboardService {
     const deps: RemapprServiceDeps = {
+        hwCaps,
         rpc: stubRpc,
         deviceInfo: { name: 'NodeTest', firmware: 'remappr' },
         config: CONFIG,
@@ -122,6 +125,26 @@ describe('Remappr config-blob whole-node edits', () => {
             personality: 'keyboard',
             forwardMode: 'resolved',
         })
+    })
+
+    it('stages power timeouts as node.power and reports the power hardware', async () => {
+        expect(makeService().capabilities.power).toBeUndefined()
+        const svc = makeService(false, HwCap.BATTERY)
+        expect(svc.capabilities.power).toEqual({ battery: true, powerOff: false })
+        svc.setNode({ power: { sleepMs: 60000 } })
+        expect(svc.getNode().power).toEqual({ sleepMs: 60000 })
+        expect((await exportedNode(svc)).power).toEqual({ sleepMs: 60000 })
+    })
+
+    it('clears committed power timeouts with an empty section, not undefined', async () => {
+        const svc = makeService(false, HwCap.BATTERY)
+        svc.setNode({ power: { sleepMs: 60000 } })
+        // undefined only drops the staged edit (back to committed truth) ...
+        svc.setNode({ power: undefined })
+        expect(svc.getNode().power).toBeUndefined()
+        // ... an empty section is what the Power dialog stages to clear.
+        svc.setNode({ power: {} })
+        expect((await exportedNode(svc)).power ?? {}).toEqual({})
     })
 
     it('rejects an edit on a read-only service', () => {

@@ -422,6 +422,24 @@ describe('remappr system behaviors (BH_SYSTEM)', () => {
         expect(tapOf(1)).toBe(9)
         expect(tapOf(2)).toBe(10)
     })
+
+    it('lowers battery_show to BH_SYSTEM action 11', () => {
+        const { files, diagnostics } = getCompiler('remappr').compile(
+            parseKeymap(`{
+                "schemaVersion": 1, "kind": "remappr.keymap",
+                "meta": { "name": "BS", "target": "zmk" },
+                "keyboard": { "id": "bs", "name": "BS",
+                    "keys": [{"x":0,"y":0}] },
+                "layers": [{ "name": "base", "bindings": [{ "type": "battery_show" }] }]
+            }`),
+        )
+        expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
+        const b = files[0].content as Uint8Array
+        const beh = findTable(b, 4)!
+        expect(u16(b, beh[0])).toBe(1)
+        expect(b[beh[0] + 2]).toBe(16) // System
+        expect(u16(b, beh[0] + 2 + 4)).toBe(11) // REMAPPR_SYS_BATTERY_SHOW
+    })
 })
 
 // Mouse behaviors (§44.3): mouse_key/move/scroll lower to BH_MOUSE (type 17)
@@ -586,7 +604,7 @@ describe('remappr consumer-page (media) keys', () => {
         expect(tapOf(0)).toBe(0xe9) // Volume Increment
         expect(tapOf(1)).toBe(0xea) // Volume Decrement
         expect(tapOf(2)).toBe(0xe2) // Mute
-        expect(tapOf(3)).toBe(0xb0) // Play/Pause
+        expect(tapOf(3)).toBe(0xcd) // Play/Pause (HUT 1.7 15.7; 0xB0 is Play)
     })
 
     it('keeps a keyboard-page volume usage on BH_KEY (page 7)', () => {
@@ -680,7 +698,7 @@ describe('remappr GD system-control keys', () => {
         )
         expect(diagnostics.filter((d) => d.level === 'error')).toHaveLength(0)
         expect(
-            diagnostics.some((d) => /system-control key/.test(d.message)),
+            diagnostics.some((d) => /system key/.test(d.message)),
         ).toBe(true)
         const b = files[0].content as Uint8Array
         const beh = findTable(b, 4)!

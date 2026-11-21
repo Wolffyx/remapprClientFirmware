@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "kind": "remappr.keymap",
+  "meta": {
+    "name": "U5 Knob Pad",
+    "target": "zmk"
+  },
+  "keyboard": {
+    "id": "u5_knob_pad",
+    "name": "U5 Knob Pad",
+    "keys": [
+      {
+        "x": 0,
+        "y": 0,
+        "matrix": [
+          0,
+          0
+        ]
+      },
+      {
+        "x": 1,
+        "y": 0,
+        "matrix": [
+          0,
+          1
+        ]
+      },
+      {
+        "x": 2.25,
+        "y": 0,
+        "element": "encoder",
+        "matrix": [
+          0,
+          2
+        ]
+      },
+      {
+        "x": 0,
+        "y": 1,
+        "w": 2,
+        "matrix": [
+          1,
+          0
+        ]
+      },
+      {
+        "x": 3,
+        "y": 1,
+        "r": -15,
+        "rx": 3,
+        "ry": 1,
+        "matrix": [
+          1,
+          1
+        ]
+      }
+    ]
+  },
+  "layers": [
+    {
+      "name": "base",
+      "bindings": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    }
+  ],
+  "board": {
+    "controller": "nucleo_u5a5zj_q",
+    "maxLayers": 6,
+    "matrix": {
+      "diode": "row2col",
+      "rows": [
+        "PE11",
+        "PE9"
+      ],
+      "cols": [
+        "PF15",
+        "PE13",
+        "PF14"
+      ]
+    },
+    "encoders": [
+      {
+        "a": "PA0",
+        "b": "PA1",
+        "steps": 4
+      }
+    ],
+    "reservedPins": [
+      {
+        "pin": "PA9",
+        "use": "console UART TX"
+      },
+      {
+        "pin": "PA10",
+        "use": "console UART RX"
+      }
+    ]
+  }
+}

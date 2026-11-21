@@ -18,6 +18,10 @@ import {
     REPL_ALPHABET,
     TYPO_ALPHABET,
 } from './compilers/remappr/autocorrect'
+import {
+    registrySetting,
+    sensorSettingId,
+} from '../clients/remappr/sensorRegistry'
 
 /* ── leaf vocabularies ─────────────────────────────────────────────────── */
 
@@ -36,7 +40,9 @@ export const FlavorSchema = z
         'tap-preferred',
         'tap-unless-interrupted',
     ])
-    .describe('Hold-tap interrupt flavor (ZMK devicetree value).')
+    .describe(
+        'How a hold-tap decides between hold and tap when another key is pressed.',
+    )
 
 export const LightingTargetSchema = z
     .enum(['underglow', 'backlight', 'per_key'])
@@ -161,11 +167,13 @@ const tapHoldTimings = {
     holdTriggerKeyPositions: z
         .array(z.number().int().nonnegative())
         .optional()
-        .describe('Physical positions whose interruption can trigger the hold (§28).'),
+        .describe('Key positions that, when pressed, can trigger the hold.'),
     holdTriggerOnRelease: z
         .boolean()
         .optional()
-        .describe('Trigger the hold on the interrupting key release (firmware ≥ Phase 2).'),
+        .describe(
+            'Trigger the hold on the interrupting key release (firmware ≥ Phase 2).',
+        ),
     resolve: ResolveSchema.optional(),
     flavor: FlavorSchema.optional(),
 }
@@ -207,11 +215,34 @@ export const ActionObjectSchema = z.discriminatedUnion('type', [
             type: z.literal('layer'),
             mode: LayerModeSchema,
             layer: z.string(),
+            releaseAfterMs: z
+                .number()
+                .int()
+                .min(0)
+                .max(0xffff)
+                .optional()
+                .describe(
+                    'mode "sticky": release the one-shot layer after this long, ms ' +
+                        '(0/absent = defaults.stickyReleaseDefaultMs).',
+                ),
         })
         .describe('Layer switch (mode picks momentary/toggle/to/sticky).'),
 
     z
-        .object({ type: z.literal('sticky_key'), key: KeycodeSchema })
+        .object({
+            type: z.literal('sticky_key'),
+            key: KeycodeSchema,
+            releaseAfterMs: z
+                .number()
+                .int()
+                .min(0)
+                .max(0xffff)
+                .optional()
+                .describe(
+                    'Release the one-shot after this long, ms (0/absent = ' +
+                        'defaults.stickyReleaseDefaultMs).',
+                ),
+        })
         .describe('One-shot key: applies to the next keypress only.'),
 
     z.object({ type: z.literal('caps_word') }).describe('Caps for one word.'),
@@ -277,6 +308,11 @@ export const ActionObjectSchema = z.discriminatedUnion('type', [
         .object({ type: z.literal('soft_off') })
         .describe('Power off until a hardware reset / dedicated on key.'),
     z
+        .object({ type: z.literal('battery_show') })
+        .describe(
+            "Show the battery's charge on the device's own lights or display.",
+        ),
+    z
         .object({ type: z.literal('studio_unlock') })
         .describe('Unlock the keyboard for ZMK Studio live editing.'),
     z
@@ -306,6 +342,15 @@ export const ActionObjectSchema = z.discriminatedUnion('type', [
             type: z.literal('auto_shift'),
             key: KeycodeSchema,
             mods: z.array(ModifierSchema),
+            timeoutMs: z
+                .number()
+                .int()
+                .positive()
+                .max(0xffff)
+                .optional()
+                .describe('Hold this long to add the modifiers, ms (absent = the tapping term).'),
+            quickTapMs: z.number().int().min(0).max(0xffff).optional(),
+            requirePriorIdleMs: z.number().int().min(0).max(0xffff).optional(),
         })
         .describe('Tap the key; hold past the term adds the modifiers.'),
     z
@@ -322,7 +367,17 @@ export const ActionObjectSchema = z.discriminatedUnion('type', [
         })
         .describe('Momentary layer with the given modifiers held.'),
     z
-        .object({ type: z.literal('tap_toggle'), layer: z.string() })
+        .object({
+            type: z.literal('tap_toggle'),
+            layer: z.string(),
+            tappingTermMs: z
+                .number()
+                .int()
+                .positive()
+                .max(0xffff)
+                .optional()
+                .describe('Hold past this to make the layer momentary, ms.'),
+        })
         .describe('Tap toggles the layer; hold makes it momentary.'),
     z
         .object({ type: z.literal('set_base_saved'), layer: z.string() })
@@ -404,14 +459,36 @@ export const GeometrySchema = z.object({
         .describe(
             'Physical-layout variant id this key belongs to ("" = common).',
         ),
+    side: z
+        .number()
+        .int()
+        .min(0)
+        .max(254)
+        .optional()
+        .describe('Cluster side of a split board (0 left, 1 right); keys grouped by side.'),
     pin: z
         .string()
         .optional()
         .describe('Optional per-key direct GPIO pin label (builder metadata).'),
     element: z
-        .enum(['encoder', 'slider'])
+        .enum(['encoder', 'slider', 'button'])
         .optional()
         .describe('Input element type (absent = key); builder metadata.'),
+    motor: z
+        .object({
+            follow: z.enum(['level', 'layer', 'app', 'off']).optional(),
+            feel: z.enum(['smooth', 'notches', 'spring']).optional(),
+            touchStops: z.boolean().optional(),
+            pins: z
+                .object({
+                    in1: z.string().optional(),
+                    in2: z.string().optional(),
+                    touch: z.string().optional(),
+                })
+                .optional(),
+        })
+        .optional()
+        .describe('A motorized slider: what moves it, its feel and its pins.'),
     option: z
         .tuple([z.number().int().nonnegative(), z.number().int().nonnegative()])
         .optional()
@@ -420,7 +497,16 @@ export const GeometrySchema = z.object({
         ),
 })
 
-export const EncoderSchema = z.object({ x: z.number(), y: z.number() })
+export const EncoderSchema = z.object({
+    x: z.number(),
+    y: z.number(),
+    key: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('The knob key this slot turns (its binding is the press).'),
+})
 
 export const EncoderBindingSchema = z.object({
     cw: ActionSchema,
@@ -428,10 +514,33 @@ export const EncoderBindingSchema = z.object({
     press: ActionSchema.optional(),
 })
 
+export const SliderSlotSchema = z.object({
+    x: z.number(),
+    y: z.number(),
+    key: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('The slider key this slot is.'),
+})
+
 export const SliderBindingSchema = z.object({
-    map: z.enum(['volume', 'brightness', 'mouse_wheel', 'custom']),
+    map: z.enum([
+        'volume',
+        'brightness',
+        'backlight',
+        'rgb_brightness',
+        'rgb_hue',
+        'mouse_wheel',
+        'keys',
+        'custom',
+    ]),
     min: z.number().optional(),
     max: z.number().optional(),
+    steps: z.number().int().positive().optional(),
+    up: ActionSchema.optional(),
+    down: ActionSchema.optional(),
     action: ActionSchema.optional(),
 })
 
@@ -440,7 +549,15 @@ export const LayerSchema = z.object({
     description: z.string().optional(),
     bindings: z.array(ActionSchema),
     encoders: z.array(EncoderBindingSchema).optional(),
+    /** Older per-key turn bindings; moved into `encoders` on load. */
     encoderBindings: z.record(z.string(), EncoderBindingSchema).optional(),
+    sliders: z
+        .array(SliderBindingSchema.nullable())
+        .optional()
+        .describe(
+            'What each slider does on this layer, index-aligned to keyboard.sliders; null = as on the base layer.',
+        ),
+    /** Older per-key slider bindings; moved into `sliders` on load. */
     sliderBindings: z.record(z.string(), SliderBindingSchema).optional(),
 })
 
@@ -501,6 +618,12 @@ export const MacroSchema = z.object({
         .optional()
         .describe('Binding-cells: 0 = plain, 1 = one-param, 2 = two-param.'),
     steps: z.array(MacroStepSchema).min(1),
+    private: z
+        .boolean()
+        .optional()
+        .describe(
+            'Write-only: the device runs it but never returns its steps (e.g. a password).',
+        ),
 })
 
 export const HoldTapDefSchema = z
@@ -562,12 +685,14 @@ export const KeyOverrideSchema = z
 
 export const LeaderSequenceSchema = z
     .object({
-        sequence: z.array(KeycodeSchema).min(1).max(5),
+        // The wire holds up to 255 keys; how many a build captures is its
+        // REMAPPR_BEHAVIOR_LEADER_MAX (5 by default), which the compiler checks.
+        sequence: z.array(KeycodeSchema).min(1).max(255),
         action: ActionSchema,
     })
     .describe(
-        'Leader sequence: the exact 1..5 key sequence that fires `action` ' +
-            'after the leader key opens capture.',
+        'Leader sequence: the exact key sequence (1..5 keys on a default ' +
+            'firmware build) that fires `action` after the leader key opens capture.',
     )
 
 // pattern-check: skip — declarative zod schema for the §F semantic-action DTO
@@ -598,6 +723,7 @@ export const SemanticActionSchema = z.discriminatedUnion('kind', [
         sat: u8.optional(),
         val: u8.optional(),
     }),
+    z.object({ kind: z.literal('device'), action: u8, value: u16.optional() }),
 ])
 
 export const ActionBindingSchema = z
@@ -606,8 +732,8 @@ export const ActionBindingSchema = z
         action: SemanticActionSchema,
     })
     .describe(
-        'Position -> semantic action (§F, TBL_ACTION_BINDING): the ' +
-            'personality-output layer, additive to the layer bindings.',
+        'What a key position does on its own, on top of the layer bindings ' +
+            '(for example a mouse button or a joystick button).',
     )
 
 /* ── autocorrect dictionary (§5.2-E, TBL_AUTOCORRECT) ──────────────────── */
@@ -627,7 +753,9 @@ export const AutocorrectEntrySchema = z
             .refine((s) => TYPO_ALPHABET.test(s.toLowerCase()), {
                 message: "typo may only contain a-z 0-9 ' -",
             })
-            .describe('The misspelling, as typed (matched case-insensitively).'),
+            .describe(
+                'The misspelling, as typed (matched case-insensitively).',
+            ),
         correction: z
             .string()
             .max(255)
@@ -643,9 +771,9 @@ export const AutocorrectSchema = z
         entries: z.array(AutocorrectEntrySchema),
     })
     .describe(
-        'On-device autocorrect dictionary (§5.2-E, TBL_AUTOCORRECT). An empty ' +
-            'entry list still emits the table — that is how a device is told to ' +
-            'drop a dictionary it already holds.',
+        'Autocorrect dictionary stored on the device. An empty list is still ' +
+            'sent — that is how a device is told to drop a dictionary it ' +
+            'already holds.',
     )
 
 /* ── board hardware (kscan wiring + electrical transform) ──────────────── */
@@ -737,6 +865,55 @@ export const ExtPowerCtrlSchema = z
     })
     .describe('zmk,ext-power-generic control GPIO (drives zmk,ext-power).')
 
+export const BatterySchema = z
+    .object({
+        pin: z.string(),
+        outputOhms: z.number().int().positive().optional(),
+        fullOhms: z.number().int().positive().optional(),
+    })
+    .describe('Battery sense pin (an analog pin behind a resistor divider).')
+
+export const DisplaySchema = z
+    .object({
+        module: z.string().optional(),
+        chip: z.string(),
+        bus: z.enum(['i2c', 'spi', 'uart']),
+        width: z.number().int().positive(),
+        height: z.number().int().positive(),
+        address: z.number().int().min(0).max(127).optional(),
+        rotation: z
+            .union([
+                z.literal(0),
+                z.literal(90),
+                z.literal(180),
+                z.literal(270),
+            ])
+            .optional(),
+    })
+    .describe('A screen: controller chip, bus and size.')
+
+export const PartSchema = z
+    .object({
+        id: z.string().min(1),
+        kind: z.enum(['display', 'stick', 'hat', 'trigger']),
+        name: z.string(),
+        x: z.number(),
+        y: z.number(),
+        w: z.number().positive(),
+        h: z.number().positive(),
+        r: z.number().optional(),
+        variant: z.string().optional(),
+        pins: z.record(z.string(), z.string()).optional(),
+        display: DisplaySchema.optional(),
+        ownSize: z
+            .boolean()
+            .optional()
+            .describe('A screen sized by hand instead of by its module.'),
+    })
+    .describe(
+        'A part on the board that is not a keymap position (screen, stick…).',
+    )
+
 export const HardwareSchema = z
     .object({
         board: z.string().optional(),
@@ -746,6 +923,7 @@ export const HardwareSchema = z
         backlightPwm: BacklightPwmSchema.optional(),
         ws2812: Ws2812Schema.optional(),
         extPowerCtrl: ExtPowerCtrlSchema.optional(),
+        battery: BatterySchema.optional(),
         studioAcm: z.boolean().optional(),
     })
     .describe(
@@ -765,6 +943,13 @@ export const FirmwareConfigSchema = z
         backlight: z.boolean().optional(),
         underglow: z.boolean().optional(),
         usbLogging: z.boolean().optional(),
+        sleep: z.boolean().optional(),
+        encoders: z.boolean().optional(),
+        display: z.boolean().optional(),
+        qmkFeatures: z
+            .record(z.string(), z.boolean())
+            .optional()
+            .describe('QMK keyboard.json `features` overrides by key.'),
         kconfig: z.string().optional(),
         configH: z.string().optional(),
         rulesMk: z.string().optional(),
@@ -830,12 +1015,15 @@ export const LightingSchema = z
                 z.string(),
                 z
                     .string()
-                    .regex(/^#[0-9a-fA-F]{6}$/, 'per-key color must be #rrggbb'),
+                    .regex(
+                        /^#[0-9a-fA-F]{6}$/,
+                        'per-key color must be #rrggbb',
+                    ),
             )
             .optional()
             .describe(
-                'Static per-key RGB colors keyed by physical position → "#rrggbb"; ' +
-                    'compiled to TBL_RGB (§4c).',
+                'Fixed per-key RGB colors by key position, as "#rrggbb"; ' +
+                    'written into the device lighting settings.',
             ),
     })
     .describe(
@@ -884,14 +1072,181 @@ export const BoardSchema = z
                 rows: z.array(z.string()).optional(),
                 cols: z.array(z.string()).optional(),
                 pollMs: z.number().int().positive().optional(),
+                sleepPollMs: z
+                    .number()
+                    .int()
+                    .positive()
+                    .optional()
+                    .describe('Scan period while the device sleeps, ms (default 10).'),
+                settleUs: z
+                    .number()
+                    .int()
+                    .nonnegative()
+                    .optional()
+                    .describe('Wait after driving a strobe line before reading, us (default 50).'),
+                debouncePressMode: z
+                    .enum(['eager', 'defer'])
+                    .optional()
+                    .describe('eager reports a press on the first active scan (default).'),
+                debouncePressMs: z.number().int().nonnegative().optional(),
+                debounceReleaseMs: z.number().int().nonnegative().optional(),
             })
             .optional(),
         split: z.boolean().optional(),
         storage: z.enum(['zms', 'nvs']).optional(),
+        maxLayers: z
+            .number()
+            .int()
+            .min(1)
+            .max(32)
+            .optional()
+            .describe(
+                'Layers the app may fill without a reflash (max-layers). ' +
+                    'Default: the authored layers, at least 4.',
+            ),
+        encoders: z
+            .array(
+                z.object({
+                    a: z.string().min(1).describe('Phase-A GPIO.'),
+                    b: z.string().min(1).describe('Phase-B GPIO.'),
+                    steps: z.number().int().positive().optional(),
+                    axis: z
+                        .string()
+                        .regex(/^(INPUT_[A-Z0-9_]+|\d+)$/)
+                        .optional()
+                        .describe('Relative axis code, e.g. "INPUT_REL_WHEEL".'),
+                    sampleTimeUs: z
+                        .number()
+                        .int()
+                        .positive()
+                        .optional()
+                        .describe('Phase sample period while turning, us (default 2000).'),
+                    idleTimeoutMs: z
+                        .number()
+                        .int()
+                        .positive()
+                        .optional()
+                        .describe('No step this long ends active sampling, ms (default 200).'),
+                    idlePollTimeUs: z
+                        .number()
+                        .int()
+                        .nonnegative()
+                        .optional()
+                        .describe(
+                            'Poll period while idle instead of a pin interrupt, us ' +
+                                '(default 5000; 0 leaves it out, so the pins interrupt).',
+                        ),
+                }),
+            )
+            .optional()
+            .describe('Rotary encoders (gpio-qdec) for the board generator.'),
+        sensor: z.lazy(() => BoardSensorSchema).optional(),
+        battery: z.lazy(() => BoardBatterySchema).optional(),
+        statusLeds: z.array(z.lazy(() => BoardStatusLedSchema)).optional(),
+        powerOff: z.lazy(() => BoardPowerOffSchema).optional(),
+        nodeBus: z.array(z.lazy(() => BoardNodeBusPortSchema)).optional(),
+        radioLink: z.lazy(() => BoardRadioLinkSchema).optional(),
+        radio: z.lazy(() => BoardRadioSchema).optional(),
+        buttons: z.array(z.lazy(() => BoardButtonSchema)).optional(),
+        sliders: z.array(z.lazy(() => BoardSliderSchema)).optional(),
+        haptic: z.lazy(() => BoardHapticSchema).optional(),
+        ledZones: z.array(z.lazy(() => BoardLedZoneSchema)).optional(),
+        displays: z.array(z.lazy(() => BoardDisplaySchema)).optional(),
+        pinMap: z
+            .record(z.string().min(1), z.string().min(1))
+            .optional()
+            .describe(
+                "The board's own pin labels: label → phandle and pin, e.g. " +
+                    '{ "D10": "&arduino_header 10", "LED": "&gpio0 13" }. ' +
+                    'Looked up before the built-in board tables.',
+            ),
+        reservedPins: z
+            .array(
+                z.object({
+                    pin: z.string().min(1),
+                    use: z.string().min(1),
+                }),
+            )
+            .optional()
+            .describe(
+                'Pins the board already uses (console or node-bus UART, a ' +
+                    'coprocessor SPI): the generator refuses a key, encoder or ' +
+                    'sensor on one.',
+            ),
     })
     .describe(
-        'Build-time board definition for the DT/Kconfig generator (never in the blob).',
+        'Board definition used to generate the firmware build files (never sent to the device).',
     )
+
+/** One half of a split board (§3.6): its own board fields over the shared ones. */
+export const BoardSideSchema = BoardSchema.extend({
+    side: z.number().int().min(0).max(254).describe('0 left, 1 right, 2+ for N members.'),
+})
+
+const SIDE_GATED =
+    'a part tagged with "side" needs side-gated parts in the firmware (universal ' +
+    'device model §2.2), which it does not have yet: list it under board.sides instead'
+
+/** Paths of the parts in one board block that carry `side`. */
+function sideTagged(block: Record<string, unknown>, path: (string | number)[]): (string | number)[][] {
+    return Object.entries(block).flatMap(([field, value]) => {
+        if (field === 'sides') return []
+        const items: unknown[] = Array.isArray(value) ? value : [value]
+        return items.flatMap((item, i) =>
+            item !== null && typeof item === 'object' && 'side' in item
+                ? [[...path, field, ...(Array.isArray(value) ? [i] : [])]]
+                : [],
+        )
+    })
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+
+export const BoardWithSidesSchema = z.preprocess(
+    (raw, ctx) => {
+        // On the raw JSON: each part schema drops the keys it does not know, so
+        // a `side` on a part would vanish and the part land on every half.
+        if (!isRecord(raw)) return raw
+        const sides = Array.isArray(raw.sides) ? raw.sides : []
+        const paths = [
+            ...sideTagged(raw, []),
+            ...sides.flatMap((s, i) => (isRecord(s) ? sideTagged(s, ['sides', i]) : [])),
+        ]
+        for (const path of paths) ctx.addIssue({ code: 'custom', message: SIDE_GATED, path, input: raw })
+        return raw
+    },
+    BoardSchema.extend({
+        sides: z
+            .array(BoardSideSchema)
+            .optional()
+            .describe('A split board: one shield per side, each side its own fields.'),
+    }),
+)
+
+// pattern-check: skip declarative zod schema for one mouse button action
+const DPI = z.number().int().min(1).max(0xffff)
+export const MouseButtonActionSchema = z
+    .object({
+        action: z.enum([
+            'dpiCycle',
+            'dpiUp',
+            'dpiDown',
+            'dpiSet',
+            'sniper',
+            'batteryShow',
+            'unpair',
+        ]),
+        dpi: DPI.optional(),
+    })
+    .refine(
+        (a) => a.dpi !== undefined || !['dpiSet', 'sniper'].includes(a.action),
+        {
+            message: 'dpiSet and sniper need a dpi',
+            path: ['dpi'],
+        },
+    )
+    .describe('A DEVICE action on a mouse button (DPI stages, sniper).')
 
 export const MouseSchema = z
     .looseObject({
@@ -906,10 +1261,651 @@ export const MouseSchema = z
             )
             .max(255)
             .optional(),
+        invertX: z.boolean().optional(),
+        invertY: z.boolean().optional(),
+        invertWheel: z.boolean().optional(),
+        invertHwheel: z.boolean().optional(),
+        swapXY: z
+            .boolean()
+            .optional()
+            .describe('Swap X and Y (before the inverts).'),
+        scrollDivisor: z
+            .number()
+            .int()
+            .min(1)
+            .max(16)
+            .optional()
+            .describe('Wheel counts per reported step (default 1).'),
+        buttonMap: z
+            .array(z.number().int().min(0).max(7).nullable())
+            .length(8)
+            .optional()
+            .describe(
+                'Physical button i reports as buttonMap[i] (0..7), or null to ' +
+                    'drop it.',
+            ),
+        dpiStages: z
+            .array(z.number().int().min(1).max(0xffff))
+            .min(1)
+            .max(5)
+            .optional()
+            .describe('DPI values the DPI buttons step through.'),
+        dpiStage: z
+            .number()
+            .int()
+            .min(0)
+            .max(4)
+            .optional()
+            .describe('The stage the mouse starts on (index into dpiStages).'),
+        buttonActions: z
+            .array(MouseButtonActionSchema.nullable())
+            .length(8)
+            .optional()
+            .describe(
+                'Mouse image only: what physical button i does instead of what ' +
+                    'buttonMap says; null = the button map.',
+            ),
+    })
+    .superRefine((m, ctx) => {
+        if (
+            m.dpiStage !== undefined &&
+            m.dpiStage >= (m.dpiStages?.length ?? 1)
+        ) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['dpiStage'],
+                message: 'dpiStage must index into dpiStages',
+            })
+        }
     })
     .describe(
-        'Pointer/mouse-node settings (TBL_MOUSE, §4b): sensor cpi, auto-layer ' +
-            'timeout, and an acceleration curve of [speedIn, multX100] points.',
+        'Mouse settings: sensor CPI, auto mouse-layer timeout, an ' +
+            'acceleration curve of [speedIn, multX100] points, axis inverts / ' +
+            'swap, scroll divisor and button map, DPI stages, and a mouse ' +
+            "image's button actions.",
+    )
+
+// pattern-check: skip declarative zod schemas for sensor settings (sensor-settings plan §4b)
+const SensorValueSchema = z.union([z.boolean(), z.number().int(), z.string()])
+
+/** Why `value` does not suit setting `key`, or null when it does: a BOOL takes
+ *  a boolean (or 0 / 1), an INT a number, an ENUM a code or an option name. A
+ *  hex key (`0x16`, an id with no registry name) takes a number or boolean. */
+function sensorValueIssue(key: string, value: unknown): string | null {
+    const reg = registrySetting(key)
+    if (!reg) {
+        return typeof value === 'string'
+            ? `"${key}" has no option names: give its value as a number`
+            : null
+    }
+    if (typeof value !== 'string') return null
+    if (reg.options?.some((o) => o.name === value)) return null
+    const names = reg.options?.map((o) => o.name).join(', ')
+    return names
+        ? `"${value}" is not an option of ${key} (${names})`
+        : `${key} takes a ${reg.type === 'bool' ? 'boolean' : 'number'}`
+}
+
+/** Sensor settings by registry name. `strict` also refuses a name the
+ *  registry does not have (and that is not a hex id). */
+function sensorValuesSchema(strict: boolean) {
+    return z
+        .record(z.string(), SensorValueSchema)
+        .superRefine((values, ctx) => {
+            for (const [key, value] of Object.entries(values)) {
+                if (strict && sensorSettingId(key) === undefined) {
+                    ctx.addIssue({
+                        code: 'custom',
+                        path: [key],
+                        message: `"${key}" is not a sensor setting name`,
+                    })
+                    continue
+                }
+                const issue = sensorValueIssue(key, value)
+                if (issue)
+                    ctx.addIssue({
+                        code: 'custom',
+                        path: [key],
+                        message: issue,
+                    })
+            }
+        })
+}
+
+export const DeviceSensorSchema = z
+    .object({
+        index: z
+            .number()
+            .int()
+            .min(0)
+            .max(255)
+            .optional()
+            .describe("Which of the device's sensors (default 0, the first)."),
+        settings: sensorValuesSchema(false)
+            .optional()
+            .describe(
+                'Values the user set, by registry name (liftCutoff, angleSnap, …): a ' +
+                    'BOOL as a boolean, an INT as a number, an ENUM as its code or ' +
+                    'option name. A setting left out stays on the device default; a ' +
+                    'name the device does not list is kept but not compiled.',
+            ),
+    })
+    .describe("A device's sensor settings.")
+
+export const NodeSensorSchema = z
+    .looseObject({
+        part: z
+            .number()
+            .int()
+            .min(0)
+            .max(255)
+            .optional()
+            .describe(
+                "Which of the device's parts the defaults are for, by part index " +
+                    '(its place among the board parts; default 0).',
+            ),
+        defaults: sensorValuesSchema(true)
+            .optional()
+            .describe(
+                "The product's defaults for the sensor, by registry name: built " +
+                    'into the board and written to the device, under any value ' +
+                    'the user sets.',
+            ),
+    })
+    .describe("The node's sensor.")
+
+export const BoardSensorSchema = z
+    .object({
+        part: z
+            .string()
+            .min(1)
+            .describe('The sensor part id, e.g. "pixart,paw3395".'),
+        bus: z
+            .string()
+            .min(1)
+            .describe(
+                'Node label of the SPI bus it sits on, e.g. "arduino_spi".',
+            ),
+        cs: z
+            .string()
+            .optional()
+            .describe(
+                "Chip-select GPIO; written as the bus's cs-gpios. Leave it out when " +
+                    'the bus already lists it first.',
+            ),
+        motion: z.string().min(1).describe('MOTION (interrupt) GPIO.'),
+        reset: z.string().optional().describe('NRESET GPIO, when wired.'),
+        spiMaxHz: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe('SPI clock, Hz (default 8000000).'),
+        cpi: z
+            .object({
+                native: z
+                    .number()
+                    .int()
+                    .positive()
+                    .describe('Counts per inch the sensor reports as wired.'),
+                min: z.number().int().positive().optional(),
+                max: z.number().int().positive().optional(),
+                step: z.number().int().positive().optional(),
+            })
+            .refine((c) => (c.min ?? 100) <= (c.max ?? 3200), {
+                message: 'cpi.min is above cpi.max',
+            })
+            .optional()
+            .describe(
+                'The pointer (remappr,mouse): the native resolution and the DPI ' +
+                    'range a config or the app may pick (default 100..3200 by 100).',
+            ),
+    })
+    .describe('A motion sensor on SPI, for the board generator.')
+
+// pattern-check: skip declarative zod schemas mirroring the extra-input and slider bindings
+export const BoardButtonSchema = z
+    .object({
+        key: z
+            .number()
+            .int()
+            .nonnegative()
+            .describe('The keyboard.keys index of the button (after every matrix key).'),
+        pin: z.string().min(1).describe('The button pin, wired to ground.'),
+        code: z
+            .string()
+            .regex(/^INPUT_(KEY|BTN)_[A-Z0-9_]+$/, 'an INPUT_KEY_* or INPUT_BTN_* code')
+            .optional()
+            .describe('The input code it reports (default INPUT_KEY_F13 onward).'),
+    })
+    .describe('An off-matrix button on its own pin (gpio-keys + remappr,extra-input).')
+
+export const BoardSliderSchema = z
+    .object({
+        adc: z.lazy(() => BoardAdcChannelSchema),
+        function: z
+            .enum(['rgb-brightness'])
+            .optional()
+            .describe('What it controls while the config binds it to nothing.'),
+        deadband: z.number().int().min(0).max(255).optional(),
+        pollMs: z.number().int().positive().optional(),
+    })
+    .describe('An analog slider on an ADC channel (remappr,slider).')
+
+// pattern-check: skip declarative zod schemas mirroring the firmware power bindings
+/** A devicetree macro token (`ADC_GAIN_1_6`, `NRF_SAADC_AIN4`) or a number. */
+const DtToken = z.union([
+    z.string().regex(/^[A-Z][A-Z0-9_]*$/, 'a devicetree macro like ADC_GAIN_1_6'),
+    z.number().int().nonnegative(),
+])
+
+export const BoardAdcChannelSchema = z
+    .object({
+        adc: z
+            .string()
+            .min(1)
+            .describe('Node label of the ADC, e.g. "adc" (nRF) or "adc1" (STM32).'),
+        channel: z.number().int().min(0).max(31).describe('ADC channel number.'),
+        setup: z
+            .object({
+                gain: z
+                    .string()
+                    .regex(/^ADC_GAIN_[0-9_]+$/, 'an ADC_GAIN_* name')
+                    .describe('zephyr,gain, e.g. "ADC_GAIN_1_6".'),
+                reference: z
+                    .string()
+                    .regex(/^ADC_REF_[A-Z0-9_]+$/, 'an ADC_REF_* name')
+                    .describe('zephyr,reference, e.g. "ADC_REF_INTERNAL".'),
+                acquisitionTime: DtToken.optional().describe(
+                    'zephyr,acquisition-time (default ADC_ACQ_TIME_DEFAULT).',
+                ),
+                inputPositive: DtToken.optional().describe(
+                    'zephyr,input-positive, e.g. "NRF_SAADC_AIN4"; required on nRF.',
+                ),
+                resolution: z
+                    .number()
+                    .int()
+                    .min(1)
+                    .max(24)
+                    .describe(
+                        'zephyr,resolution in bits, e.g. 12. Required: without it ' +
+                            'the channel setup fails and the channel is never read.',
+                    ),
+                oversampling: z.number().int().min(0).max(8).optional(),
+            })
+            .optional()
+            .describe(
+                'The channel node to write on the ADC. Leave it out when the ' +
+                    'board already configures the channel.',
+            ),
+    })
+    .describe('One ADC channel, for the board generator.')
+
+export const BoardBatterySchema = z
+    .object({
+        adc: BoardAdcChannelSchema.optional().describe(
+            'The ADC channel the cell is read on, behind `divider`.',
+        ),
+        divider: z
+            .object({
+                outputOhms: z.number().int().positive(),
+                fullOhms: z.number().int().positive(),
+            })
+            .refine((d) => d.outputOhms <= d.fullOhms, {
+                message: 'outputOhms is part of fullOhms, so it cannot be larger',
+            })
+            .optional()
+            .describe('Vadc = Vcell * outputOhms / fullOhms (default 1 / 2).'),
+        fuelGauge: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Node label of a fuel gauge or PMIC the board defines.'),
+        charging: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Charger status pin, active while charging.'),
+        chargingActiveHigh: z
+            .boolean()
+            .optional()
+            .describe(
+                'The charger drives the status pin high while charging. Default: ' +
+                    'active low with a pull-up (an open-drain CHRG output).',
+            ),
+        ocvCurve: z
+            .array(
+                z.tuple([
+                    z.number().int().min(0).max(10000),
+                    z.number().int().min(0).max(100),
+                ]),
+            )
+            .min(2)
+            .optional()
+            .describe(
+                '[millivolts, percent] breakpoints by strictly descending voltage.',
+            ),
+    })
+    .superRefine((b, ctx) => {
+        if (b.chargingActiveHigh !== undefined && !b.charging)
+            ctx.addIssue({
+                code: 'custom',
+                path: ['chargingActiveHigh'],
+                message: 'chargingActiveHigh goes with charging',
+            })
+        if (!b.adc === !b.fuelGauge)
+            ctx.addIssue({
+                code: 'custom',
+                message: 'set exactly one of adc and fuelGauge',
+            })
+        if (b.divider && !b.adc)
+            ctx.addIssue({
+                code: 'custom',
+                path: ['divider'],
+                message: 'divider goes with adc',
+            })
+        const mv = (b.ocvCurve ?? []).map(([v]) => v)
+        if (mv.some((v, i) => i > 0 && v >= mv[i - 1]))
+            ctx.addIssue({
+                code: 'custom',
+                path: ['ocvCurve'],
+                message: 'ocvCurve voltages must strictly descend',
+            })
+    })
+    .describe('The battery and where its charge is measured (remappr,battery).')
+
+export const STATUS_LED_FUNCTIONS = [
+    'link',
+    'pairing',
+    'bonded',
+    'heartbeat',
+    'activity',
+    'battery',
+] as const
+
+export const BoardStatusLedSchema = z
+    .object({
+        function: z.enum(STATUS_LED_FUNCTIONS),
+        pin: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('The LED pin; the generator declares the LED.'),
+        activeLow: z
+            .boolean()
+            .optional()
+            .describe('With `pin`: the LED lights when the pin is low.'),
+        led: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Node label of an LED the board already declares, e.g. "led0".'),
+        blinkMs: z.number().int().min(0).max(60000).optional(),
+        flashMs: z.number().int().min(0).max(60000).optional(),
+    })
+    .superRefine((s, ctx) => {
+        if (!s.pin === !s.led)
+            ctx.addIssue({ code: 'custom', message: 'set exactly one of pin and led' })
+        if (s.activeLow !== undefined && !s.pin)
+            ctx.addIssue({
+                code: 'custom',
+                path: ['activeLow'],
+                message: 'activeLow goes with pin',
+            })
+    })
+    .describe('A status LED and what it shows (remappr,status-led).')
+
+export const BoardPowerOffSchema = z
+    .object({
+        partialWake: z
+            .boolean()
+            .optional()
+            .describe('Power off even when only some inputs can wake the device.'),
+        wakeFirst: z
+            .array(z.string().min(1))
+            .optional()
+            .describe(
+                'Input pins that take their wake-up line before others on it ' +
+                    '(chips with dedicated wake lines).',
+            ),
+    })
+    .describe('Power-off choices the chip leaves open (remappr,power-off).')
+
+// pattern-check: skip declarative zod schemas mirroring the node-bus and radio bindings
+export const BoardNodeBusPortSchema = z
+    .object({
+        uart: z
+            .string()
+            .min(1)
+            .describe('Node label of the UART/USART the port runs on, e.g. "usart2".'),
+        direction: z
+            .enum(['downstream', 'upstream'])
+            .optional()
+            .describe('upstream faces the main (at most one); default downstream.'),
+        detect: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Presence-detect pin, asserted while a node is plugged in.'),
+        detectActiveLow: z
+            .boolean()
+            .optional()
+            .describe(
+                'The detect pin reads low while a node is plugged in (pulled up). ' +
+                    'Default: high, pulled down.',
+            ),
+        sideStrap: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Side strap pin fixed by the PCB: asserted = right half.'),
+        sideStrapActiveLow: z
+            .boolean()
+            .optional()
+            .describe('The strap reads low on the right half (default high).'),
+        label: z.string().min(1).max(16).optional().describe('Port name for logs.'),
+        currentSpeed: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe("The UART's baud rate (current-speed)."),
+        pinctrl: z
+            .array(z.string().min(1))
+            .optional()
+            .describe('The UART pinctrl phandles, e.g. ["&usart2_tx_pd5", "&usart2_rx_pd6"].'),
+        dmas: z
+            .string()
+            .optional()
+            .describe('The UART tx and rx DMA channels, raw "<...>, <...>" (STM32).'),
+    })
+    .describe('One node-bus port: an inter-node link on a UART (remappr,node-bus-port).')
+
+export const BoardRadioLinkSchema = z
+    .object({
+        spi: z.string().min(1).describe('Node label of the SPI bus to the radio chip.'),
+        cs: z
+            .string()
+            .optional()
+            .describe("Chip select; written as the bus's cs-gpios. Leave out when the bus lists it."),
+        dataReady: z.string().min(1).describe('DATA_READY pin, driven by the radio chip.'),
+        reset: z.string().optional().describe('Reset pin of the radio chip, when wired.'),
+        spiMaxHz: z.number().int().positive().optional().describe('SPI clock, Hz (default 8000000).'),
+    })
+    .describe('The radio chip on SPI (remappr,spi-link): the 2.4 GHz link of a split board.')
+
+export const BoardRadioSchema = z
+    .object({
+        channelSeed: z
+            .array(z.number().int().min(0).max(100))
+            .min(8, 'at least 8 channels: the hop map is the first 8 (REMAPPR_RADIO_HOP_MIN)')
+            .max(101, 'at most 101 channels: there are 101 (0..100)')
+            .refine((a) => new Set(a).size === a.length, {
+                message: 'a channel is listed twice; the radio refuses a seed with duplicates',
+            })
+            .describe(
+                'RF channels (0..100, no duplicates, at least 8) the dongle seeds its ' +
+                    'hop map from (the first 8) and a node hunts; dongle and node ' +
+                    'should agree.',
+            ),
+    })
+    .describe('2.4 GHz radio facts (remappr,radio-config).')
+
+// pattern-check: skip declarative zod schemas mirroring the haptic, led-zone and display bindings
+export const BoardHapticSchema = z
+    .object({
+        pwm: z.string().min(1).describe('Node label of the PWM controller, e.g. "pwm0".'),
+        channel: z.number().int().min(0).max(31),
+        periodNs: z
+            .number()
+            .int()
+            .positive()
+            .describe('PWM period, ns: a fact of the actuator and its driver.'),
+        inverted: z.boolean().optional().describe('Inverted PWM polarity.'),
+        pinctrl: z
+            .array(z.string().min(1))
+            .optional()
+            .describe("The PWM controller's pinctrl phandles, when the board sets none."),
+    })
+    .describe('A haptic actuator on a PWM channel (remappr,haptic).')
+
+export const LED_ZONE_TARGETS = ['underglow', 'backlight', 'per-key', 'indicator'] as const
+
+export const BoardLedZoneSchema = z
+    .object({
+        target: z.enum(LED_ZONE_TARGETS),
+        offset: z.number().int().nonnegative(),
+        length: z.number().int().positive(),
+    })
+    .describe('A slice of the LED strip for one lighting role (remappr,led-zone).')
+
+/** A devicetree property value for a panel driver: a number, a cell list,
+ *  a flag (true) or a string. */
+const DtPropValue = z.union([
+    z.number().int().nonnegative(),
+    z.array(z.number().int().nonnegative()),
+    z.boolean(),
+    z.string(),
+])
+
+export const BoardPanelSchema = z
+    .object({
+        part: z.string().min(1).describe('The panel driver compatible, e.g. "solomon,ssd1306fb".'),
+        bus: z.string().min(1).describe('Node label of its I2C or SPI bus.'),
+        reg: z.number().int().nonnegative().describe('Its address (I2C) or chip select (SPI).'),
+        width: z.number().int().positive(),
+        height: z.number().int().positive(),
+        busHz: z.number().int().positive().optional().describe("The bus's clock-frequency."),
+        props: z
+            .record(z.string().regex(/^[a-z][a-z0-9,-]*$/), DtPropValue)
+            .optional()
+            .describe("The driver's own properties, by devicetree name."),
+    })
+    .describe('A display panel node the shield declares.')
+
+export const BoardDisplaySchema = z
+    .object({
+        panel: z
+            .union([z.string().min(1), BoardPanelSchema])
+            .describe('Node label of a panel the board has, or a panel to declare.'),
+        defaults: z
+            .record(z.string(), z.union([z.boolean(), z.number().int(), z.string()]))
+            .optional()
+            .describe('The part defaults (brightness, invert, rotation) by registry name.'),
+    })
+    .describe('A display part on a panel (remappr,display).')
+
+// pattern-check: skip declarative zod schemas mirroring TBL_JOYSTICK and the gamepad actions
+const JOYSTICK_AXES = ['x', 'y', 'z', 'rx', 'ry', 'rz'] as const
+/** Binding positions a joystick takes (firmware JOYSTICK_POSITIONS_MAX). */
+export const JOYSTICK_POSITIONS = 40
+
+export const JoystickAxisSchema = z
+    .object({
+        input: z.number().int().min(0).max(5),
+        out: z.enum(JOYSTICK_AXES).nullable(),
+        invert: z.boolean().optional(),
+        radial: z
+            .boolean()
+            .optional()
+            .describe(
+                'With its partner input (input ^ 1, the other axis of the stick): ' +
+                    "deadzones and curve on the stick's distance from centre.",
+            ),
+        curve: z
+            .enum(['linear', 'aggressive', 'relaxed', 'precise'])
+            .optional(),
+        inner: z.number().int().min(0).max(99).optional(),
+        outer: z.number().int().min(0).max(99).optional(),
+    })
+    .refine((a) => (a.inner ?? 0) + (a.outer ?? 0) < 100, {
+        message: 'inner + outer must stay under 100',
+        path: ['outer'],
+    })
+    .describe('What one analog input does: its axis, invert, curve, deadzones.')
+
+export const JoystickButtonActionSchema = z
+    .discriminatedUnion('action', [
+        z.object({ action: z.literal('none') }),
+        z.object({
+            action: z.literal('button'),
+            button: z.number().int().min(1).max(32),
+        }),
+        z.object({
+            action: z.literal('hat'),
+            dir: z.number().int().min(0).max(7),
+        }),
+        z.object({ action: z.literal('batteryShow') }),
+        z.object({ action: z.literal('unpair') }),
+        z.object({
+            action: z.literal('axis'),
+            axis: z.enum(JOYSTICK_AXES),
+            value: z.number().int().min(-32767).max(32767),
+        }),
+    ])
+    .describe('A gamepad action on a joystick button.')
+
+export const JoystickSchema = z
+    .object({
+        hatWays: z
+            .union([z.literal(4), z.literal(8)])
+            .optional()
+            .describe(
+                '4 or 8 (default 8); a 4-way hat reports a diagonal as its vertical.',
+            ),
+        axes: z
+            .array(JoystickAxisSchema)
+            .max(6)
+            .optional()
+            .describe(
+                'One entry per analog input that differs from its default.',
+            ),
+        buttonActions: z
+            .array(JoystickButtonActionSchema.nullable())
+            .max(JOYSTICK_POSITIONS)
+            .optional()
+            .describe(
+                'By binding position: what the button does instead of its ' +
+                    'default; null = the default.',
+            ),
+    })
+    .superRefine((j, ctx) => {
+        const seen = new Set<number>()
+        for (const [i, a] of (j.axes ?? []).entries()) {
+            if (seen.has(a.input)) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: ['axes', i, 'input'],
+                    message: `input ${a.input} is listed twice`,
+                })
+            }
+            seen.add(a.input)
+        }
+    })
+    .describe(
+        'Joystick settings: hat ways, ' +
+            'per-input axis mapping, curve and deadzones, and button actions. ' +
+            'Calibration stays on the device.',
     )
 
 // pattern-check: skip plain zod wire-DTO schema mirroring TBL_CLUSTER
@@ -925,7 +1921,21 @@ export const ClusterNodeSchema = z
         encoderBase: z.number().int().nonnegative().optional(),
         pointerBase: z.number().int().nonnegative().optional(),
     })
-    .describe("One cluster node's UID→address-base assignment (§N4c mode-A).")
+    .describe(
+        "One node's hardware UID and where its keys, knobs and pointers start " +
+            'in the shared position list (used when followers send key positions).',
+    )
+
+// pattern-check: skip plain zod wire-DTO schema mirroring one TBL_CLUSTER v2 side entry
+export const ClusterSideSchema = z
+    .object({
+        side: z.number().int().min(0).max(254),
+        rows: z.number().int().min(0).max(255),
+        cols: z.number().int().min(0).max(255),
+        encoders: z.number().int().min(0).max(255).optional(),
+        sliders: z.number().int().min(0).max(255).optional(),
+    })
+    .describe("One side of the cluster side map (§5.3): its key, encoder and slider span.")
 
 // pattern-check: skip plain zod wire-DTO schema mirroring TBL_LINK_PROFILE
 export const LinkProfileSchema = z
@@ -941,12 +1951,160 @@ export const LinkProfileSchema = z
             .optional(),
     })
     .describe(
-        'Node-bus link/latency profile (§8, N6, TBL_LINK_PROFILE): a base ' +
-            'profile plus per-knob overrides (USART baud, §6 election cadence, ' +
-            'power tier). Absent ⇒ the balanced default.',
+        'Link and latency profile between wired nodes: a base profile plus ' +
+            'per-setting overrides (wire speed, how fast a main node is chosen, ' +
+            'power tier). Left out = the balanced default.',
+    )
+
+// pattern-check: skip plain zod wire-DTO schema mirroring TBL_RADIO
+// Ranges mirror the firmware (radio_settings.h REMAPPR_RADIO_*), so a config
+// that passes here is never refused by the node.
+export const RadioSettingsSchema = z
+    .object({
+        autoPair: z
+            .boolean()
+            .optional()
+            .describe(
+                'Arm pairing on its own while the node has no dongle bond (default ' +
+                    'on). Off: pairing waits for an explicit request.',
+            ),
+        inputRepeats: z
+            .number()
+            .int()
+            .min(1)
+            .max(8)
+            .optional()
+            .describe(
+                'Sends per input change, keyboard state and media/system keys ' +
+                    'alike (default 3).',
+            ),
+        keepaliveMs: z
+            .number()
+            .int()
+            .min(20)
+            .max(1000)
+            .optional()
+            .describe(
+                'Idle re-send period, ms (default 40). Keep it below the dongle ' +
+                    'failsafe with room for one lost frame, or the dongle releases ' +
+                    'a key held without change.',
+            ),
+        beaconLossMs: z
+            .number()
+            .int()
+            .min(200)
+            .max(10000)
+            .optional()
+            .describe(
+                'No dongle beacon for this long means the link is lost, ms ' +
+                    '(default 600).',
+            ),
+    })
+    .describe(
+        "The node's 2.4 GHz link settings. A field left out keeps " +
+            'the firmware default. On a split board the main MCU forwards them to ' +
+            'the radio chip.',
+    )
+
+// pattern-check: skip plain zod wire-DTO schema mirroring TBL_POWER
+// Ranges mirror the firmware (power.h REMAPPR_POWER_*_MS_MIN/MAX): 0 = never.
+const powerTimeout = (min: number, max: number, what: string) =>
+    z
+        .union([z.literal(0), z.number().int().min(min).max(max)])
+        .optional()
+        .describe(what)
+
+export const PowerSettingsSchema = z
+    .object({
+        idleMs: powerTimeout(
+            1000,
+            3_600_000,
+            'No input this long dims the outputs and rests the sensors, ms ' +
+                '(0 = never, else 1 s..1 h; default 5 s).',
+        ),
+        sleepMs: powerTimeout(
+            10_000,
+            86_400_000,
+            'No input this long puts the device to sleep; the next input wakes ' +
+                'it, ms (0 = never, else 10 s..24 h; default 5 min).',
+        ),
+        offMs: powerTimeout(
+            60_000,
+            604_800_000,
+            'No input this long powers the device off; a key or a move restarts ' +
+                'it, ms (0 = never, else 1 min..7 days; default never).',
+        ),
+    })
+    .describe(
+        'When the device dims, sleeps and powers off on battery. ' +
+            'A field left out keeps the firmware default. On external power ' +
+            'nothing sleeps.',
     )
 
 // pattern-check: skip adding well-known optional fields to an existing zod schema
+const px = (min: number) => z.number().int().min(min).max(255)
+
+const ScreenWidgetSchema = z
+    .object({
+        kind: z.enum(['text', 'value', 'bar', 'image', 'clock', 'rect']),
+        x: px(0),
+        y: px(0),
+        w: px(1),
+        h: px(1),
+        font: z.enum(['small', 'large']).optional(),
+        align: z.enum(['left', 'centre', 'right']).optional(),
+        invert: z.boolean().optional(),
+        frame: z.boolean().optional(),
+        text: z.string().max(255).optional(),
+        source: z.string().optional(),
+        max: z.number().int().min(1).max(65535).optional(),
+        format: z.enum(['hm', 'hms', 'date']).optional(),
+        image: z
+            .object({ width: px(1), height: px(1), data: z.string() })
+            .optional(),
+    })
+    .superRefine((w, ctx) => {
+        // What each kind needs to draw anything.
+        const needs: Record<string, (keyof typeof w)[]> = {
+            text: ['text'],
+            value: ['source'],
+            bar: ['source', 'max'],
+            image: ['image'],
+        }
+        for (const key of needs[w.kind] ?? []) {
+            if (w[key] === undefined) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: [key],
+                    message: `a ${w.kind} widget needs "${key}"`,
+                })
+            }
+        }
+    })
+    .describe('One widget of a screen page, in the panel\'s logical pixels.')
+
+export const DisplaysSchema = z
+    .array(
+        z.object({
+            part: z.number().int().min(0).max(255),
+            pages: z
+                .array(
+                    z.object({
+                        default: z.boolean().optional(),
+                        widgets: z.array(ScreenWidgetSchema),
+                    }),
+                )
+                .min(1),
+            settings: sensorValuesSchema(false)
+                .optional()
+                .describe(
+                    "The display part's own settings by registry name (brightness, " +
+                        'invert, rotation, ...); a setting left out stays on the default.',
+                ),
+        }),
+    )
+    .describe('What each display shows: its part index and its pages (TBL_DISPLAY).')
+
 export const NodeSchema = z
     .looseObject({
         personality: z
@@ -955,8 +2113,15 @@ export const NodeSchema = z
         mouse: MouseSchema.optional(),
         role: z.enum(['coordinator', 'follower']).optional(),
         forwardMode: z.enum(['resolved', 'physical']).optional(),
+        clusterMode: z.enum(['auto', 'alone']).optional(),
+        clusterPower: z.enum(['auto', 'follow', 'own']).optional(),
         cluster: z.array(ClusterNodeSchema).optional(),
+        clusterSides: z.array(ClusterSideSchema).optional(),
         linkProfile: LinkProfileSchema.optional(),
+        radio: RadioSettingsSchema.optional(),
+        power: PowerSettingsSchema.optional(),
+        sensor: NodeSensorSchema.optional(),
+        displays: DisplaysSchema.optional(),
     })
     .describe(
         'Per-personality node configuration; a dongle has a limited surface, a ' +
@@ -1012,6 +2177,7 @@ const BaseKeymapSchema = z.object({
         name: z.string(),
         keys: z.array(GeometrySchema).min(1),
         encoders: z.array(EncoderSchema).optional(),
+        sliders: z.array(SliderSlotSchema).optional(),
         matrix: z
             .object({
                 rows: z.number().int().positive(),
@@ -1043,12 +2209,30 @@ const BaseKeymapSchema = z.object({
             ),
         lighting: LightingSchema.optional(),
         firmwareConfig: FirmwareConfigSchema.optional(),
+        features: z
+            .array(
+                z.enum([
+                    'wireless',
+                    'liveEdit',
+                    'battery',
+                    'lighting',
+                    'pointing',
+                    'encoders',
+                    'analog',
+                    'display',
+                ]),
+            )
+            .optional()
+            .describe(
+                'What the board does (feature cards); each firmware turns its own options on from these.',
+            ),
         layouts: z.array(LayoutSchema).optional(),
         layoutOptions: z.array(LayoutOptionSchema).optional(),
         split: z
             .boolean()
             .optional()
             .describe('Two-piece / split keyboard (builder capability flag).'),
+        parts: z.array(PartSchema).optional(),
     }),
     layers: z.array(LayerSchema).min(1),
     combos: z.array(ComboSchema).optional(),
@@ -1064,7 +2248,7 @@ const BaseKeymapSchema = z.object({
     // Whole-node config sections (v2) — validated + preserved, consumed later.
     node: NodeSchema.optional(),
     firmware: FirmwareSettingsSchema.optional(),
-    board: BoardSchema.optional(),
+    board: BoardWithSidesSchema.optional(),
 })
 
 /* ── cross-reference + structural checks ───────────────────────────────── */
@@ -1079,6 +2263,7 @@ export const KeymapSchema = BaseKeymapSchema.superRefine((km, ctx) => {
     const holdTapIds = new Set((km.holdTaps ?? []).map((h) => h.id))
     const keyCount = km.keyboard.keys.length
     const encCount = km.keyboard.encoders?.length ?? 0
+    const sliderCount = km.keyboard.sliders?.length ?? 0
 
     // Pattern check: no GoF pattern (-) — rejected — declarative cross-reference
     // checks appended to the existing superRefine; data validation, no abstraction.
@@ -1235,6 +2420,27 @@ export const KeymapSchema = BaseKeymapSchema.superRefine((km, ctx) => {
                 path: ['layers', li, 'encoders'],
             })
         }
+        if (layer.sliders && layer.sliders.length !== sliderCount) {
+            ctx.addIssue({
+                code: 'custom',
+                message: `layer "${layer.name}" has ${layer.sliders.length} slider bindings but the board has ${sliderCount} sliders`,
+                path: ['layers', li, 'sliders'],
+            })
+        }
+        layer.sliders?.forEach((s, si) => {
+            if (!s) return
+            if (s.min !== undefined && s.max !== undefined && s.min > s.max) {
+                ctx.addIssue({
+                    code: 'custom',
+                    message: `slider ${si} on layer "${layer.name}" has min ${s.min} > max ${s.max}`,
+                    path: ['layers', li, 'sliders', si, 'min'],
+                })
+            }
+            for (const slot of ['action', 'up', 'down'] as const) {
+                const a = s[slot]
+                if (a) checkAction(a, ['layers', li, 'sliders', si, slot])
+            }
+        })
         layer.bindings.forEach((b, bi) =>
             checkAction(b, ['layers', li, 'bindings', bi]),
         )
@@ -1282,14 +2488,10 @@ export const KeymapSchema = BaseKeymapSchema.superRefine((km, ctx) => {
                     path: ['layers', li, 'sliderBindings', k, 'min'],
                 })
             }
-            if (s.action)
-                checkAction(s.action, [
-                    'layers',
-                    li,
-                    'sliderBindings',
-                    k,
-                    'action',
-                ])
+            for (const slot of ['action', 'up', 'down'] as const) {
+                const a = s[slot]
+                if (a) checkAction(a, ['layers', li, 'sliderBindings', k, slot])
+            }
         })
     })
     ;(km.combos ?? []).forEach((combo, ci) => {
