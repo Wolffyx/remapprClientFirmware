@@ -225,7 +225,9 @@ export function configRequiredFeatures(config: ConfigKeymap): number {
     const cp = config.node?.clusterPower
     if (cp && cp !== 'auto') req |= LimitsFeature.clusterPower
     // A side map rides TBL_CLUSTER v2 (§5.3).
-    if (config.node?.clusterSides?.length) req |= LimitsFeature.tblClusterV2
+    // A split board's sides imply the side map (boardSides.clusterSidesFor).
+    if (config.node?.clusterSides?.length || config.board?.sides?.length)
+        req |= LimitsFeature.tblClusterV2
 
     // Each behavior family the config uses: its bit must be set (or the device
     // predate family advertisement — see effectiveFeatureBitmask).

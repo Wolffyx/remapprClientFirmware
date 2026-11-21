@@ -58,6 +58,10 @@ function uartBlock(
 const detectFlags = (port: BoardNodeBusPort): string =>
     port.detectActiveLow ? ROLE_FLAGS.direct : ROLE_FLAGS.input
 
+/** The side strap (§5.2): asserted = right; high unless the JSON says low. */
+const strapFlags = (port: BoardNodeBusPort): string =>
+    port.sideStrapActiveLow ? ROLE_FLAGS.direct : ROLE_FLAGS.input
+
 /** One UART per port, at most one upstream port, and none on the main. */
 function checkTopology(
     config: ConfigKeymap,
@@ -112,6 +116,9 @@ export function emitNodeBus(
             `\t\tdirection = "${dir}";`,
             ...(port.detect
                 ? [`\t\tdetect-gpios = <${book.spec(port.detect, detectFlags(port), [...path, 'detect'])}>;`]
+                : []),
+            ...(port.sideStrap
+                ? [`\t\tside-gpios = <${book.spec(port.sideStrap, strapFlags(port), [...path, 'sideStrap'])}>;`]
                 : []),
             ...(port.label
                 ? [`\t\tlabel = "${dtString(port.label, diag, [...path, 'label'])}";`]
