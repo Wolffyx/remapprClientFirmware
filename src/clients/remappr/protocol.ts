@@ -1099,7 +1099,62 @@ export const ClusterVerb = {
      *  member, sealed with its session (firmware ruling 2026-11-19). */
     /** Carry a whole frame to another member (§7.3); answers later. */
     RELAY: 0x07,
+    /** One member's capture → arrival latency histogram (§11.1). */
+    GET_LATENCY: 0x08,
 } as const
+
+/** GET_LATENCY flags: zero the counts after the read. */
+export const CLUSTER_LATENCY_FLAG_CLEAR = 0x01
+
+/** GET_LATENCY arg: `u16 short_id, u8 flags`. */
+export function buildClusterLatencyArg(shortId: number, clear = false): Uint8Array {
+    return Uint8Array.from([shortId & 0xff, shortId >> 8, clear ? CLUSTER_LATENCY_FLAG_CLEAR : 0])
+}
+
+/** One latency bucket: latencies below `belowUs` (null: the open top bucket). */
+export interface LatencyBucket {
+    belowUs: number | null
+    count: number
+}
+
+export interface ClusterLatency {
+    shortId: number
+    link: number
+    buckets: LatencyBucket[]
+}
+
+/** A GET_LATENCY reply: `u8 version, u16 short_id, u8 link, u8 n, u8 first_log2,
+ *  n × u16 counts`; bucket k counts below 2^(first_log2 + k) µs, the last one
+ *  everything above. */
+export function parseClusterLatency(d: Uint8Array): ClusterLatency {
+    if (d.length < 6) throw new Error('cluster latency reply too short')
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+    const n = d[4]
+    const first = d[5]
+    if (d.length < 6 + 2 * n) throw new Error('cluster latency reply truncated')
+    const buckets: LatencyBucket[] = []
+    for (let k = 0; k < n; k++) {
+        buckets.push({
+            belowUs: k < n - 1 ? 2 ** (first + k) : null,
+            count: dv.getUint16(6 + 2 * k, true),
+        })
+    }
+    return { shortId: dv.getUint16(1, true), link: d[3], buckets }
+}
+
+/** The bucket bound holding the `pct` percentile, as the firmware computes it:
+ *  0 when empty, null when it falls in the open top bucket. */
+export function latencyPercentileUs(buckets: LatencyBucket[], pct: number): number | null {
+    const total = buckets.reduce((s, b) => s + b.count, 0)
+    if (total === 0) return 0
+    const want = Math.ceil((total * pct) / 100)
+    let seen = 0
+    for (const b of buckets) {
+        seen += b.count
+        if (seen >= want) return b.belowUs
+    }
+    return null
+}
 
 /** What nesting a frame in CLUSTER.RELAY costs (firmware cluster_ns.h, §7.4):
  *  tag + UCH + request header in, + response header back. Take it off the
