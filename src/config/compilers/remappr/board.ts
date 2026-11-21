@@ -47,6 +47,7 @@ import {
 import { emitDisplays, emitHaptic, emitLedZones } from './boardOutput'
 import { layoutOrigin, type Origin, placementTokens } from './boardPlacement'
 import { emitBattery, emitPowerOff, emitStatusLeds } from './boardPower'
+import { sideSuffix, sideViews } from './boardSides'
 import { dtComment } from './dtText'
 import { emitBattery as emitPartBattery, emitScreen } from '../zephyrParts'
 
@@ -447,8 +448,14 @@ function keymapNode(
     ]
 }
 
-function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
-    const slug = shieldSlug(config)
+/** One shield: `slug` names it, `origin` is the whole board's, so a split
+ *  board's halves lay out on one grid. */
+function emitShield(
+    config: ConfigKeymap,
+    slug: string,
+    origin: Origin,
+    diag: DiagnosticBag,
+): ExportedFile[] {
     const SHIELD = slug.toUpperCase()
     const target = boardTarget(config, diag)
     const book = new PinBook(target, diag)
@@ -456,7 +463,6 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
 
     // The matrix nodes take the keys before the off-matrix buttons; both lay
     // out from one origin so the drawn board lines up.
-    const origin = layoutOrigin(config.keyboard.keys)
     const m = matrixKeyCount(config, diag)
     const mx = matrixView(config, m)
     const rowCounts = visualRowCounts(mx.keyboard.keys)
@@ -582,6 +588,16 @@ function screenKconfig(config: ConfigKeymap, written: boolean): string[] {
         `config ${bus === 'spi' ? 'SPI' : 'I2C'}`,
         `\tdefault y`,
     ]
+}
+
+/** One shield, or one per side of a split board (§3.6): `<slug>_left`,
+ *  `<slug>_right`, `<slug>_side2`… */
+function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
+    const slug = shieldSlug(config)
+    const origin = layoutOrigin(config.keyboard.keys)
+    const views = sideViews(config, diag)
+    if (views.length === 0) return emitShield(config, slug, origin, diag)
+    return views.flatMap((v) => emitShield(v.config, `${slug}_${sideSuffix(v.side)}`, origin, diag))
 }
 
 export const remapprBoardCompiler: KeymapCompiler = {

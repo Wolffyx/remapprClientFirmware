@@ -16,6 +16,9 @@ import {
     parsePersonalityMap,
     parseClusterInfo,
     parseClusterMembers,
+    parseClusterLatency,
+    latencyPercentileUs,
+    buildClusterLatencyArg,
     parseClusterEvent,
     parseClusterConfigRefused,
     ClusterRefuse,
@@ -268,6 +271,21 @@ describe('CLUSTER namespace (§7.1)', () => {
         expect(i.locked).toBe(true)
         expect(i.skew).toBe(false)
         expect(() => parseClusterInfo(d.slice(0, 16))).toThrow(/needs 17/)
+    })
+
+    it('parses a GET_LATENCY reply and its percentiles (§11.1)', () => {
+        const counts = [0, 0, 98, 0, 1, 0, 0, 0, 0, 0, 0, 1]
+        const d = Uint8Array.from([1, 2, 0, 1, 12, 7, ...counts.flatMap((c) => [c, 0])])
+        const r = parseClusterLatency(d)
+        expect(r.shortId).toBe(2)
+        expect(r.link).toBe(1)
+        expect(r.buckets[0]).toEqual({ belowUs: 128, count: 0 })
+        expect(r.buckets[11]).toEqual({ belowUs: null, count: 1 })
+        expect(latencyPercentileUs(r.buckets, 50)).toBe(512)
+        expect(latencyPercentileUs(r.buckets, 99)).toBe(2048)
+        expect(latencyPercentileUs(r.buckets, 100)).toBeNull()
+        expect(Array.from(buildClusterLatencyArg(0x0102, true))).toEqual([2, 1, 1])
+        expect(() => parseClusterLatency(d.slice(0, 20))).toThrow(/truncated/)
     })
 
     it('parses a GET_MEMBERS page', () => {
