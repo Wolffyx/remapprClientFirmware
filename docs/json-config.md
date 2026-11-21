@@ -394,7 +394,36 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   reads low) and `label`, and what turns the UART on: `currentSpeed`, `pinctrl`
   phandles and raw `dmas` (its DMA controller is turned on too). A port turns
   on `CONFIG_REMAPPR_NODE_BUS`; `node.role: "coordinator"` also turns on the
-  static main role.
+  static main role. `sideStrap` is the PCB's side strap pin (`side-gpios`:
+  high on the right half; `sideStrapActiveLow: true` for one that reads low
+  there).
+- `board.sides` makes one JSON a split board (universal device model §3.6).
+  Every key carries the `side` it is wired to (`0` left, `1` right, `2`+ for
+  more members), the keys grouped by side in ascending order. Each entry of
+  `board.sides` is `{ "side", ... }` with the board fields that half has of
+  its own (`controller`, `matrix` pins, `nodeBus`, `encoders`, `buttons`, …);
+  every other `board` field is shared. Board-gen emits one shield per side,
+  `<id>_left`, `<id>_right`, `<id>_side2`…, each with its own keys and the
+  whole board's grid. A side with an `upstream` port builds as a follower,
+  the others as the coordinator. A button's `key` is still its whole-board
+  index. The config blob gets the side map (`node.clusterSides`) the sides
+  imply unless one is written; a written one that disagrees is a warning.
+  A part tagged with `side` (one shield for both halves) is refused: the
+  firmware has no side-gated parts yet.
+
+  ```jsonc
+  "keyboard": { "keys": [{ "x": 0, "y": 0, "side": 0 }, { "x": 4, "y": 0, "side": 1 }] },
+  "board": {
+    "sides": [
+      { "side": 0, "controller": "nucleo_u5a5zj_q",
+        "matrix": { "rows": ["PE11"], "cols": ["PF15"] },
+        "nodeBus": [{ "uart": "usart2", "sideStrap": "PB2" }] },
+      { "side": 1, "controller": "nrf52840dk/nrf52840",
+        "matrix": { "rows": ["P0.03"], "cols": ["P1.01"] },
+        "nodeBus": [{ "uart": "uart1", "direction": "upstream", "sideStrap": "P1.04" }] }
+    ]
+  }
+  ```
 - `board.radioLink` is the radio chip on SPI (`remappr,spi-link`): `spi` (the
   bus label), `dataReady`, optional `cs`, `reset` and `spiMaxHz` (8 MHz). It
   picks the SPI radio backend.
