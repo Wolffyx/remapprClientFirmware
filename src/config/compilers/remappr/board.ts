@@ -447,14 +447,25 @@ function keymapNode(
     ]
 }
 
+/** A split half numbers its keys after the sides before it (the TBL_CLUSTER v2
+ *  side map), which the firmware decodes only with position forwarding built in;
+ *  the blob still picks the forwarding mode at run time. */
+const SPLIT_DEFCONFIG = [
+    ``,
+    `# One half of a split board: side numbering (TBL_CLUSTER v2) needs this.`,
+    `config REMAPPR_NODE_BUS_POSITION_FWD`,
+    `\tdefault y`,
+]
+
 /** One shield: `slug` names it, `origin` is the whole board's, so a split
- *  board's halves lay out on one grid. */
+ *  board's halves lay out on one grid; `split` marks one half of such a board. */
 function emitShield(
     config: ConfigKeymap,
     slug: string,
-    origin: Origin,
+    place: { origin: Origin; split: boolean },
     diag: DiagnosticBag,
 ): ExportedFile[] {
+    const { origin, split } = place
     const SHIELD = slug.toUpperCase()
     const target = boardTarget(config, diag)
     const book = new PinBook(target, diag)
@@ -542,6 +553,7 @@ function emitShield(
         `\tdefault y`,
         ...frags.flatMap((f) => f.kconfig),
         ...storageDefconfig(config),
+        ...(split ? SPLIT_DEFCONFIG : []),
         ``,
         `endif # SHIELD_${SHIELD}`,
         ``,
@@ -561,8 +573,10 @@ function emitBoard(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     const slug = shieldSlug(config)
     const origin = layoutOrigin(config.keyboard.keys)
     const views = sideViews(config, diag)
-    if (views.length === 0) return emitShield(config, slug, origin, diag)
-    return views.flatMap((v) => emitShield(v.config, `${slug}_${sideSuffix(v.side)}`, origin, diag))
+    if (views.length === 0) return emitShield(config, slug, { origin, split: false }, diag)
+    return views.flatMap((v) =>
+        emitShield(v.config, `${slug}_${sideSuffix(v.side)}`, { origin, split: true }, diag),
+    )
 }
 
 export const remapprBoardCompiler: KeymapCompiler = {

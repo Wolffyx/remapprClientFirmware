@@ -110,6 +110,21 @@ describe('a split board (board.sides)', () => {
         )
     })
 
+    it('builds side numbering into both halves, and not into a one-piece board', () => {
+        for (const half of ['left', 'right'])
+            expect(file(r, `boards/shields/split_${half}/Kconfig.defconfig`)).toMatch(
+                /config REMAPPR_NODE_BUS_POSITION_FWD\n\tdefault y/,
+            )
+        const json = JSON.parse(split())
+        const { sides, ...shared } = json.board
+        json.board = { ...shared, ...sides[0], side: undefined }
+        json.keyboard.keys = [{ x: 0, y: 0 }, { x: 1, y: 0 }]
+        json.layers[0].bindings = ['A', 'B']
+        const one = compile(JSON.stringify(json))
+        expect(errors(one)).toEqual([])
+        expect(file(one, 'boards/shields/split/Kconfig.defconfig')).not.toContain('POSITION_FWD')
+    })
+
     it.skipIf(!TC)('and both halves pass dtc', () => {
         for (const o of [left, right]) {
             const d = dtcCheck(TC!, o)
