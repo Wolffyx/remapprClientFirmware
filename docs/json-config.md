@@ -405,7 +405,9 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
   every other `board` field is shared. Board-gen emits one shield per side,
   `<id>_left`, `<id>_right`, `<id>_side2`…, each with its own keys and the
   whole board's grid. A side with an `upstream` port builds as a follower,
-  the others as the coordinator. A button's `key` is still its whole-board
+  the others as the coordinator. Each half's `Kconfig.defconfig` turns on
+  `CONFIG_REMAPPR_NODE_BUS_POSITION_FWD`, which the firmware needs to number
+  a half's keys after the sides before it. A button's `key` is still its whole-board
   index. The config blob gets the side map (`node.clusterSides`) the sides
   imply unless one is written; a written one that disagrees is a warning.
   A part tagged with `side` (one shield for both halves) is refused: the
