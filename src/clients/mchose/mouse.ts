@@ -193,6 +193,7 @@ export function sensorSpec(model: MchoseModel): SensorSpec {
         dpiMax: model.dpiMax,
         dpiStep: DPI_STEP,
         maxStages: DPI_STAGES,
+        separateXY: true,
         pollRates: model.rates,
         settings: settingSpecs(model),
         procedures: [],
@@ -202,8 +203,12 @@ export function sensorSpec(model: MchoseModel): SensorSpec {
 
 export function bindingOf(model: MchoseModel, c: MouseConfig): SensorBinding {
     const s = c.sensor
+    const stages = c.dpi.slice(0, c.enabledStages)
+    const stagesY = c.dpiY.slice(0, c.enabledStages)
+    const apart = stagesY.some((v, i) => v !== stages[i])
     return {
-        stages: c.dpi.slice(0, c.enabledStages),
+        stages,
+        ...(apart ? { stagesY } : {}),
         active: c.stage,
         poll: model.rates[c.rateIndex] ?? model.rates[0],
         settings: {
@@ -265,12 +270,19 @@ export function configWith(
         throw new RangeError(`Unknown lift-off option ${String(v[S.lod])}`)
     }
     const performance = intIn('Performance mode', v[S.performance], 1, 3)
+    // Stages past the enabled ones keep what the mouse holds; Y takes X
+    // unless the binding sets the axes apart.
+    const dpi = c.dpi.map((old, i) =>
+        i < enabled ? dpiIn(model, b.stages[i]) : old,
+    )
+    const ys = b.stagesY
     return {
         ...c,
-        // Stages past the enabled ones keep what the mouse holds.
-        dpi: c.dpi.map((old, i) =>
-            i < enabled ? dpiIn(model, b.stages[i]) : old,
-        ),
+        dpi,
+        dpiY: c.dpiY.map((old, i) => {
+            if (i >= enabled) return old
+            return ys ? dpiIn(model, ys[i] ?? b.stages[i]) : dpi[i]
+        }),
         enabledStages: enabled,
         stage: Math.min(Math.max(b.active, 0), enabled - 1),
         rateIndex,

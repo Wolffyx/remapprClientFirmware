@@ -61,12 +61,15 @@ function fakeMouse(opts: { dropFirst?: number } = {}) {
         0x06: () => (reply = [0x06, ...A7X_IDENTITY]),
         0x04: () => (reply = [0x04, ...A7X_VERSION]),
         0x67: () => (reply = [0x67, ...cfg]),
+        // The long form carries 0xFF and the Y stages after X; the short
+        // one writes X onto both axes.
         0x40: (b) => {
+            const y = b[17] === 0xff ? 18 : 4
             cfg[1] = (cfg[1] & 0xf0) | b[1]
             cfg[2] = (cfg[2] & 0xf0) | b[2]
             for (let i = 0; i < 12; i++) {
                 cfg[4 + i] = b[4 + i]
-                cfg[51 + i] = b[4 + i]
+                cfg[51 + i] = b[y + i]
             }
             cfg[16] = b[16]
         },
@@ -231,6 +234,23 @@ describe('MCHOSE config', () => {
         )
     })
 
+    it('sets the axes apart only when Y differs from X', () => {
+        const c = parseConfig(A7X_CONFIG)
+        expect(c.dpiY).toEqual(c.dpi)
+        expect(bindingOf(A7X, c).stagesY).toBeUndefined()
+        const b = bindingOf(A7X, c)
+        const apart = configWith(A7X, c, { ...b, stagesY: [200, 400, 1000] })
+        expect(apart.dpiY).toEqual([200, 400, 1000, 3200, 6400, 42000])
+        expect(bindingOf(A7X, apart).stagesY).toEqual([
+            200, 400, 1000, 3200, 6400, 42000,
+        ])
+        const [w] = writesBetween(c, apart)
+        expect(w.report).toBe(LONG)
+        expect(w.body.slice(16, 20)).toEqual([6, 0xff, 200, 0])
+        expect(w.body.slice(22, 24)).toEqual([1000 & 0xff, 1000 >> 8])
+        expect(configWith(A7X, apart, b).dpiY).toEqual(apart.dpi)
+    })
+
     it('identifies models by receiver or mouse PID, else by vendor', () => {
         expect(modelFor(0x3837, 0x1009).name).toBe('MCHOSE A7X Ultra')
         expect(modelFor(0x3837, 0x9999, 0x4150).name).toBe('MCHOSE K7 Ultra')
@@ -299,6 +319,28 @@ describe('MCHOSE mouse service', () => {
             .map((x) => x[0])
             .filter((c) => c !== 0x67 && c !== 0x06)
         expect(writes).toEqual([0x40, 0x41, 0x42, 0x43])
+    })
+
+    it('writes separate X/Y stages and reads them back', async () => {
+        const m = fakeMouse()
+        const s = service(m)
+        expect((await s.controls.getCatalog()).sensor?.separateXY).toBe(true)
+        const b = (await s.controls.getBindings('p0')).sensor as SensorBinding
+        await s.controls.setBinding?.('p0', 'sensor', {
+            ...b,
+            stagesY: [100, 400, 1600, 3200, 6400, 42000],
+        })
+        const now = parseConfig(m.cfg)
+        expect(now.dpi[0]).toBe(200)
+        expect(now.dpiY.slice(0, 3)).toEqual([100, 400, 1600])
+        const back = (await s.controls.getBindings('p0'))
+            .sensor as SensorBinding
+        expect(back.stagesY?.[2]).toBe(1600)
+        await s.controls.setBinding?.('p0', 'sensor', {
+            ...back,
+            stagesY: undefined,
+        })
+        expect(parseConfig(m.cfg).dpiY).toEqual(parseConfig(m.cfg).dpi)
     })
 
     it('sends a dropped command again', async () => {

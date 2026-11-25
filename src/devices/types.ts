@@ -217,6 +217,10 @@ export type SensorSettingValue = number | boolean
 export interface SensorBinding {
     /** DPI per stage; the DPI button cycles them. */
     readonly stages: readonly number[]
+    /** Y-axis DPI per stage, when it differs from `stages` (the X axis);
+     *  absent = both axes take `stages`. Only on a sensor whose spec says
+     *  {@link SensorSpec.separateXY}. */
+    readonly stagesY?: readonly number[]
     readonly active: number
     /** Polling rate, Hz. */
     readonly poll: number
@@ -441,6 +445,8 @@ export interface SensorSpec {
     readonly dpiMax: number
     readonly dpiStep: number
     readonly maxStages: number
+    /** Each stage can take a different DPI on the Y axis (stagesY). */
+    readonly separateXY?: boolean
     readonly pollRates: readonly number[]
     /** The sensor's own settings (not the DPI or the rate), as it describes
      *  them; empty when it describes none. */

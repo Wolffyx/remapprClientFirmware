@@ -150,8 +150,11 @@ export interface MouseConfig {
     readonly profile: number
     readonly stage: number
     readonly rateIndex: number
-    /** All six X-axis stages; the mouse mirrors them on Y. */
+    /** All six X-axis stages. */
     readonly dpi: readonly number[]
+    /** All six Y-axis stages (config[51..62]); equal to `dpi` unless the
+     *  axes were set apart. */
+    readonly dpiY: readonly number[]
     readonly enabledStages: number
     readonly sensor: SensorFlags
     readonly debounceMs: number
@@ -168,6 +171,9 @@ export function parseConfig(raw: Uint8Array): MouseConfig {
         // byte 2's high nibble is the live rate; byte 1's keeps the boot one.
         rateIndex: raw[2] >> 4,
         dpi: Array.from({ length: DPI_STAGES }, (_, i) => u16(raw, 4 + i * 2)),
+        dpiY: Array.from({ length: DPI_STAGES }, (_, i) =>
+            u16(raw, 51 + i * 2),
+        ),
         enabledStages: enabled,
         sensor: parseSensor(raw[17], raw[49]),
         debounceMs: raw[18],
@@ -184,14 +190,22 @@ export function parseConfig(raw: Uint8Array): MouseConfig {
 
 // --- write commands --------------------------------------------------------
 
-export function dpiCommand(
-    c: MouseConfig,
-    dpi: readonly number[],
-    enabled: number,
-    stage: number,
-): number[] {
-    const values = dpi.flatMap((v) => [v & 0xff, v >> 8])
-    return [Cmd.DPI, stage, stage, c.raw[3], ...values, enabled]
+const le16s = (values: readonly number[]): number[] =>
+    values.flatMap((v) => [v & 0xff, v >> 8])
+
+/** Report 0x12: the six X stages, then 0xFF and the six Y stages (the
+ *  short 0x11 form writes X only and copies it onto Y). */
+export function dpiCommand(from: MouseConfig, to: MouseConfig): number[] {
+    return [
+        Cmd.DPI,
+        to.stage,
+        to.stage,
+        from.raw[3],
+        ...le16s(to.dpi),
+        to.enabledStages,
+        0xff,
+        ...le16s(to.dpiY),
+    ]
 }
 
 export const rateCommand = (index: number): number[] => [Cmd.RATE, index, index]
@@ -257,10 +271,11 @@ export function writesBetween(from: MouseConfig, to: MouseConfig): Write[] {
     const dpiMoved =
         from.stage !== to.stage ||
         from.enabledStages !== to.enabledStages ||
-        from.dpi.some((v, i) => v !== to.dpi[i])
-    if (dpiMoved) {
-        out.push(dpiCommand(from, to.dpi, to.enabledStages, to.stage))
-    }
+        from.dpi.some((v, i) => v !== to.dpi[i]) ||
+        from.dpiY.some((v, i) => v !== to.dpiY[i])
+    const dpi: Write[] = dpiMoved
+        ? [{ report: LONG, body: dpiCommand(from, to) }]
+        : []
     if (from.rateIndex !== to.rateIndex) out.push(rateCommand(to.rateIndex))
     if (!sameFlags(from.sensor, to.sensor)) out.push(sensorCommand(to.sensor))
     if (from.debounceMs !== to.debounceMs) {
@@ -269,7 +284,10 @@ export function writesBetween(from: MouseConfig, to: MouseConfig): Write[] {
     if (from.sleepMinutes !== to.sleepMinutes) {
         out.push(sleepCommand(to.sleepMinutes))
     }
-    const writes: Write[] = out.map((body) => ({ report: SHORT, body }))
+    const writes: Write[] = [
+        ...dpi,
+        ...out.map((body) => ({ report: SHORT, body })),
+    ]
     to.buttons.forEach((s, i) => {
         const was = from.buttons[i]
         if (was.type === s.type && was.value === s.value) return
