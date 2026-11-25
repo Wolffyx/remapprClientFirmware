@@ -23,6 +23,7 @@ export type {
     LockKind,
     LockState,
     MacroAction,
+    MacroPlayMode,
     PhysicalLayout,
     PhysicalLayoutKey,
     TapDanceEntry,

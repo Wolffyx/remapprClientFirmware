@@ -334,6 +334,12 @@ export interface DynamicEntryCounts {
     keyOverride: number
 }
 
+// pattern-check: skip — a neutral string union beside MacroAction, no behaviour.
+/** How a macro plays from its trigger: once per press, repeating while the
+ *  trigger is held, repeating until the trigger is pressed again, or
+ *  repeating until any key is pressed. */
+export type MacroPlayMode = 'once' | 'whileHeld' | 'toggle' | 'untilAnyKey'
+
 // pattern-check: skip discriminated-union data shape for macro actions
 export type MacroAction =
     | { kind: 'tap'; keycode: number }
