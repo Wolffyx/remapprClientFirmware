@@ -13,6 +13,9 @@ import {
     INPUT_NONE,
     parseInputLayoutPage,
     parseKeyLayoutChunk,
+    parseBehaviorPage,
+    buildBehaviorsArg,
+    KeyboardVerb,
     parsePersonalityMap,
     parseClusterInfo,
     parseClusterMembers,
@@ -53,6 +56,37 @@ function chunk(total: number, start: number, count: number, bodyEntries = count)
     for (let i = 0; i < bodyEntries; i++) d[5 + i * 16] = 0x04 + i
     return d
 }
+
+describe('parseBehaviorPage', () => {
+    // Firmware layout: u8 total | u8 start | u8 count | u16 inert, then
+    // u8 id | u8 flags | u8 missing | u8 name_len | name.
+    const page = Uint8Array.of(
+        9, 2, 2, 0x34, 0x12,
+        2, 0b011, 0, 3, ...new TextEncoder().encode('key'),
+        7, 0b101, 0b10100, 0,
+    )
+
+    it('decodes header and entries', () => {
+        const out = parseBehaviorPage(page)
+        expect(out).toMatchObject({ total: 9, start: 2, count: 2, inertCells: 0x1234 })
+        expect(out.entries[0]).toEqual({
+            id: 2, built: true, used: true, missing: [], name: 'key',
+        })
+        expect(out.entries[1]).toEqual({
+            id: 7, built: true, used: false, missing: ['pointer', 'sysctrl'], name: '',
+        })
+    })
+
+    it('rejects a truncated page', () => {
+        expect(() => parseBehaviorPage(page.subarray(0, 4))).toThrow(/too short/)
+        expect(() => parseBehaviorPage(page.subarray(0, 10))).toThrow(/truncated/)
+    })
+
+    it('matches the firmware verb and arg', () => {
+        expect(KeyboardVerb.GET_BEHAVIORS).toBe(0x46)
+        expect(buildBehaviorsArg(300)).toEqual(Uint8Array.of(44))
+    })
+})
 
 describe('parseKeyLayoutChunk', () => {
     it('parses a complete chunk', () => {

@@ -445,6 +445,8 @@ export function parseInputLayoutPage(d: Uint8Array): InputLayoutPage {
 export const KeyboardVerb = {
     GET_KEYMAP_BOUNDS: 0x42,
     GET_KEY_LAYOUT: 0x43,
+    /** Built and inert behaviors, paged (arg u8 start). */
+    GET_BEHAVIORS: 0x46,
 } as const
 
 /** DONGLE-namespace verbs (relay path; mostly deferred). */
@@ -1439,6 +1441,87 @@ export function parseKeyLayoutChunk(d: Uint8Array): KeyLayoutChunk {
         off += 16
     }
     return { total, start, count, positions }
+}
+
+/** GET_BEHAVIORS entry flags (firmware include/remappr/behavior_info.h). */
+export const BehaviorFlag = {
+    /** The image builds it. */
+    BUILT: 1 << 0,
+    /** The active keymap binds it. */
+    USED: 1 << 1,
+    /** A host output it needs is missing (see `missing`). */
+    OUTPUT_MISSING: 1 << 2,
+} as const
+
+/** Host outputs a behavior may need, by bit (REMAPPR_BEHAVIOR_OUT_*). */
+export const BEHAVIOR_OUTPUT_NAMES = [
+    'keyboard',
+    'consumer',
+    'pointer',
+    'lighting',
+    'sysctrl',
+] as const
+
+/** One GET_BEHAVIORS entry: a behavior the image builds, or one the active
+ *  keymap binds that the image lacks (then `built` is false and its keys do
+ *  nothing). */
+export interface BehaviorEntry {
+    /** Frozen behavior ID (firmware behaviors/ids.lock). */
+    id: number
+    built: boolean
+    used: boolean
+    /** Outputs the behavior needs that the device does not have; a push that
+     *  binds it is refused. */
+    missing: (typeof BEHAVIOR_OUTPUT_NAMES)[number][]
+    /** Keymap token without `&`; empty for a behavior the image lacks or when
+     *  the image leaves names out. */
+    name: string
+}
+
+export interface BehaviorPage {
+    total: number
+    start: number
+    count: number
+    /** Keys bound to a behavior the device lacks (saturating u16). */
+    inertCells: number
+    entries: BehaviorEntry[]
+}
+
+const BEHAVIOR_PAGE_HDR = 5
+const BEHAVIOR_ENTRY_HDR = 4
+
+/** Build the KEYBOARD.GET_BEHAVIORS arg (u8 first entry). */
+export function buildBehaviorsArg(start: number): Uint8Array {
+    return Uint8Array.of(start & 0xff)
+}
+
+/** Parse one GET_BEHAVIORS page. Re-issue with start += count until
+ *  start >= total. */
+export function parseBehaviorPage(d: Uint8Array): BehaviorPage {
+    if (d.length < BEHAVIOR_PAGE_HDR) throw new Error('behavior page too short')
+    const count = d[2]
+    const entries: BehaviorEntry[] = []
+    let off = BEHAVIOR_PAGE_HDR
+    for (let i = 0; i < count; i++) {
+        if (off + BEHAVIOR_ENTRY_HDR > d.length)
+            throw new Error(`behavior page truncated at entry ${i}`)
+        const nameLen = d[off + 3]
+        if (off + BEHAVIOR_ENTRY_HDR + nameLen > d.length)
+            throw new Error(`behavior page truncated at entry ${i}`)
+        const flags = d[off + 1]
+        const missing = d[off + 2]
+        entries.push({
+            id: d[off],
+            built: (flags & BehaviorFlag.BUILT) !== 0,
+            used: (flags & BehaviorFlag.USED) !== 0,
+            missing: BEHAVIOR_OUTPUT_NAMES.filter((_, b) => (missing & (1 << b)) !== 0),
+            name: new TextDecoder().decode(
+                d.subarray(off + BEHAVIOR_ENTRY_HDR, off + BEHAVIOR_ENTRY_HDR + nameLen),
+            ),
+        })
+        off += BEHAVIOR_ENTRY_HDR + nameLen
+    }
+    return { total: d[0], start: d[1], count, inertCells: d[3] | (d[4] << 8), entries }
 }
 
 /** Build the `u32 offset | u16 want` arg for READ_CONFIG_CHUNK. */
