@@ -272,6 +272,7 @@ const denormalizeMacroStep = (s: CanonMacroStep): Record<string, unknown> => {
             ...(s.to !== undefined ? { to: s.to } : {}),
         }
     if (s.type === 'pause_for_release') return { type: s.type }
+    if (s.type === 'call') return { type: s.type, macro: s.macro }
     return { type: s.type, key: keyToken(s.key, s._keySrc) }
 }
 

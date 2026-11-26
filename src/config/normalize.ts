@@ -438,6 +438,7 @@ function normalizeMacroStep(
         }
     if (s.type === 'tap_time') return { type: 'tap_time', ms: s.ms }
     if (s.type === 'pause_for_release') return { type: 'pause_for_release' }
+    if (s.type === 'call') return { type: 'call', macro: s.macro }
     return { type: s.type, key: toCanonical(s.key), _keySrc: s.key }
 }
 

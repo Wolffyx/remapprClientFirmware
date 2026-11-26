@@ -608,6 +608,9 @@ export const MacroStepSchema = z.discriminatedUnion('type', [
     z
         .object({ type: z.literal('pause_for_release') })
         .describe('Wait for the triggering key to be released.'),
+    z
+        .object({ type: z.literal('call'), macro: z.string().min(1) })
+        .describe('Run another macro (by id) inline, then continue.'),
 ])
 
 export const MacroSchema = z.object({

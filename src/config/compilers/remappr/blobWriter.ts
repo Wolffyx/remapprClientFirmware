@@ -396,6 +396,10 @@ export const MacroOp = {
     // Pause playback until the invoking key is released (no arg); a no-op when
     // it already lifted (ZMK &macro_pause_for_release).
     PauseForRelease: 4,
+    // Run another macro inline (arg = its TBL_MACRO index), then carry on.
+    // Needs GET_LIMITS Feature.MACRO_CALL; the device refuses a push whose
+    // calls run past the table, form a cycle or nest past its depth limit.
+    Call: 5,
 } as const
 
 // enum remappr_th_flavor.

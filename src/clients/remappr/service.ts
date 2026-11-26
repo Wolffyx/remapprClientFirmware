@@ -1116,6 +1116,8 @@ export class RemapprKeyboardService
             configVersion: version,
             parts: await this.partsFor(next),
             ...(this.deviceBlob ? { carryFrom: this.deviceBlob } : {}),
+            // Pre-limits firmware advertises nothing, so it runs no macro calls.
+            limits: { featureBitmask: this.limits?.featureBitmask ?? 0 },
         })
         // An error-level diagnostic means the blob does not say what the user
         // asked for (e.g. a NONE placeholder for a binding that failed to lower).

@@ -790,6 +790,9 @@ export const Feature = {
     CLUSTER_POWER: 1 << 22,
     /** TBL_CLUSTER v2 with the side map (§5.3). */
     TBL_CLUSTER_V2: 1 << 23,
+    /** TBL_MACRO CALL step (op 5). A push with a CALL to an image without it
+     *  is refused (ERR_REFERENCE). */
+    MACRO_CALL: 1 << 24,
 } as const
 
 /** The {@link Feature} bits under the camelCase names the config layer keys its
@@ -819,6 +822,7 @@ export const LimitsFeature = {
     clusterMode: Feature.CLUSTER_MODE,
     clusterPower: Feature.CLUSTER_POWER,
     tblClusterV2: Feature.TBL_CLUSTER_V2,
+    macroCall: Feature.MACRO_CALL,
 } as const
 
 /** A behavior family a keyboard image may build out (fw lib/behavior/Kconfig).

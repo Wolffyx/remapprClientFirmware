@@ -940,10 +940,6 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
         }
     }
 
-    // ── MACRO (optional) → synthetic CanonMacro[] ──
-    const macroT = table(TableId.Macro)
-    const macros = macroT ? readMacros(bytes, macroT, diag) : []
-
     // ── NAMES (optional, §24) → real DT labels for macros + composites ──
     const namesT = table(TableId.Names)
     const names = namesT
@@ -953,12 +949,12 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
               tapDances: new Map<number, string>(),
               modMorphs: new Map<number, string>(),
           }
-    // Rename macros in place so macroRef (and every macro binding) carries the
-    // real name; tap-dance / mod-morph names resolve per-cell via ctx below.
-    macros.forEach((m, i) => {
-        const nm = names.macros.get(i)
-        if (nm) m.id = nm
-    })
+    // ── MACRO (optional) → CanonMacro[], named so macroRef (every macro
+    // binding) and call steps carry the real name; tap-dance / mod-morph names
+    // resolve per-cell via ctx below.
+    const macroT = table(TableId.Macro)
+    const macroId = (i: number): string => names.macros.get(i) || `macro_${i}`
+    const macros = macroT ? readMacros(bytes, macroT, diag, macroId) : []
 
     const layerName = (i: number): string =>
         i >= 0 && i < numLayers ? `Layer ${i}` : `Layer ${i}`
@@ -1551,6 +1547,7 @@ function readMacros(
     bytes: Uint8Array,
     t: TableFrame,
     diag: DiagnosticBag,
+    macroId: (i: number) => string,
 ): CanonMacro[] {
     const r = ByteReader.frame(bytes, t)
     const count = r.u16()
@@ -1574,7 +1571,7 @@ function readMacros(
         // The device blanks a private macro's step bytes on read-back (§17).
         if (isPrivate && numSteps > 0 && allZero(bytes.subarray(start, r.pos))) {
             out.push({
-                id: `macro_${mi}`,
+                id: macroId(mi),
                 params: 0,
                 steps: [],
                 private: true,
@@ -1584,11 +1581,13 @@ function readMacros(
         }
         const steps: CanonMacroStep[] = []
         for (const [op, arg] of raw) {
-            const step = macroStep(op, arg, diag)
+            if (op === MacroOp.Call && arg >= count)
+                diag.warn(`macro ${mi} calls macro ${arg}, past the end of the table (${count})`)
+            const step = macroStep(op, arg, diag, macroId)
             if (step) steps.push(step)
         }
         out.push({
-            id: `macro_${mi}`,
+            id: macroId(mi),
             params: 0,
             steps,
             ...(isPrivate ? { private: true } : {}),
@@ -1597,22 +1596,33 @@ function readMacros(
     return out
 }
 
+// The wire ops whose arg is a keyboard usage.
+const KEY_STEP: Readonly<Record<number, 'tap' | 'press' | 'release'>> = {
+    [MacroOp.Tap]: 'tap',
+    [MacroOp.Press]: 'press',
+    [MacroOp.Release]: 'release',
+}
+
 function macroStep(
     op: number,
     arg: number,
     diag: DiagnosticBag,
+    macroId: (i: number) => string,
 ): CanonMacroStep | null {
     if (op === MacroOp.Wait) return { type: 'wait', ms: arg }
     if (op === MacroOp.PauseForRelease) return { type: 'pause_for_release' }
+    if (op === MacroOp.Call) return { type: 'call', macro: macroId(arg) }
+    const type = KEY_STEP[op]
+    if (type === undefined) {
+        diag.warn(`macro step op ${op} unknown — step dropped`)
+        return null
+    }
     const key = usageToKey(arg)
     if (key === null) {
         diag.warn(`macro step usage 0x${arg.toString(16)} not in catalog`)
         return null
     }
-    if (op === MacroOp.Tap) return { type: 'tap', key }
-    if (op === MacroOp.Press) return { type: 'press', key }
-    if (op === MacroOp.Release) return { type: 'release', key }
-    return null
+    return { type, key }
 }
 
 // TBL_COMBO: u16 count + per combo { u16 num_positions, u16 timeout, u8 layer,

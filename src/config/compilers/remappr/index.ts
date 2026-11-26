@@ -90,6 +90,7 @@ import { mergePartEntries, sensorEntries } from './sensor'
 import { type MatrixField, type MatrixFold, matrixPartEntries } from './matrix'
 import type { SensorInfo } from '../../../devices/types'
 import { clusterSidesFor } from './boardSides'
+import { Feature } from '../../../clients/remappr/protocol'
 import type { CanonicalKeyId } from '../../../catalog/types'
 import type {
     CanonHoldTapDef,
@@ -141,6 +142,13 @@ export interface RemapprCompileLimits {
     combosMax?: number
     comboPositionsMax?: number
     slidersMax?: number
+    /** Calls one macro may nest before a warning (CONFIG_REMAPPR_BEHAVIOR_
+     *  MACRO_CALL_DEPTH, 4 by default). Only a warning: each build sets its own
+     *  limit (0..16) and GET_LIMITS does not report it, so the device decides. */
+    macroCallDepth?: number
+    /** The device's GET_LIMITS feature bits; a macro call step needs
+     *  Feature.MACRO_CALL. Undefined (an export, no device) allows every step. */
+    featureBitmask?: number
 }
 const COMBO_MAX_KEYS = 8
 const COMBOS_MAX = 32
@@ -148,6 +156,7 @@ const COMBO_POSITIONS_MAX = 128
 const SLIDERS_MAX = 8
 const LEADER_MAX_KEYS = 5
 const POSITIONS_MAX = 128
+const MACRO_CALL_DEPTH_MAX = 4
 /** Fixed by the wire: the keymap's u8 layer count, the u16 key-override layer
  *  mask, TBL_LINK_PROFILE's override slots (REMAPPR_LINK_PROFILE_OVR_MAX). */
 const LAYERS_MAX = 255
@@ -322,12 +331,14 @@ function textToSteps(
 }
 
 // Lower one canonical macro step to zero or more wire steps. Structured tap/
-// press/release/wait + text + pause_for_release are supported; param/tap_time
-// are step MARKERS handled by lowerMacroSteps and never reach here.
+// press/release/wait + text + pause_for_release + call are supported; param/
+// tap_time are step MARKERS handled by lowerMacroSteps and never reach here.
+// `index` maps a plain macro's id to its TBL_MACRO record, for calls.
 function lowerMacroStep(
     step: CanonMacroStep,
     diag: DiagnosticBag,
     path: (string | number)[],
+    index: ReadonlyMap<string, number>,
 ): MacroStep[] {
     switch (step.type) {
         case 'tap':
@@ -349,6 +360,11 @@ function lowerMacroStep(
             return textToSteps(step.text, diag, path)
         case 'pause_for_release':
             return [{ op: MacroOp.PauseForRelease, arg: 0 }]
+        case 'call': {
+            // An unknown or parameterized target is reported by checkMacroCalls.
+            const idx = index.get(step.macro)
+            return idx === undefined ? [] : [{ op: MacroOp.Call, arg: idx }]
+        }
         default:
             diag.error(
                 `${TARGET} can't play the macro step "${step.type}" yet.`,
@@ -367,12 +383,14 @@ function lowerMacroStep(
 //    slot, so a parameterized macro is CLONED per distinct argument at compile
 //    time — "host clone-per-instance" (§44.3); substKey is that instance's
 //    argument, undefined while lowering a plain (non-template) macro.
+// `index` maps each plain macro's id to its record, for `call` steps.
 function lowerMacroSteps(
     m: CanonMacro,
     mi: number,
     diag: DiagnosticBag,
-    substKey?: CanonicalKeyId,
+    opts: { index: ReadonlyMap<string, number>; substKey?: CanonicalKeyId },
 ): MacroStep[] {
+    const { index, substKey } = opts
     let tapMs = 0
     let pendingParam = false
     const steps: MacroStep[] = []
@@ -419,7 +437,7 @@ function lowerMacroSteps(
                 )
             return
         }
-        steps.push(...lowerMacroStep(step, diag, path))
+        steps.push(...lowerMacroStep(step, diag, path, index))
     })
     if (pendingParam)
         diag.warn(
@@ -443,10 +461,73 @@ interface MacroCtx {
     instanceNames: NameRecord[]
 }
 
+const isTemplate = (m: CanonMacro): boolean =>
+    m.steps.some((s) => s.type === 'param')
+
+// The call rules the device enforces on push (ERR_REFERENCE): the image runs
+// calls at all, every call names a plain macro, calls never loop (errors), and
+// no macro nests more than the depth limit (A calls B = depth 1). Depth is only
+// a warning: the build's limit is not reported, so the device has the say.
+function checkMacroCalls(
+    macros: CanonMacro[],
+    diag: DiagnosticBag,
+    limits: RemapprCompileLimits,
+): void {
+    const maxDepth = limits.macroCallDepth ?? MACRO_CALL_DEPTH_MAX
+    const canCall =
+        limits.featureBitmask === undefined ||
+        (limits.featureBitmask & Feature.MACRO_CALL) !== 0
+    const byId = new Map(macros.map((m) => [m.id, m]))
+    const depth = new Map<string, number>()
+    const onPath = new Set<string>()
+    const visit = (m: CanonMacro, mi: number): number => {
+        const done = depth.get(m.id)
+        if (done !== undefined) return done
+        onPath.add(m.id)
+        let d = 0
+        m.steps.forEach((s, si) => {
+            if (s.type !== 'call') return
+            const path = ['macros', mi, 'steps', si]
+            if (!canCall)
+                return diag.error(
+                    `macro "${m.id}" calls "${s.macro}", but this keyboard's firmware cannot ` +
+                        'run one macro from another — remove the call, or update the firmware',
+                    path,
+                )
+            const t = byId.get(s.macro)
+            if (!t) return diag.error(`macro "${m.id}" calls unknown macro "${s.macro}"`, path)
+            if (isTemplate(t))
+                return diag.error(
+                    `macro "${m.id}" calls "${s.macro}", which takes a parameter — a call cannot pass one`,
+                    path,
+                )
+            if (onPath.has(t.id))
+                return diag.error(
+                    `macro "${m.id}" calls "${s.macro}", which calls back into it — macro calls cannot loop`,
+                    path,
+                )
+            d = Math.max(d, 1 + visit(t, macros.indexOf(t)))
+        })
+        onPath.delete(m.id)
+        depth.set(m.id, d)
+        return d
+    }
+    macros.forEach((m, mi) => {
+        const d = visit(m, mi)
+        if (d > maxDepth)
+            diag.warn(
+                `macro "${m.id}" nests calls ${d} deep; default firmware allows ${maxDepth}, ` +
+                    'so the keyboard may refuse it unless its build allows more',
+                ['macros', mi],
+            )
+    })
+}
+
 // Encode all plain macros into wire records; collect parameterized templates.
 function buildMacros(
     macros: CanonMacro[] | undefined,
     diag: DiagnosticBag,
+    limits: RemapprCompileLimits,
 ): MacroCtx {
     const ctx: MacroCtx = {
         records: [],
@@ -455,8 +536,12 @@ function buildMacros(
         instances: new Map(),
         instanceNames: [],
     }
-    ;(macros ?? []).forEach((m, mi) => {
-        if (m.steps.some((s) => s.type === 'param')) {
+    const all = macros ?? []
+    // Index every plain macro up front: a call may name one defined later.
+    all.filter((m) => !isTemplate(m)).forEach((m, i) => ctx.index.set(m.id, i))
+    checkMacroCalls(all, diag, limits)
+    all.forEach((m, mi) => {
+        if (isTemplate(m)) {
             ctx.templates.set(m.id, { m, mi })
             return
         }
@@ -469,9 +554,8 @@ function buildMacros(
                 ['macros', mi],
             )
         }
-        const steps = lowerMacroSteps(m, mi, diag)
+        const steps = lowerMacroSteps(m, mi, diag, { index: ctx.index })
         warnDeadMacroUsages(steps, diag, ['macros', mi])
-        ctx.index.set(m.id, ctx.records.length)
         ctx.records.push({
             steps,
             ...(m.private ? { private: true } : {}),
@@ -888,7 +972,10 @@ function lowerCanonAction(
                 let idx = macroCtx.instances.get(ikey)
                 if (idx === undefined) {
                     idx = macroCtx.records.length
-                    const steps = lowerMacroSteps(tpl.m, tpl.mi, diag, action.param)
+                    const steps = lowerMacroSteps(tpl.m, tpl.mi, diag, {
+                        index: macroCtx.index,
+                        substKey: action.param,
+                    })
                     warnDeadMacroUsages(steps, diag, path)
                     macroCtx.records.push({
                         steps,
@@ -1380,7 +1467,7 @@ function encodeBlob(
         )
 
     // Macros first: BH_MACRO cells reference them by index.
-    const macroCtx = buildMacros(config.macros, diag)
+    const macroCtx = buildMacros(config.macros, diag, limits)
     const layerIndex = new Map(config.layers.map((l, i) => [l.name, i]))
 
     // Composite (mod-morph / tap-dance) lowering context: definition lookups +

@@ -230,6 +230,10 @@ export function configRequiredFeatures(config: ConfigKeymap): number {
     if (config.node?.clusterSides?.length || config.board?.sides?.length)
         req |= LimitsFeature.tblClusterV2
 
+    // A macro CALL step: an image without it refuses the push (ERR_REFERENCE).
+    if ((config.macros ?? []).some((m) => m.steps.some((s) => s.type === 'call')))
+        req |= LimitsFeature.macroCall
+
     // Each behavior family the config uses: its bit must be set (or the device
     // predate family advertisement — see effectiveFeatureBitmask).
     for (const f of configRequiredFamilies(config)) req |= BEHAVIOR_FAMILY_BIT[f]
@@ -240,6 +244,14 @@ export function configRequiredFeatures(config: ConfigKeymap): number {
 /** The warning for one missing feature bit: a family the image was built
  *  without blocks the save; anything else is a field the firmware ignores. */
 function warningFor(name: FeatureName, bit: number): CapabilityWarning {
+    if (bit === LimitsFeature.macroCall)
+        return {
+            feature: name,
+            blocking: true,
+            message:
+                "This keyboard's firmware cannot run one macro from another, so it will " +
+                'refuse this config — remove the macro call steps, or update the firmware.',
+        }
     const family = FAMILY_BY_BIT.get(bit)
     if (family)
         return {
