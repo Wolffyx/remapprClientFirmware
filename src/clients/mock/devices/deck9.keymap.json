@@ -76,14 +76,14 @@
                 "F16",
                 "F17",
                 "F18",
-                "Mute",
+                "media.mute",
                 "Play/Pause",
                 "PRINTSCREEN"
             ],
             "encoders": [
                 {
-                    "cw": "Volume Up",
-                    "ccw": "Volume Down"
+                    "cw": "media.volume_increment",
+                    "ccw": "media.volume_decrement"
                 },
                 {
                     "cw": "PAGE_DOWN",

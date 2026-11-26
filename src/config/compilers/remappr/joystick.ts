@@ -2,19 +2,24 @@
 //
 // Joystick settings (`joystick` in a device document) <-> TBL_JOYSTICK (id 28)
 // and its button actions <-> TBL_ACTION_BINDING (id 17, GAMEPAD_* kinds).
-// Only what differs from the defaults is read back. Byte layout mirrors firmware
-// include/remappr/config_blob.h (TBL_JOYSTICK, TBL_PART, TBL_ACTION_BINDING) and
+// Only what differs from the defaults is written and read back, so a decode ->
+// encode round trip is byte-identical. Byte layout mirrors firmware
+// include/remappr/config_blob.h (TBL_JOYSTICK, TBL_ACTION_BINDING) and
 // action.h (input-layout plan §4).
 //
-// TBL_JOYSTICK v2 holds what an input means (its report axis) and the hat; how
-// the input is read (invert, radial, curve, deadzones) is its AXES part's, in
-// TBL_PART on that part's channel (docs/part-wire-v1.md §4). Which part and
-// channel an input is comes from the device's own part list: inputs are
-// numbered across the AXES parts in part order, each part's channels in turn
-// (firmware remappr_axes_locate). Without that list the compiler writes v1,
-// which the firmware still reads for one release.
-import { sensorSettingKey } from '../../../clients/remappr/sensorRegistry'
-import type { SensorInfo } from '../../../devices/types'
+// Firmware with AXES parts (docs/part-wire-v1.md §4) keeps each input's
+// shaping (invert, radial, curve, deadzones) as the part's per-channel
+// settings: TBL_JOYSTICK v2 then carries the report axes only and TBL_PART
+// the shaping. Without the device's part list the v1 table carries both;
+// that firmware still reads it for one release.
+import {
+    ANALOG_CLASS,
+    AXIS_SETTING_IDS,
+    type AxesChannel,
+    type AxesLayout,
+    type AxisField,
+    axesLayout,
+} from '../../../clients/remappr/axesLayout'
 import { JOYSTICK_POSITIONS } from '../../schema'
 import type {
     ConfigJoystick,
@@ -37,7 +42,6 @@ import {
     JOYSTICK_TBL_AXIS_LEN_V2,
     JOYSTICK_TBL_HDR_LEN,
     type JoystickTable,
-    type JoystickTableV2,
     type SensorTableEntry,
     SystemAction,
 } from './blobWriter'
@@ -64,97 +68,13 @@ export const JOYSTICK_ACTION_POSITIONS = JOYSTICK_POSITIONS
 const axisCode = (out: JoystickAxisId | null): number =>
     out === null ? JOY_AXIS_OFF : JOYSTICK_AXIS_IDS.indexOf(out)
 
-/** AXES part settings (dt-bindings/remappr/sensor.h REMAPPR_SENSOR_*). */
-export const AxisSetting = {
-    invert: 0x40,
-    radial: 0x41,
-    curve: 0x42,
-    inner: 0x43,
-    outer: 0x44,
-} as const
-const AXIS_SETTING_IDS: ReadonlySet<number> = new Set(Object.values(AxisSetting))
-
-/** Whether TBL_PART setting `id` is an axis's shaping (the joystick's own). */
-export const isAxisSetting = (id: number): boolean => AXIS_SETTING_IDS.has(id)
-
-/** Where an analog input sits: its AXES part and the channel on it. */
-export interface AxisPlace {
-    part: number
-    ch: number
-}
-
-/** The device's AXES parts (class analog) in part order, as input ranges. */
-function axesRanges(
-    sensors: readonly SensorInfo[],
-): Array<{ part: number; first: number; count: number }> {
-    let first = 0
-    return [...sensors]
-        .filter((s) => s.cls === 'analog')
-        .sort((a, b) => a.index - b.index)
-        .map((s) => {
-            const range = { part: s.index, first, count: s.channels }
-            first += s.channels
-            return range
-        })
-}
-
-/** Input -> its place, from the device's parts. undefined = no AXES part has it. */
-export function axisPlaceOf(
-    sensors: readonly SensorInfo[],
-    input: number,
-): AxisPlace | undefined {
-    const r = axesRanges(sensors).find(
-        (x) => input >= x.first && input < x.first + x.count,
-    )
-    return r ? { part: r.part, ch: input - r.first } : undefined
-}
-
-/** Place -> its input, from the device's parts; without them, a single AXES
- *  part is assumed (input = channel). */
-function inputAt(
-    place: AxisPlace,
-    sensors: readonly SensorInfo[] | undefined,
-): number | undefined {
-    if (!sensors) return place.ch
-    const r = axesRanges(sensors).find((x) => x.part === place.part)
-    return r && place.ch < r.count ? r.first + place.ch : undefined
-}
-
-/** The five shaping settings of one input, as TBL_PART entries on its place.
- *  All five are written, so a board default never shows through a setting the
- *  document holds (the same set the firmware derives from a v1 entry), except
- *  one the part does not list while the document leaves it at its default:
- *  the device refuses a whole config over a setting its part lacks. */
-function shapingEntries(
-    a: JoystickAxisConfig,
-    at: AxisPlace,
-    sensors: readonly SensorInfo[],
-): SensorTableEntry[] {
-    const values: [number, number][] = [
-        [AxisSetting.invert, a.invert ? 1 : 0],
-        [AxisSetting.radial, a.radial ? 1 : 0],
-        [AxisSetting.curve, CURVES.indexOf(a.curve ?? 'linear')],
-        [AxisSetting.inner, a.inner ?? 0],
-        [AxisSetting.outer, a.outer ?? 0],
-    ]
-    const listed = new Set(
-        sensors.find((x) => x.index === at.part)?.settings.map((x) => x.name),
-    )
-    return values
-        .filter(([id, value]) => value !== 0 || listed.has(sensorSettingKey(id)))
-        .map(([id, value]) => ({ sensor: at.part, id, ch: at.ch, value }))
-}
-
-/** What a joystick document compiles to: a TBL_JOYSTICK v2 and its shaping
- *  as TBL_PART entries, or (without the device's parts) a legacy v1 table. */
-export type JoystickRecords =
-    | { version: 2; table: JoystickTableV2; parts: SensorTableEntry[] }
-    | { version: 1; table: JoystickTable; parts: [] }
-
-function legacyRecord(j: ConfigJoystick): JoystickTable {
+/** Settings -> TBL_JOYSTICK record, or undefined when they set nothing. */
+export function joystickRecord(j: ConfigJoystick): JoystickTable | undefined {
+    const axes = j.axes ?? []
+    if (j.hatWays === undefined && axes.length === 0) return undefined
     return {
         hatWays: j.hatWays ?? 0,
-        axes: (j.axes ?? []).map((a) => ({
+        axes: axes.map((a) => ({
             input: a.input,
             out: axisCode(a.out),
             flags:
@@ -167,29 +87,50 @@ function legacyRecord(j: ConfigJoystick): JoystickTable {
     }
 }
 
-/**
- * Settings -> TBL_JOYSTICK (+ TBL_PART shaping), or undefined when they set
- * nothing. v2 needs `sensors` (the device's parts) to place every input; when
- * any input has no place, the whole table is written as v1 so no shaping is
- * lost.
- */
-export function joystickRecords(
-    j: ConfigJoystick,
-    sensors?: readonly SensorInfo[],
-): JoystickRecords | undefined {
-    const axes = j.axes ?? []
-    if (j.hatWays === undefined && axes.length === 0) return undefined
-    const places = axes.map((a) => (sensors ? axisPlaceOf(sensors, a.input) : undefined))
-    if (places.some((p) => p === undefined)) {
-        return { version: 1, table: legacyRecord(j), parts: [] }
+/** A joystick's settings as tables: TBL_JOYSTICK, and the TBL_PART entries
+ *  that hold its inputs' shaping (none for a v1 table). */
+export interface JoystickTables {
+    table?: JoystickTable
+    parts: SensorTableEntry[]
+}
+
+/** Input `a`'s whole shaping as AXES part settings (an input the table names
+ *  takes its shaping from the config alone, as a v1 entry did). */
+function shapingEntries(
+    a: JoystickAxisConfig,
+    at: AxesChannel,
+): SensorTableEntry[] {
+    const values: Record<AxisField, number> = {
+        invert: a.invert ? 1 : 0,
+        radial: a.radial ? 1 : 0,
+        curve: CURVES.indexOf(a.curve ?? 'linear'),
+        inner: a.inner ?? 0,
+        outer: a.outer ?? 0,
     }
+    return (Object.keys(values) as AxisField[]).map((f) => ({
+        sensor: at.part,
+        id: AXIS_SETTING_IDS[f],
+        ch: at.ch,
+        value: values[f],
+    }))
+}
+
+/**
+ * Settings -> TBL_JOYSTICK and the shaping's TBL_PART entries. With `axes`
+ * (the device's AXES parts) and every configured input among them, a v2 table
+ * plus part entries; otherwise the v1 table alone.
+ */
+export function joystickTables(
+    j: ConfigJoystick,
+    axes?: AxesLayout,
+): JoystickTables {
+    const v1 = joystickRecord(j)
+    if (!v1) return { parts: [] }
+    const at = axes ? v1.axes.map((a) => axes.locate(a.input)) : []
+    if (!axes || at.some((x) => !x)) return { table: v1, parts: [] }
     return {
-        version: 2,
-        table: {
-            hatWays: j.hatWays ?? 0,
-            axes: axes.map((a) => ({ input: a.input, out: axisCode(a.out) })),
-        },
-        parts: axes.flatMap((a, i) => shapingEntries(a, places[i]!, sensors!)),
+        table: { ...v1, version: 2 },
+        parts: (j.axes ?? []).flatMap((a, i) => shapingEntries(a, at[i]!)),
     }
 }
 
@@ -213,15 +154,16 @@ function readAxis(r: ByteReader): JoystickAxisConfig {
     return a
 }
 
+/** A v2 entry: the input and its report axis. */
 function readAxisV2(r: ByteReader): JoystickAxisConfig {
     const input = r.u8()
     return { input, out: JOYSTICK_AXIS_IDS[r.u8()] ?? null }
 }
 
 /**
- * TBL_JOYSTICK payload (version 1 or 2) in [start, end) -> settings, keeping
- * only what differs from the defaults. A v2 table carries no shaping; apply
- * the TBL_PART entries with applyAxisShaping. Returns an error message for a
+ * TBL_JOYSTICK payload in [start, end) (table `version` 1 or 2) -> settings,
+ * keeping only what differs from the defaults. A v2 table names the report
+ * axes only (withAxisParts adds the shaping). Returns an error message for a
  * frame too short for its count.
  */
 export function readJoystickTable(
@@ -248,63 +190,84 @@ export function readJoystickTable(
     return out
 }
 
-/** A TBL_PART value overrides what a v1 table entry carried, a 0 included: the
- *  device runs the TBL_PART value, so 0 puts the field back on its default
- *  (left out of the document). */
-const flag =
-    (k: 'invert' | 'radial') =>
-    (a: JoystickAxisConfig, v: number): void => {
-        if (v) a[k] = true
-        else delete a[k]
-    }
-const amount =
-    (k: 'inner' | 'outer') =>
-    (a: JoystickAxisConfig, v: number): void => {
-        if (v) a[k] = v
-        else delete a[k]
-    }
+/** The setting each axis-shaping registry id holds. */
+const FIELD_BY_ID: ReadonlyMap<number, AxisField> = new Map(
+    (Object.entries(AXIS_SETTING_IDS) as [AxisField, number][]).map(
+        ([f, id]) => [id, f],
+    ),
+)
 
-const SHAPING_FROM_WIRE: Readonly<
-    Record<number, (a: JoystickAxisConfig, v: number) => void>
-> = {
-    [AxisSetting.invert]: flag('invert'),
-    [AxisSetting.radial]: flag('radial'),
-    [AxisSetting.curve]: (a, v) => {
-        if (!v) delete a.curve
-        else if (CURVES[v]) a.curve = CURVES[v]
+/** A shaping value onto an input's settings, kept only when it differs from
+ *  the default (as readAxis keeps a v1 entry's). A TBL_PART value overrides
+ *  what a v1 table entry carried, a 0 included: the device runs the TBL_PART
+ *  value, so 0 puts the field back on its default (left out of the document). */
+const PUT_FIELD: {
+    readonly [F in AxisField]: (a: JoystickAxisConfig, v: number) => void
+} = {
+    invert: (a, v) => {
+        if (v) a.invert = true
+        else delete a.invert
     },
-    [AxisSetting.inner]: amount('inner'),
-    [AxisSetting.outer]: amount('outer'),
+    radial: (a, v) => {
+        if (v) a.radial = true
+        else delete a.radial
+    },
+    curve: (a, v) => {
+        if (!v) delete a.curve
+        else a.curve = CURVES[v] ?? 'linear'
+    },
+    inner: (a, v) => {
+        if (v) a.inner = v
+        else delete a.inner
+    },
+    outer: (a, v) => {
+        if (v) a.outer = v
+        else delete a.outer
+    },
+}
+
+/** Where the entries' parts put their channels when the device's own layout
+ *  is not at hand: each part as many channels as its highest one names (one
+ *  part, the usual joystick, is then exact). */
+function layoutOfEntries(
+    entries: readonly SensorTableEntry[],
+): AxesLayout | undefined {
+    const channels = new Map<number, number>()
+    for (const e of entries) {
+        const n = Math.max(channels.get(e.sensor) ?? 0, (e.ch ?? 0) + 1)
+        channels.set(e.sensor, n)
+    }
+    return axesLayout(
+        [...channels].map(([index, n]) => ({
+            index,
+            cls: ANALOG_CLASS,
+            channels: n,
+        })),
+    )
 }
 
 /**
- * The AXES shaping in TBL_PART `entries` onto `j`'s axes (a v2 table). An input
- * with shaping but no TBL_JOYSTICK entry gets one on its default axis. An entry
- * whose place maps to no input (by `sensors`, the device's parts) is left out.
+ * A table's settings with the shaping the TBL_PART `entries` hold for the
+ * inputs it names (a v2 table has none of its own; on a v1 table the TBL_PART
+ * value wins, as on the device) (`axes`: the device's AXES parts, else inferred from the
+ * entries). Entries of any other setting, or for an input the table does not
+ * name, are left out.
  */
-export function applyAxisShaping(
+export function withAxisParts(
     j: ConfigJoystick,
     entries: readonly SensorTableEntry[],
-    sensors?: readonly SensorInfo[],
+    axes?: AxesLayout,
 ): ConfigJoystick {
-    const axes = (j.axes ?? []).map((a) => ({ ...a }))
-    const axisOf = (input: number): JoystickAxisConfig => {
-        const found = axes.find((a) => a.input === input)
-        if (found) return found
-        const added: JoystickAxisConfig = { input, out: JOYSTICK_AXIS_IDS[input] ?? null }
-        axes.push(added)
-        return added
+    const shaping = entries.filter((e) => FIELD_BY_ID.has(e.id))
+    const layout = axes ?? layoutOfEntries(shaping)
+    if (!j.axes || !layout || shaping.length === 0) return j
+    const out = j.axes.map((a) => ({ ...a }))
+    for (const e of shaping) {
+        const input = layout.inputOf(e.sensor, e.ch ?? 0)
+        const a = out.find((x) => x.input === input)
+        if (a) PUT_FIELD[FIELD_BY_ID.get(e.id)!](a, e.value)
     }
-    for (const e of entries) {
-        const apply = SHAPING_FROM_WIRE[e.id] as
-            | ((a: JoystickAxisConfig, v: number) => void)
-            | undefined
-        if (!apply) continue
-        const input = inputAt({ part: e.sensor, ch: e.ch ?? 0 }, sensors)
-        if (input === undefined) continue
-        apply(axisOf(input), e.value)
-    }
-    return axes.length === 0 ? j : { ...j, axes }
+    return { ...j, axes: out }
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +294,7 @@ const TO_WIRE: {
         code: SystemAction.battery_show,
         arg0: 0,
     }),
+    unpair: () => ({ kind: ACT_SYSTEM, code: SystemAction.unpair, arg0: 0 }),
 }
 
 function toWire(a: JoystickButtonAction): Wire {
@@ -346,6 +310,12 @@ export function joystickActionRecords(
     )
 }
 
+/** The SYSTEM verbs a joystick button binds, by their code. */
+const SYSTEM_FROM_WIRE: Readonly<Record<number, JoystickButtonAction>> = {
+    [SystemAction.battery_show]: { action: 'batteryShow' },
+    [SystemAction.unpair]: { action: 'unpair' },
+}
+
 const FROM_WIRE: Readonly<
     Record<number, (code: number, arg0: number) => JoystickButtonAction | null>
 > = {
@@ -359,8 +329,7 @@ const FROM_WIRE: Readonly<
         const value = arg0 >= 0x8000 ? arg0 - 0x10000 : arg0
         return axis ? { action: 'axis', axis, value } : null
     },
-    [ACT_SYSTEM]: (code) =>
-        code === SystemAction.battery_show ? { action: 'batteryShow' } : null,
+    [ACT_SYSTEM]: (code) => SYSTEM_FROM_WIRE[code] ?? null,
 }
 
 /**

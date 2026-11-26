@@ -48,12 +48,14 @@ export {
 export { hapticPulse, setDisplay, DISPLAY_TEXT_MAX } from './feedback'
 export {
     servesHost,
-    getHostKeys,
-    setHostInt,
-    setHostTime,
-    setHostText,
-    clearHostValues,
-} from './host'
+    buildHostValuesApi,
+    buildHostSetArgs,
+    parseHostKeys,
+    HostVerb,
+    HOST_DATA_MAX,
+    HOST_TEXT_MAX,
+    HOST_KEY_MAX,
+} from './hostValues'
 export {
     getRateLimits,
     setReportRate,

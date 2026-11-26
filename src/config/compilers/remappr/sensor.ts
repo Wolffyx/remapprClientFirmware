@@ -93,6 +93,17 @@ export function sensorEntries(
     return { entries: [...byId.values()], skipped }
 }
 
+/** One TBL_PART from several lists of entries, in order; a later entry for
+ *  the same (part, setting, channel) replaces an earlier (the device refuses
+ *  a duplicate). */
+export function mergePartEntries(
+    ...lists: readonly SensorTableEntry[][]
+): SensorTableEntry[] {
+    const byKey = new Map<string, SensorTableEntry>()
+    for (const e of lists.flat()) byKey.set(`${e.sensor}/${e.id}/${e.ch ?? 0}`, e)
+    return [...byKey.values()]
+}
+
 /** A device document's `sensor` section -> TBL_SENSOR entries. */
 export function deviceSensorEntries(
     sensor: ConfigDeviceSensor | undefined,
@@ -102,10 +113,10 @@ export function deviceSensorEntries(
 }
 
 /**
- * TBL_SENSOR payload in [start, end) -> its entries. Returns an error message
- * for a frame too short for its count.
+ * TBL_PART payload in [start, end) -> its entries, in table order. Returns an
+ * error message for a frame too short for its count.
  */
-export function readSensorEntries(
+export function readPartEntries(
     bytes: Uint8Array,
     start: number,
     end: number,
@@ -149,16 +160,22 @@ export function sensorSettingsOf(
 }
 
 /**
- * TBL_SENSOR payload in [start, end) -> one part's settings by name: part
- * `index` when given, else the first part listed. Returns an error message for
- * a frame too short for its count.
+ * TBL_PART payload in [start, end) -> one part's settings by name: part
+ * `index` when given, else the first part listed. Parts another section holds
+ * (@p others, the displays) are not the sensor and are not read back. Returns
+ * an error message for a frame too short for its count.
  */
 export function readSensorTable(
     bytes: Uint8Array,
     start: number,
     end: number,
+    others: ReadonlySet<number> = new Set(),
     index?: number,
 ): ConfigDeviceSensor | string {
-    const entries = readSensorEntries(bytes, start, end)
-    return typeof entries === 'string' ? entries : sensorSettingsOf(entries, index)
+    const all = readPartEntries(bytes, start, end)
+    if (typeof all === 'string') return all
+    return sensorSettingsOf(
+        all.filter((e) => !others.has(e.sensor)),
+        index,
+    )
 }

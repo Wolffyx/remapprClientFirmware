@@ -53,14 +53,84 @@ const text = (filename: string, content: string): ExportedFile => ({
 
 /* ── ZMK ─────────────────────────────────────────────────────────────────── */
 
-const ZMK_BUILD_WORKFLOW = [
+// The ZMK release the exported config builds against. Boards differ between a
+// release and `main` (nice_nano_v2 is gone from main), so pin a release; bump
+// it here and the workflow, the west manifest and the README all follow.
+const ZMK_REVISION = 'v0.3'
+
+/** Marks a workflow that attaches its firmware to GitHub Releases. */
+export const RELEASE_MARKER = 'remappr:release'
+
+/**
+ * When the release job runs: on a release tag. Remappr's "Release to GitHub"
+ * tags `<item>-v<semver>` (several items can share a repo, each releasing
+ * its own versions); plain `v<semver>` tags are from before that.
+ */
+export const RELEASE_CONDITION =
+    "startsWith(github.ref, 'refs/tags/v') || (startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-v'))"
+
+// On a release tag (Remappr's "Release to GitHub" makes one with its
+// Release), attach every firmware file the build produced to that tag's
+// Release. The build job's artifacts are downloaded whatever their names, so
+// the same job serves the ZMK and QMK reusable workflows.
+const releaseJob = (what: string, condition: string): string[] => [
+    `  # ${RELEASE_MARKER}: attaches the firmware to the GitHub Release of ${what}.`,
+    `  release:`,
+    `    if: ${condition}`,
+    `    needs: build`,
+    `    runs-on: ubuntu-latest`,
+    `    permissions:`,
+    `      contents: write`,
+    `    steps:`,
+    `      - uses: actions/download-artifact@v4`,
+    `        with:`,
+    `          path: firmware`,
+    `          merge-multiple: true`,
+    `      - name: Attach the firmware to the release`,
+    `        env:`,
+    '          GH_TOKEN: ${{ github.token }}',
+    '          GH_REPO: ${{ github.repository }}',
+    `        run: |`,
+    `          shopt -s globstar nullglob`,
+    `          files=(firmware/**/*.uf2 firmware/**/*.hex firmware/**/*.bin)`,
+    '          [ ${#files[@]} -gt 0 ] || { echo "No firmware files were built."; exit 1; }',
+    `          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||`,
+    `            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes ""`,
+    '          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber',
+]
+
+const RELEASE_JOB = releaseJob('a release tag', RELEASE_CONDITION)
+// Plain v* tags only (P10g, before per-item tags): kept so a repo still
+// holding it can be upgraded.
+const RELEASE_JOB_V1 = releaseJob(
+    'a v* tag',
+    "startsWith(github.ref, 'refs/tags/v')",
+)
+
+// Before releases (P10f): kept so a repo still holding it can be upgraded.
+const ZMK_BUILD_WORKFLOW_V1 = [
     `name: Build ZMK firmware`,
     `on: [push, pull_request, workflow_dispatch]`,
     `jobs:`,
     `  build:`,
-    `    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@main`,
+    `    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@${ZMK_REVISION}`,
     ``,
 ].join('\n')
+
+const zmkBuildWorkflow = (release: string[]): string =>
+    [
+        `name: Build ZMK firmware`,
+        `on: [push, pull_request, workflow_dispatch]`,
+        `jobs:`,
+        `  build:`,
+        `    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@${ZMK_REVISION}`,
+        ...release,
+        ``,
+    ].join('\n')
+
+const ZMK_BUILD_WORKFLOW = zmkBuildWorkflow(RELEASE_JOB)
+// With releases of plain v* tags (P10g).
+const ZMK_BUILD_WORKFLOW_V2 = zmkBuildWorkflow(RELEASE_JOB_V1)
 
 const ZMK_WEST_YML = [
     `manifest:`,
@@ -70,20 +140,43 @@ const ZMK_WEST_YML = [
     `  projects:`,
     `    - name: zmk`,
     `      remote: zmkfirmware`,
-    `      revision: main`,
+    `      revision: ${ZMK_REVISION}`,
     `      import: app/west.yml`,
     `  self:`,
     `    path: config`,
     ``,
 ].join('\n')
 
+// Makes the repo root a Zephyr module so the build finds the shield under the
+// top-level boards/ (the layout of zmkfirmware/unified-zmk-config-template).
+const ZMK_MODULE_YML = [
+    `build:`,
+    `  settings:`,
+    `    board_root: .`,
+    ``,
+].join('\n')
+
+const zmkLocalBuild = (board: string, shield: string): string =>
+    `west build -s zmk/app -b ${board} -- -DSHIELD=${shield} -DZMK_CONFIG="$(pwd)/config" -DZMK_EXTRA_MODULES="$(pwd)"`
+
+const zmkRepoFiles = (buildYaml: string, readme: string): ExportedFile[] => [
+    text(`config/west.yml`, ZMK_WEST_YML),
+    text(`zephyr/module.yml`, ZMK_MODULE_YML),
+    text(`build.yaml`, buildYaml),
+    text(`.github/workflows/build.yml`, ZMK_BUILD_WORKFLOW),
+    text(`README.md`, readme),
+]
+
 // pattern-check: skip pure string-template generators for a shield dir, no abstraction
 // ZMK shield-scaffold generators (Kconfig + metadata) mirroring a real shield dir.
 // `ZMK_KEYBOARD_NAME` is capped at 16 chars by ZMK; truncate the display name.
-const kconfigShield = (SHIELD: string): string =>
+// The symbol is upper-case; shields_list_contains matches the shield name as
+// build.yaml / -DSHIELD= spell it (lower-case), and Kconfig keeps whitespace in
+// function arguments, so there is no space after the comma.
+const kconfigShield = (shieldId: string): string =>
     [
-        `config SHIELD_${SHIELD}`,
-        `    def_bool $(shields_list_contains, ${SHIELD})`,
+        `config SHIELD_${shieldId.toUpperCase()}`,
+        `    def_bool $(shields_list_contains,${shieldId})`,
         ``,
     ].join('\n')
 
@@ -110,21 +203,22 @@ function zmkBundle(config: ConfigKeymap): ProjectBundle {
     const shieldId = sanitize(
         ctrl.shield || config.keyboard.id || config.meta.name,
     )
-    const SHIELD = shieldId.toUpperCase()
     const board = ctrl.board || 'YOUR_BOARD'
     const { files: compiled, diagnostics } = getCompiler('zmk').compile(config)
     const keymap = compiled.find((f) => f.filename.endsWith('.keymap'))
     const overlay = compiled.find((f) => f.filename.endsWith('.overlay'))
 
     // The custom shield lives in its own dir so the overlay/Kconfig describe a
-    // self-contained board ZMK can discover (config/boards/shields/<id>/), exactly
-    // like a hand-written zmk-config. The build matrix + manifest sit at the root.
-    const shieldDir = `config/boards/shields/${shieldId}`
+    // self-contained board ZMK can discover (boards/shields/<id>/), like the
+    // unified zmk-config template. The user's Kconfig flags go in config/,
+    // where the build reads them; a .conf in the shield dir is ignored.
+    const shieldDir = `boards/shields/${shieldId}`
+    const confPath = `config/${shieldId}.conf`
 
     const buildYaml = [
         `include:`,
         `  - board: ${board}`,
-        `    shield: ${SHIELD}`,
+        `    shield: ${shieldId}`,
         ``,
     ].join('\n')
 
@@ -142,14 +236,16 @@ function zmkBundle(config: ConfigKeymap): ProjectBundle {
         `## Build locally`,
         `\`\`\`sh`,
         `west init -l config && west update`,
-        `west build -s zmk/app -b ${board} -- -DSHIELD=${SHIELD} -DZMK_CONFIG="$(pwd)/config"`,
+        zmkLocalBuild(board, shieldId),
         `\`\`\``,
         ``,
         `## Notes`,
         `- Set \`board\` in \`build.yaml\` to your actual controller (currently \`${board}\`).`,
-        `- \`${shieldDir}/${SHIELD}.overlay\` holds the kscan + matrix-transform +`,
-        `  physical-layout; \`${SHIELD}.keymap\` the bindings; \`${SHIELD}.conf\` the`,
-        `  Kconfig flags. \`Kconfig.shield\` / \`Kconfig.defconfig\` register the shield.`,
+        `- \`${shieldDir}/${shieldId}.overlay\` holds the kscan + matrix-transform +`,
+        `  physical-layout; \`${shieldId}.keymap\` the bindings; \`Kconfig.shield\` /`,
+        `  \`Kconfig.defconfig\` register the shield. \`${confPath}\` holds the Kconfig flags.`,
+        `- Builds against ZMK \`${ZMK_REVISION}\` (\`config/west.yml\` and the workflow).`,
+        `  To move, change both refs; boards differ between releases and \`main\`.`,
         `- Re-check the matrix-transform \`RC()\` map against your real kscan wiring —`,
         `  remappr derives it from physical key position, not the electrical matrix.`,
         ``,
@@ -157,14 +253,14 @@ function zmkBundle(config: ConfigKeymap): ProjectBundle {
 
     const files: ExportedFile[] = [
         text(
-            `${shieldDir}/${SHIELD}.keymap`,
+            `${shieldDir}/${shieldId}.keymap`,
             keymap ? asText(keymap.content) : '',
         ),
-        text(`${shieldDir}/${SHIELD}.conf`, deriveZmkConf(config)),
-        text(`${shieldDir}/Kconfig.shield`, kconfigShield(SHIELD)),
+        text(confPath, deriveZmkConf(config)),
+        text(`${shieldDir}/Kconfig.shield`, kconfigShield(shieldId)),
         text(
             `${shieldDir}/Kconfig.defconfig`,
-            kconfigDefconfig(SHIELD, config.meta.name),
+            kconfigDefconfig(shieldId.toUpperCase(), config.meta.name),
         ),
         text(
             `${shieldDir}/${shieldId}.zmk.yml`,
@@ -173,14 +269,9 @@ function zmkBundle(config: ConfigKeymap): ProjectBundle {
     ]
     if (overlay)
         files.push(
-            text(`${shieldDir}/${SHIELD}.overlay`, asText(overlay.content)),
+            text(`${shieldDir}/${shieldId}.overlay`, asText(overlay.content)),
         )
-    files.push(
-        text(`config/west.yml`, ZMK_WEST_YML),
-        text(`build.yaml`, buildYaml),
-        text(`.github/workflows/build.yml`, ZMK_BUILD_WORKFLOW),
-        text(`README.md`, readme),
-    )
+    files.push(...zmkRepoFiles(buildYaml, readme))
 
     return { files, diagnostics, rootName: `${shieldId}-zmk-config` }
 }
@@ -190,10 +281,10 @@ function zmkBundle(config: ConfigKeymap): ProjectBundle {
 const kconfigShieldSplit = (s: ZmkSplitShields): string =>
     [
         `config SHIELD_${s.left.toUpperCase()}`,
-        `    def_bool $(shields_list_contains, ${s.left})`,
+        `    def_bool $(shields_list_contains,${s.left})`,
         ``,
         `config SHIELD_${s.right.toUpperCase()}`,
-        `    def_bool $(shields_list_contains, ${s.right})`,
+        `    def_bool $(shields_list_contains,${s.right})`,
         ``,
     ].join('\n')
 
@@ -233,7 +324,9 @@ function zmkSplitBundle(
     const leftOv = compiled.find((f) => f.filename.endsWith('_left.overlay'))
     const rightOv = compiled.find((f) => f.filename.endsWith('_right.overlay'))
 
-    const shieldDir = `config/boards/shields/${split.base}`
+    const shieldDir = `boards/shields/${split.base}`
+    // ZMK reads config/<base>.conf for both halves (it drops _left/_right).
+    const confPath = `config/${split.base}.conf`
     const buildYaml = [
         `include:`,
         `  - board: ${board}`,
@@ -257,15 +350,16 @@ function zmkSplitBundle(
         `## Build locally`,
         `\`\`\`sh`,
         `west init -l config && west update`,
-        `west build -s zmk/app -b ${board} -- -DSHIELD=${split.left} -DZMK_CONFIG="$(pwd)/config"`,
-        `west build -s zmk/app -b ${board} -- -DSHIELD=${split.right} -DZMK_CONFIG="$(pwd)/config"`,
+        zmkLocalBuild(board, split.left),
+        zmkLocalBuild(board, split.right),
         `\`\`\``,
         ``,
         `## Notes`,
         `- \`${split.base}.dtsi\` is the shared base (physical layout, matrix-transform,`,
         `  rows-only kscan, chosen). \`${split.left}.overlay\` / \`${split.right}.overlay\``,
         `  set each half's col-gpios; the right half offsets the transform.`,
-        `- Both halves share \`${split.base}.keymap\` and \`${split.base}.conf\`.`,
+        `- Both halves share \`${split.base}.keymap\` and \`${confPath}\`.`,
+        `- Builds against ZMK \`${ZMK_REVISION}\` (\`config/west.yml\` and the workflow).`,
         `- Re-check the per-half col-gpios + the matrix-transform \`RC()\` map against`,
         `  your real wiring — remappr derives them from physical key position.`,
         ``,
@@ -276,7 +370,7 @@ function zmkSplitBundle(
             `${shieldDir}/${split.base}.keymap`,
             keymap ? asText(keymap.content) : '',
         ),
-        text(`${shieldDir}/${split.base}.conf`, deriveZmkConf(config)),
+        text(confPath, deriveZmkConf(config)),
         text(`${shieldDir}/Kconfig.shield`, kconfigShieldSplit(split)),
         text(
             `${shieldDir}/Kconfig.defconfig`,
@@ -302,29 +396,111 @@ function zmkSplitBundle(
                 asText(rightOv.content),
             ),
         )
-    files.push(
-        text(`config/west.yml`, ZMK_WEST_YML),
-        text(`build.yaml`, buildYaml),
-        text(`.github/workflows/build.yml`, ZMK_BUILD_WORKFLOW),
-        text(`README.md`, readme),
-    )
+    files.push(...zmkRepoFiles(buildYaml, readme))
 
     return { files, diagnostics, rootName: `${split.base}-zmk-config` }
 }
 
 /* ── QMK ─────────────────────────────────────────────────────────────────── */
 
-const QMK_BUILD_WORKFLOW = [
+// The QMK a userspace builds against: upstream, or the Vial fork for a Vial
+// keymap (VIAL_ENABLE needs vial-qmk; upstream QMK has no Vial). VIA builds
+// on upstream.
+const QMK_SOURCES = {
+    qmk: { repo: 'qmk/qmk_firmware', ref: 'master' },
+    vial: { repo: 'vial-kb/vial-qmk', ref: 'vial' },
+} as const
+
+type QmkSource = { repo: string; ref: string }
+
+// The reusable workflow lives in the qmk/.github repo, under its own
+// .github/workflows/. It asks for `contents: write`, which the calling job
+// has to grant (a repo's default token may be read-only).
+// A userspace overlays keymaps, not keyboards: QMK only finds a keyboard
+// under qmk_firmware/keyboards/, so the build copies ours in first.
+const QMK_COPY_KEYBOARDS = 'cp -r keyboards/. qmk_firmware/keyboards/'
+
+const qmkBuildJob = (source: QmkSource): string[] => [
+    `name: Build QMK firmware`,
+    `on: [push, pull_request, workflow_dispatch]`,
+    `jobs:`,
+    `  build:`,
+    `    uses: qmk/.github/.github/workflows/qmk_userspace_build.yml@main`,
+    `    permissions:`,
+    `      contents: write`,
+    `    with:`,
+    `      qmk_repo: ${source.repo}`,
+    `      qmk_ref: ${source.ref}`,
+    `      preparation_command: ${QMK_COPY_KEYBOARDS}`,
+]
+
+const qmkBuildWorkflow = (source: QmkSource): string =>
+    [...qmkBuildJob(source), ...RELEASE_JOB, ``].join('\n')
+// Built, releasing plain v* tags only (before per-item tags).
+const qmkBuildWorkflowV3 = (source: QmkSource): string =>
+    [...qmkBuildJob(source), ...RELEASE_JOB_V1, ``].join('\n')
+
+// Earlier QMK workflows, kept so a repo still holding one can be upgraded.
+// Both named a path that is not in qmk/.github, so they never built.
+const qmkBrokenJob = (source: QmkSource): string[] => [
     `name: Build QMK firmware`,
     `on: [push, pull_request, workflow_dispatch]`,
     `jobs:`,
     `  build:`,
     `    uses: qmk/.github/workflows/qmk_userspace_build.yml@main`,
     `    with:`,
-    `      qmk_repo: qmk/qmk_firmware`,
-    `      qmk_ref: master`,
-    ``,
-].join('\n')
+    `      qmk_repo: ${source.repo}`,
+    `      qmk_ref: ${source.ref}`,
+]
+// Before releases (P10f).
+const QMK_BUILD_WORKFLOW_V1 = [...qmkBrokenJob(QMK_SOURCES.qmk), ``].join('\n')
+// With releases (P10g), before the path fix.
+const qmkBuildWorkflowV2 = (source: QmkSource): string =>
+    [...qmkBrokenJob(source), ...RELEASE_JOB_V1, ``].join('\n')
+
+/** Workflow files Remappr writes: each text it writes there today, with
+ *  the earlier texts that upgrade to it. */
+const WORKFLOW_VERSIONS: Record<
+    string,
+    { current: string; earlier: string[] }[]
+> = {
+    '.github/workflows/build.yml': [
+        {
+            current: ZMK_BUILD_WORKFLOW,
+            earlier: [ZMK_BUILD_WORKFLOW_V1, ZMK_BUILD_WORKFLOW_V2],
+        },
+    ],
+    '.github/workflows/build_binaries.yml': [
+        {
+            current: qmkBuildWorkflow(QMK_SOURCES.qmk),
+            earlier: [
+                QMK_BUILD_WORKFLOW_V1,
+                qmkBuildWorkflowV2(QMK_SOURCES.qmk),
+                qmkBuildWorkflowV3(QMK_SOURCES.qmk),
+            ],
+        },
+        {
+            current: qmkBuildWorkflow(QMK_SOURCES.vial),
+            earlier: [
+                qmkBuildWorkflowV2(QMK_SOURCES.vial),
+                qmkBuildWorkflowV3(QMK_SOURCES.vial),
+            ],
+        },
+    ],
+}
+
+/**
+ * A workflow as Remappr writes it today, when `text` is one Remappr wrote
+ * before (untouched since): the upgrade is safe. Null when the file is
+ * already current, edited by hand, or not Remappr's.
+ */
+export function upgradedWorkflow(path: string, text: string): string | null {
+    const known = WORKFLOW_VERSIONS[path] ?? []
+    return known.find((v) => v.earlier.includes(text))?.current ?? null
+}
+
+/** The workflow paths Remappr writes (any target). */
+export const WORKFLOW_PATHS: readonly string[] = Object.keys(WORKFLOW_VERSIONS)
 
 function qmkBundle(config: ConfigKeymap, target: Target): ProjectBundle {
     const kb = sanitize(config.keyboard.id || config.meta.name)
@@ -377,7 +553,9 @@ function qmkBundle(config: ConfigKeymap, target: Target): ProjectBundle {
         `3. Download the firmware artifact from the Actions run.`,
         ``,
         `## Build locally`,
+        `QMK finds keyboards only in its own tree, so copy this one in first:`,
         `\`\`\`sh`,
+        `cp -r ${kbDir} "$(qmk config -ro user.qmk_home | cut -d= -f2)/keyboards/"`,
         `qmk userspace-compile`,
         `# or: qmk compile -kb ${kb} -km ${km}`,
         `\`\`\``,
@@ -421,7 +599,10 @@ function qmkBundle(config: ConfigKeymap, target: Target): ProjectBundle {
         text(`${base}/rules.mk`, rulesMk),
         text(`${base}/config.h`, configH),
         text(`qmk.json`, qmkJson + '\n'),
-        text(`.github/workflows/build_binaries.yml`, QMK_BUILD_WORKFLOW),
+        text(
+            `.github/workflows/build_binaries.yml`,
+            qmkBuildWorkflow(wantsVial ? QMK_SOURCES.vial : QMK_SOURCES.qmk),
+        ),
         text(`README.md`, readme),
     ]
     if (viaJson)

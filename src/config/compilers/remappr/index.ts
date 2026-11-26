@@ -13,6 +13,7 @@
 // is an explicit gap that emits a diagnostic and a NONE placeholder so the blob
 // still forms. Closing those gaps is the §44.3 roadmap (firmware side first).
 
+import { sliderRecords } from './slider'
 import type { ExportedFile } from '../../../types'
 import { HID_USAGE_BY_CANONICAL } from '../../../catalog/entries'
 // Side-effect: the sibling `board` module registers the `remappr-board` shield /
@@ -62,10 +63,6 @@ import {
     CLUSTER_UID_MAX,
     LinkProfileId,
     hexToBytes,
-    SLIDER_BH_NONE,
-    SLIDER_STEPS_MAX,
-    SliderKind,
-    SliderTarget,
     type SliderRecord,
     type ActionBindingRecord,
     type ClusterNodeRecord,
@@ -84,26 +81,31 @@ import {
 } from './blobWriter'
 import { AUTOCORRECT_MAX_TYPO, encodeAutocorrectDictionary } from './autocorrect'
 import { carryUnmodeledTables } from './carry'
-import { displayRecord } from './display'
 import { mergeWire } from './wire'
 import { powerRecord } from './power'
+import { displaySettingEntries, encodeDisplays } from './display'
 import { radioRecord } from './radio'
 import { mouseRecord } from './mouse'
+import { mergePartEntries, sensorEntries } from './sensor'
+import { type MatrixField, type MatrixFold, matrixPartEntries } from './matrix'
+import type { SensorInfo } from '../../../devices/types'
 import { clusterSidesFor } from './boardSides'
-import { sensorEntries } from './sensor'
 import { Feature } from '../../../clients/remappr/protocol'
 import type { CanonicalKeyId } from '../../../catalog/types'
 import type {
     CanonHoldTapDef,
-    CanonLayer,
     CanonMacro,
     CanonMacroStep,
     CanonModMorph,
-    CanonSliderBinding,
     CanonTapDance,
     CanonTapHold,
 } from '../../types'
 import { MODIFIERS, resolveKeycode, type Modifier } from '../../keycodes'
+import { BUILDER_FIRMWARE_TARGETS } from '../../firmwareTargets'
+
+/** This export target's display name, for user-facing diagnostics. */
+const TARGET =
+    BUILDER_FIRMWARE_TARGETS.find((t) => t.id === 'remappr')?.name ?? 'Remappr'
 
 const COMBO_ANY_LAYER = 0xff
 const HID_PAGE_KEYBOARD = 7
@@ -218,7 +220,9 @@ const NONE_REC: BehaviorRecord = {
     subIndex: 0,
 }
 
-const rec = (p: Partial<BehaviorRecord> & { type: number }): BehaviorRecord => ({
+const rec = (
+    p: Partial<BehaviorRecord> & { type: number },
+): BehaviorRecord => ({
     ...NONE_REC,
     ...p,
 })
@@ -234,13 +238,13 @@ function keyUsage(
 ): number | null {
     const u = HID_USAGE_BY_CANONICAL.get(keyId)
     if (!u) {
-        diag.error(`no HID usage for key "${keyId}"`, path)
+        diag.error(`${TARGET} has no key code for the key "${keyId}".`, path)
         return null
     }
     if (u.page !== HID_PAGE_KEYBOARD) {
         diag.error(
-            `key "${keyId}" is on HID page ${u.page} — only keyboard-page ` +
-                `usages can be a macro / tap / sequence target (§44.4)`,
+            `The key "${keyId}" can't be used here: only keyboard keys can be ` +
+                `a macro, tap or sequence target.`,
             path,
         )
         return null
@@ -256,21 +260,41 @@ const HID_LSHIFT = 0xe1
 // ASCII char → [keyboard usage, needs-shift]. Letters/digits are computed; this
 // covers the punctuation + whitespace a `text` macro typically contains.
 const ASCII_PUNCT: Record<string, [number, boolean]> = {
-    ' ': [0x2c, false], '\n': [0x28, false], '\t': [0x2b, false],
-    '-': [0x2d, false], _: [0x2d, true],
-    '=': [0x2e, false], '+': [0x2e, true],
-    '[': [0x2f, false], '{': [0x2f, true],
-    ']': [0x30, false], '}': [0x30, true],
-    '\\': [0x31, false], '|': [0x31, true],
-    ';': [0x33, false], ':': [0x33, true],
-    "'": [0x34, false], '"': [0x34, true],
-    '`': [0x35, false], '~': [0x35, true],
-    ',': [0x36, false], '<': [0x36, true],
-    '.': [0x37, false], '>': [0x37, true],
-    '/': [0x38, false], '?': [0x38, true],
-    '!': [0x1e, true], '@': [0x1f, true], '#': [0x20, true], $: [0x21, true],
-    '%': [0x22, true], '^': [0x23, true], '&': [0x24, true], '*': [0x25, true],
-    '(': [0x26, true], ')': [0x27, true],
+    ' ': [0x2c, false],
+    '\n': [0x28, false],
+    '\t': [0x2b, false],
+    '-': [0x2d, false],
+    _: [0x2d, true],
+    '=': [0x2e, false],
+    '+': [0x2e, true],
+    '[': [0x2f, false],
+    '{': [0x2f, true],
+    ']': [0x30, false],
+    '}': [0x30, true],
+    '\\': [0x31, false],
+    '|': [0x31, true],
+    ';': [0x33, false],
+    ':': [0x33, true],
+    "'": [0x34, false],
+    '"': [0x34, true],
+    '`': [0x35, false],
+    '~': [0x35, true],
+    ',': [0x36, false],
+    '<': [0x36, true],
+    '.': [0x37, false],
+    '>': [0x37, true],
+    '/': [0x38, false],
+    '?': [0x38, true],
+    '!': [0x1e, true],
+    '@': [0x1f, true],
+    '#': [0x20, true],
+    $: [0x21, true],
+    '%': [0x22, true],
+    '^': [0x23, true],
+    '&': [0x24, true],
+    '*': [0x25, true],
+    '(': [0x26, true],
+    ')': [0x27, true],
 }
 
 // Resolve a single character to [usage, shift], or null if unprintable here.
@@ -343,7 +367,7 @@ function lowerMacroStep(
         }
         default:
             diag.error(
-                `macro step "${step.type}" not yet on the wire — §44.3 gap`,
+                `${TARGET} can't play the macro step "${step.type}" yet.`,
                 path,
             )
             return []
@@ -379,8 +403,8 @@ function lowerMacroSteps(
         if (s.type === 'param') {
             if ((s.from ?? 1) !== 1 || (s.to ?? 1) !== 1) {
                 diag.error(
-                    `multi-parameter macros (param ${s.from ?? 1}→${s.to ?? 1}) ` +
-                        `are not supported — only the one-param 1→1 form`,
+                    `${TARGET} supports macros with one parameter only ` +
+                        `(this one maps parameter ${s.from ?? 1}→${s.to ?? 1}).`,
                     path,
                 )
                 return
@@ -417,7 +441,7 @@ function lowerMacroSteps(
     })
     if (pendingParam)
         diag.warn(
-            `macro "${m.id}": trailing param marker has no following key step`,
+            `Macro "${m.id}": the parameter marker at the end has no key step after it.`,
             ['macros', mi, 'steps'],
         )
     return steps
@@ -666,8 +690,8 @@ function lowerHoldTap(
 
     if (tapTok !== 'kp') {
         diag.error(
-            `hold_tap "${action.ref}" tap behavior "${def.bindings[1]}" is not ` +
-                `&kp — a firmware hold-tap taps a single key`,
+            `Hold-tap "${action.ref}": the tap "${def.bindings[1]}" must be a ` +
+                `key press (&kp) — ${TARGET} hold-taps tap a single key.`,
             path,
         )
         return rec({ type: BehaviorType.None })
@@ -675,8 +699,8 @@ function lowerHoldTap(
     const tap = tokenUsage(action.tapParam)
     if (tap === null) {
         diag.error(
-            `hold_tap "${action.ref}" tap key "${action.tapParam}" is not a ` +
-                `keyboard usage`,
+            `Hold-tap "${action.ref}": the tap key "${action.tapParam}" is not ` +
+                `a keyboard key.`,
             path,
         )
         return rec({ type: BehaviorType.None })
@@ -706,8 +730,8 @@ function lowerHoldTap(
         const bit = u !== null ? usageToModBit(u) : null
         if (bit === null) {
             diag.error(
-                `hold_tap "${action.ref}" hold "${action.holdParam}" is not a ` +
-                    `modifier — only mod or layer holds are on the wire`,
+                `Hold-tap "${action.ref}": the hold "${action.holdParam}" is not ` +
+                    `a modifier — ${TARGET} can only hold a modifier or a layer.`,
                 path,
             )
             return rec({ type: BehaviorType.None })
@@ -730,7 +754,7 @@ function lowerHoldTap(
                 : undefined)
         if (li === undefined) {
             diag.error(
-                `hold_tap "${action.ref}" hold layer "${action.holdParam}" is unknown`,
+                `Hold-tap "${action.ref}": unknown hold layer "${action.holdParam}".`,
                 path,
             )
             return rec({ type: BehaviorType.None })
@@ -738,8 +762,8 @@ function lowerHoldTap(
         return rec({ type: BehaviorType.LayerTap, ...common, hold: li })
     }
     diag.error(
-        `hold_tap "${action.ref}" hold behavior "${def.bindings[0]}" is not on ` +
-            `the wire (firmware hold is a modifier or a layer only)`,
+        `Hold-tap "${action.ref}": ${TARGET} can't hold "${def.bindings[0]}" — ` +
+            `only a modifier or a layer.`,
         path,
     )
     return rec({ type: BehaviorType.None })
@@ -834,8 +858,8 @@ function lowerCanonAction(
                 // modifier field, so any mods on the binding are dropped.
                 if (action.mods?.length) {
                     diag.warn(
-                        `consumer key "${action.key}" carries modifiers — ` +
-                            `dropped (BH_CONSUMER emits a bare Consumer usage)`,
+                        `The modifiers on the media key "${action.key}" were ` +
+                            `dropped — ${TARGET} sends media keys on their own.`,
                         path,
                     )
                 }
@@ -848,8 +872,8 @@ function lowerCanonAction(
                 // has no modifier field, so any mods on the binding are dropped.
                 if (action.mods?.length) {
                     diag.warn(
-                        `system-control key "${action.key}" carries modifiers — ` +
-                            `dropped (BH_SYS_CTRL emits a bare GD usage)`,
+                        `The modifiers on the system key "${action.key}" were ` +
+                            `dropped — ${TARGET} sends system keys on their own.`,
                         path,
                     )
                 }
@@ -857,8 +881,8 @@ function lowerCanonAction(
             }
             if (u.page !== HID_PAGE_KEYBOARD) {
                 diag.error(
-                    `key "${action.key}" is on HID page ${u.page} (not yet on ` +
-                        `the wire — §44.4)`,
+                    `${TARGET} can't send the key "${action.key}" yet ` +
+                        `(it is on HID page ${u.page}).`,
                     path,
                 )
                 return rec({ type: BehaviorType.None })
@@ -883,8 +907,8 @@ function lowerCanonAction(
             if (tapUsage === null) return rec({ type: BehaviorType.None })
             if (action.tap.mods?.length) {
                 diag.warn(
-                    `tap_hold tap "${action.tap.key}" carries modifiers — ` +
-                        `dropped (firmware MOD_TAP tap is a single usage)`,
+                    `The modifiers on the tap key "${action.tap.key}" were ` +
+                        `dropped — ${TARGET} taps a single key.`,
                     [...path, 'tap'],
                 )
             }
@@ -975,8 +999,8 @@ function lowerCanonAction(
             }
             if (action.param !== undefined) {
                 diag.warn(
-                    `macro "${action.ref}" has no param step — ` +
-                        `binding argument ignored`,
+                    `Macro "${action.ref}" has no parameter step, so the ` +
+                        `binding's argument is ignored.`,
                     path,
                 )
             }
@@ -1047,8 +1071,8 @@ function lowerCanonAction(
             // op (the app holds an authenticated session), not a key binding.
             // Reject cleanly instead of silently emitting NONE.
             diag.error(
-                'studio_unlock is not a remappr keymap action — device unlock ' +
-                    'is handled by the RUCP control channel, not a key binding',
+                `studio_unlock is not a key action on ${TARGET} — the app ` +
+                    `unlocks the device over its control connection, not a key.`,
                 path,
             )
             return rec({ type: BehaviorType.None })
@@ -1208,7 +1232,14 @@ function lowerCanonAction(
                 diag.error(`unknown hold_tap "${action.ref}"`, path)
                 return rec({ type: BehaviorType.None })
             }
-            return lowerHoldTap(action, def, diag, path, layerIndex, comp.quickTapDefault)
+            return lowerHoldTap(
+                action,
+                def,
+                diag,
+                path,
+                layerIndex,
+                comp.quickTapDefault,
+            )
         }
         case 'tap_dance':
             return withComposite(`td:${action.ref}`, comp, diag, path, () => {
@@ -1219,8 +1250,8 @@ function lowerCanonAction(
                 }
                 if (def.hold)
                     diag.warn(
-                        `tap_dance "${action.ref}" hold target is not on the ` +
-                            `wire (firmware TAP_DANCE is tap-count only) — dropped`,
+                        `Tap dance "${action.ref}": ${TARGET} only counts taps, ` +
+                            `so the hold action was dropped.`,
                         path,
                     )
                 // sub[i] fires on (i+1) taps; counts past sub_count clamp to the
@@ -1245,8 +1276,8 @@ function lowerCanonAction(
                 for (let i = 0; i < maxCount; i++)
                     if (!filled[i])
                         diag.warn(
-                            `tap_dance "${action.ref}" has no action for ` +
-                                `${i + 1} tap(s) — emits none`,
+                            `Tap dance "${action.ref}" has no action for ` +
+                                `${i + 1} tap(s), so that count does nothing.`,
                             path,
                         )
                 const subIndex = comp.subs.length
@@ -1334,136 +1365,13 @@ function lowerCanonAction(
             // action type being added without a lowering arm.
             const unhandled = action as { type?: string }
             diag.error(
-                `action "${unhandled.type ?? 'unknown'}" not yet supported by ` +
-                    `the remappr target (§44.3 gap)`,
+                `${TARGET} doesn't support the action ` +
+                    `"${unhandled.type ?? 'unknown'}" yet.`,
                 path,
             )
             return rec({ type: BehaviorType.None })
         }
     }
-}
-
-/* ── sliders (TBL_SLIDER, slider part design §4b) ───────────────────────── */
-
-const SLIDER_STEPS_DEFAULT = 20
-
-type LowerFn = (a: CanonAction, path: (string | number)[]) => number
-
-/** A stepping map's two behaviors (up, down), or null when it has none. */
-const STEP_ACTIONS: Readonly<
-    Record<
-        'volume' | 'mouse_wheel' | 'custom',
-        (s: CanonSliderBinding) => [CanonAction, CanonAction | undefined] | null
-    >
-> = {
-    volume: () => [
-        { type: 'key_press', key: 'media.volume_increment' as CanonicalKeyId },
-        { type: 'key_press', key: 'media.volume_decrement' as CanonicalKeyId },
-    ],
-    mouse_wheel: () => [
-        { type: 'mouse_scroll', direction: 'up' },
-        { type: 'mouse_scroll', direction: 'down' },
-    ],
-    custom: (s) => (s.action ? [s.action, s.downAction] : null),
-}
-
-const LEVEL_TARGETS: Readonly<Record<'brightness' | 'hue', number>> = {
-    brightness: SliderTarget.rgbBrightness,
-    hue: SliderTarget.rgbHue,
-}
-
-function levelEntry(
-    s: CanonSliderBinding & { map: 'brightness' | 'hue' },
-    diag: DiagnosticBag,
-    path: (string | number)[],
-): Omit<SliderRecord, 'slider' | 'layer'> | null {
-    const min = s.min ?? 0
-    const max = s.max ?? 255
-    const inRange = (v: number): boolean => Number.isInteger(v) && v >= 0 && v <= 255
-    if (!inRange(min) || !inRange(max)) {
-        diag.error(`a ${s.map} slider's min and max are 0..255`, path)
-        return null
-    }
-    return {
-        kind: SliderKind.level,
-        arg: LEVEL_TARGETS[s.map],
-        min,
-        max,
-        up: SLIDER_BH_NONE,
-        down: SLIDER_BH_NONE,
-    }
-}
-
-function stepsEntry(
-    s: CanonSliderBinding & { map: 'volume' | 'mouse_wheel' | 'custom' },
-    diag: DiagnosticBag,
-    path: (string | number)[],
-    lower: LowerFn,
-): Omit<SliderRecord, 'slider' | 'layer'> | null {
-    const actions = STEP_ACTIONS[s.map](s)
-    if (!actions) {
-        diag.error(`a custom slider needs an action`, path)
-        return null
-    }
-    if (s.min !== undefined || s.max !== undefined)
-        diag.warn(`min / max apply to a brightness or hue slider — ignored`, path)
-    const steps = s.steps ?? SLIDER_STEPS_DEFAULT
-    if (!Number.isInteger(steps) || steps < 1 || steps > SLIDER_STEPS_MAX) {
-        diag.error(`a slider takes 1..${SLIDER_STEPS_MAX} steps`, path)
-        return null
-    }
-    const [up, down] = actions
-    return {
-        kind: SliderKind.steps,
-        arg: steps,
-        min: 0,
-        max: 0,
-        up: lower(up, [...path, 'action']),
-        down: down ? lower(down, [...path, 'downAction']) : SLIDER_BH_NONE,
-    }
-}
-
-const isLevelMap = (
-    s: CanonSliderBinding,
-): s is CanonSliderBinding & { map: 'brightness' | 'hue' } =>
-    s.map === 'brightness' || s.map === 'hue'
-
-/**
- * layers[].sliderBindings -> TBL_SLIDER entries. A binding is keyed by the key
- * position of an `element: "slider"` key; the wire names the slider by its
- * rank among those keys (the device's SLIDER parts in order).
- */
-function lowerSliders(
-    keys: ConfigKeymap['keyboard']['keys'],
-    layers: readonly CanonLayer[],
-    diag: DiagnosticBag,
-    lower: LowerFn,
-): SliderRecord[] {
-    const rank = new Map<number, number>()
-    keys.forEach((k, pos) => {
-        if (k.element === 'slider') rank.set(pos, rank.size)
-    })
-    const out: SliderRecord[] = []
-    layers.forEach((layer, li) => {
-        for (const [key, s] of Object.entries(layer.sliderBindings ?? {})) {
-            const path = ['layers', li, 'sliderBindings', key]
-            const slider = rank.get(Number(key))
-            if (slider === undefined) {
-                diag.error(`key ${key} is not a slider (element "slider")`, path)
-                continue
-            }
-            const entry = isLevelMap(s)
-                ? levelEntry(s, diag, path)
-                : stepsEntry(
-                      s as CanonSliderBinding & { map: 'volume' | 'mouse_wheel' | 'custom' },
-                      diag,
-                      path,
-                      lower,
-                  )
-            if (entry) out.push({ slider, layer: li, ...entry })
-        }
-    })
-    return out
 }
 
 /**
@@ -1496,12 +1404,44 @@ function checkPools(
 // path (version from meta) and the live-device commit path (version = active+1).
 // Does NOT 16-byte-pad — the golden artifact is unpadded; flash-alignment padding
 // is applied at push time by the control service, not baked into the blob.
+/** What the compiler may know about the device a blob is for. */
+export interface RemapprBlobOpts {
+    /** The device's described parts (GET_PARTS + their settings): its MATRIX
+     *  parts then hold the config's matrix timing (compilers/remappr/matrix.ts). */
+    parts?: readonly SensorInfo[]
+    /** The blob read off the device. Its tables the config does not model
+     *  (and the compile does not write) are carried over byte for byte, so
+     *  a save does not drop them; one that cannot be carried is an error. */
+    carryFrom?: Uint8Array
+    /** What the target firmware build holds (defaults: the firmware's). */
+    limits?: RemapprCompileLimits
+}
+
+/** The matrix timing that goes to the MATRIX parts, warned about where a part
+ *  would refuse a value. None without the device's part list. */
+function foldMatrix(
+    config: ConfigKeymap,
+    diag: DiagnosticBag,
+    parts: readonly SensorInfo[] | undefined,
+): MatrixFold {
+    if (!parts) return { entries: [], folded: new Set(), skipped: [] }
+    const fold = matrixPartEntries(config.defaults, parts)
+    for (const skip of fold.skipped) {
+        diag.warn(`matrix timing "${skip.key}" left out: ${skip.reason}`, [
+            'defaults',
+            skip.key,
+        ])
+    }
+    return fold
+}
+
 function encodeBlob(
     config: ConfigKeymap,
     diag: DiagnosticBag,
     configVersion: number,
-    limits: RemapprCompileLimits = {},
+    opts: RemapprBlobOpts = {},
 ): Uint8Array {
+    const limits = opts.limits ?? {}
     const numLayers = config.layers.length
     // numPositions is the physical key count. Prefer the declared geometry, but a
     // device with no stored geometry (a fresh/default config) leaves
@@ -1527,11 +1467,7 @@ function encodeBlob(
         )
 
     // Macros first: BH_MACRO cells reference them by index.
-    const macroCtx = buildMacros(
-        config.macros,
-        diag,
-        limits,
-    )
+    const macroCtx = buildMacros(config.macros, diag, limits)
     const layerIndex = new Map(config.layers.map((l, i) => [l.name, i]))
 
     // Composite (mod-morph / tap-dance) lowering context: definition lookups +
@@ -1618,11 +1554,21 @@ function encodeBlob(
         })
     })
 
+    // Sliders (optional, slider part design §4b): slot = slider index; their
+    // STEPS actions join the BEHAVIOR table like the encoders' outputs.
+    const sliders = sliderRecords(
+        config,
+        (action, path) =>
+            getOrAdd(lowerAction(action, diag, path, macroCtx, layerIndex, comp)),
+        diag,
+        TARGET,
+    )
+
     // Encoders (optional, §4a). Slot-array form: layer.encoders[slot] is
     // index-aligned to keyboard.encoders[], so the slot ordinal is the firmware
     // encoder_index. cw/ccw/press each lower to a behavior index (cw/ccw are
-    // required; an absent press is ENCODER_BH_NONE). The keyed encoderBindings
-    // builder form is not yet on the wire — warn rather than silently drop.
+    // required; an absent press is ENCODER_BH_NONE — a knob key's press is its
+    // own key binding).
     const encoders: EncoderRecord[] = []
     config.layers.forEach((layer, li) => {
         layer.encoders?.forEach((binding, slot) => {
@@ -1651,13 +1597,6 @@ function encodeBlob(
                 pressIndex: lower(binding.press, 'press'),
             })
         })
-        if (layer.encoderBindings) {
-            diag.warn(
-                `keyed encoderBindings are not yet lowered to the wire — use ` +
-                    `the slot-array layer.encoders[] form`,
-                ['layers', li, 'encoderBindings'],
-            )
-        }
     })
 
     // Conditional (tri-)layers (optional). Layer names resolve to indices.
@@ -1748,23 +1687,24 @@ function encodeBlob(
         },
     )
 
-    const sliders = lowerSliders(config.keyboard.keys, config.layers, diag, (a, path) =>
-        getOrAdd(lowerAction(a, diag, path, macroCtx, layerIndex, comp)),
-    )
-
     const defaultTermMs = config.defaults?.tappingTermMs ?? 200
     const releaseMs = config.defaults?.releaseDebounceMs ?? 0
+    // Matrix timing a MATRIX part holds goes to TBL_PART; the tail carries 0
+    // (= none) for it (firmware docs/part-wire-v1.md §4).
+    const matrix = foldMatrix(config, diag, opts.parts)
+    const tail = (f: MatrixField): number | undefined =>
+        matrix.folded.has(f) ? undefined : config.defaults?.[f]
 
     const builder = new BlobBuilder()
         .layerTable(numLayers, numPositions, defaultTermMs, releaseMs, {
             pressDebounceMs: config.defaults?.pressDebounceMs,
-            matrixPressDebounceMs: config.defaults?.matrixPressDebounceMs,
-            matrixReleaseDebounceMs: config.defaults?.matrixReleaseDebounceMs,
+            matrixPressDebounceMs: tail('matrixPressDebounceMs'),
+            matrixReleaseDebounceMs: tail('matrixReleaseDebounceMs'),
             capsWordIdleMs: config.defaults?.capsWordIdleMs,
             stickyReleaseDefaultMs: config.defaults?.stickyReleaseDefaultMs,
             macroDefaultWaitMs: config.defaults?.macroDefaultWaitMs,
             macroDefaultTapMs: config.defaults?.macroDefaultTapMs,
-            matrixPollPeriodMs: config.defaults?.matrixPollPeriodMs,
+            matrixPollPeriodMs: tail('matrixPollPeriodMs'),
         })
         .behaviorTable(behaviors)
         .bindingTable(cells)
@@ -1775,7 +1715,8 @@ function encodeBlob(
     subs.forEach((s, si) => {
         if (s.posHold) {
             diag.warn(
-                `positional hold inside a composite is not on the wire — dropped`,
+                `${TARGET} can't use hold-trigger key positions inside a ` +
+                    `combined behavior, so they were dropped.`,
                 ['subs', si],
             )
             delete s.posHold
@@ -1793,20 +1734,17 @@ function encodeBlob(
     checkPools(combos, sliders, limits, diag)
     if (combos.length > 0) builder.comboTable(combos)
     if (encoders.length > 0) builder.encoderTable(encoders)
-    // TBL_SLIDER (slider part design §4b): layers[].sliderBindings, by the key
-    // position of an `element: "slider"` key. STEPS name BEHAVIOR indices, so
-    // they were lowered (lowerSliders) before the BEHAVIOR table was written.
+    // TBL_SLIDER (slider part design §4b): layers[].sliders, slot = slider
+    // index. STEPS name BEHAVIOR indices, so they were lowered (sliderRecords)
+    // before the BEHAVIOR table was written.
     if (sliders.length > 0) builder.sliderTable(sliders)
-    // TBL_DISPLAY (display part design §3): what each display shows.
-    const display = config.node?.display
-        ? displayRecord(config.node.display, diag)
-        : undefined
-    if (display) builder.displayTable(display)
     // TBL_MOUSE (§4b): pointer settings from the v2 node.mouse block. Emitted
     // when the node declares any pointer intent; version 2 only when it uses an
     // inverts / swap / scroll divisor / button-map field (compilers/remappr/
     // mouse.ts). Old firmware skips the unknown table.
-    const mouseRec = config.node?.mouse ? mouseRecord(config.node.mouse) : undefined
+    const mouseRec = config.node?.mouse
+        ? mouseRecord(config.node.mouse)
+        : undefined
     if (mouseRec) builder.mouseTable(mouseRec)
     // TBL_SENSOR (sensor-settings plan §4b): the product's sensor defaults from
     // node.sensor.defaults, for the part node.sensor.part names (default 0),
@@ -1823,7 +1761,26 @@ function encodeBlob(
             skip.key,
         ])
     }
-    if (sensor.entries.length > 0) builder.sensorTable(sensor.entries)
+    // The display parts' own settings (brightness, invert, rotation).
+    const shownParts = displaySettingEntries(config.node?.displays, opts.parts)
+    for (const skip of shownParts.skipped) {
+        diag.warn(`display setting "${skip.key}" left out: ${skip.reason}`, [
+            'node',
+            'displays',
+            skip.display,
+            'settings',
+            skip.key,
+        ])
+    }
+    // One TBL_PART: those defaults, the displays' settings, then the matrix
+    // timing (the user's own tuning wins over a product default for the same
+    // setting).
+    const partTable = mergePartEntries(
+        sensor.entries,
+        shownParts.entries,
+        matrix.entries,
+    )
+    if (partTable.length > 0) builder.sensorTable(partTable)
     // TBL_RGB (§4c): per-key static colors from keyboard.lighting.perKey, emitted
     // as a flat (non-per-layer) RGB888 map over every physical position; unset
     // positions stay black (0,0,0). The firmware LED sink renders it locally.
@@ -1878,7 +1835,7 @@ function encodeBlob(
         : undefined
     if (personality && personalityCode === undefined) {
         diag.warn(
-            `node personality '${personality}' is configured by a device document, not a keymap — not emitted`,
+            `The device type '${personality}' is set in the device file, not the keymap, so it was left out.`,
             ['node', 'personality'],
         )
     }
@@ -1887,8 +1844,11 @@ function encodeBlob(
         ? CFG_ROLE_VALID | (role === 'coordinator' ? CFG_ROLE_COORD : 0)
         : 0
     const fwdMode =
-        nodeCfg?.forwardMode === 'physical' ? FWD_MODE_PHYSICAL : FWD_MODE_RESOLVED
-    const clusterMode = nodeCfg?.clusterMode === 'alone' ? CLUSTER_MODE_ALONE : CLUSTER_MODE_AUTO
+        nodeCfg?.forwardMode === 'physical'
+            ? FWD_MODE_PHYSICAL
+            : FWD_MODE_RESOLVED
+    const clusterMode =
+        nodeCfg?.clusterMode === 'alone' ? CLUSTER_MODE_ALONE : CLUSTER_MODE_AUTO
     const clusterPower = {
         auto: CLUSTER_POWER_AUTO,
         follow: CLUSTER_POWER_FOLLOW,
@@ -1921,7 +1881,7 @@ function encodeBlob(
             const uid = hexToBytes(c.uid)
             if (uid.length > CLUSTER_UID_MAX)
                 diag.warn(
-                    `cluster node ${i} uid is ${uid.length} bytes — truncated to ${CLUSTER_UID_MAX}`,
+                    `Node ${i}: its UID is ${uid.length} bytes, cut to ${CLUSTER_UID_MAX}.`,
                     ['node', 'cluster', i],
                 )
             return {
@@ -1962,6 +1922,14 @@ function encodeBlob(
     // TBL_POWER (sleep-wake design): idle / sleep / off timeouts on battery.
     const power = nodeCfg?.power ? powerRecord(nodeCfg.power) : undefined
     if (power) builder.powerTable(power)
+    // TBL_DISPLAY (display part design §3): what the device's displays show.
+    if (nodeCfg?.displays?.length) {
+        const shown = encodeDisplays(nodeCfg.displays)
+        for (const p of shown.problems) {
+            diag.error(p.message, ['node', 'displays', ...p.path])
+        }
+        if (shown.payload) builder.displayTable(shown.payload)
+    }
     if (conditionals.length > 0) builder.conditionalTable(conditionals)
     if (keyOverrides.length > 0) builder.keyOverrideTable(keyOverrides)
     if (leaders.length > 0) builder.leaderTable(leaders)
@@ -1972,7 +1940,7 @@ function encodeBlob(
         .filter((b) => {
             if (b.position < numPositions) return true
             diag.warn(
-                `action binding position ${b.position} >= ${numPositions} positions — dropped`,
+                `Action binding at position ${b.position} is past the last key (${numPositions} keys), so it was dropped.`,
                 ['actionBindings'],
             )
             return false
@@ -2000,7 +1968,7 @@ function encodeBlob(
             )
         } catch (e) {
             diag.error(
-                `autocorrect dictionary not encodable: ${e instanceof Error ? e.message : String(e)}`,
+                `The autocorrect dictionary can't be saved: ${e instanceof Error ? e.message : String(e)}`,
                 ['autocorrect'],
             )
         }
@@ -2010,9 +1978,11 @@ function encodeBlob(
     // Macros are keyed by their table index; composites by sub_index (collected in
     // comp.names as each was lowered). Emitted last; absent when there are none.
     const names: NameRecord[] = [
-        ...[...macroCtx.index].map(
-            ([name, ref]): NameRecord => ({ kind: NameKind.Macro, ref, name }),
-        ),
+        ...[...macroCtx.index].map(([name, ref]): NameRecord => ({
+            kind: NameKind.Macro,
+            ref,
+            name,
+        })),
         ...macroCtx.instanceNames,
         ...comp.names,
     ]
@@ -2040,22 +2010,15 @@ function exportConfigVersion(config: ConfigKeymap): number {
  * Pure ConfigKeymap → RMBC blob entry point for callers outside the compile
  * pipeline (the live-device commit path). Returns the blob bytes plus the
  * diagnostics raised while lowering. `configVersion` must be `active + 1` so the
- * firmware accepts the commit (§21 ERR_VERSION rejects ≤ active).
+ * firmware accepts the commit (§21 ERR_VERSION rejects ≤ active). `parts`,
+ * the device's described parts, puts the matrix timing into its MATRIX parts.
  */
 export function buildRemapprBlob(
     config: ConfigKeymap,
-    opts: {
-        configVersion: number
-        /** The blob read off the device. Its tables the config does not model
-         *  (and the compile does not write) are carried over byte for byte, so
-         *  a save does not drop them; one that cannot be carried is an error. */
-        carryFrom?: Uint8Array
-        /** What the target firmware build holds (defaults: the firmware's). */
-        limits?: RemapprCompileLimits
-    },
+    opts: { configVersion: number } & RemapprBlobOpts,
 ): { blob: Uint8Array; diagnostics: readonly Diagnostic[] } {
     const diag = new DiagnosticBag()
-    const compiled = encodeBlob(config, diag, opts.configVersion, opts.limits)
+    const compiled = encodeBlob(config, diag, opts.configVersion, opts)
     const blob = opts.carryFrom
         ? carryUnmodeledTables(compiled, opts.carryFrom, diag)
         : compiled
@@ -2090,7 +2053,7 @@ function clusterSideRecords(
     const out: ClusterSideRecord[] = []
     for (const [i, s] of (sides ?? []).entries()) {
         if (i > 0 && s.side <= out[i - 1].side) {
-            diag.error(`cluster side ${s.side} must come after side ${out[i - 1].side}`, [
+            diag.error(`Cluster side ${s.side} must come after side ${out[i - 1].side}.`, [
                 'node',
                 'clusterSides',
                 i,

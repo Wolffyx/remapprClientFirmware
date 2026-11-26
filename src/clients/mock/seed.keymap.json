@@ -108,7 +108,7 @@
                 },
                 "DELETE"
             ],
-            "encoders": [{ "cw": "Volume Up", "ccw": "Volume Down" }]
+            "encoders": [{ "cw": "media.volume_increment", "ccw": "media.volume_decrement" }]
         },
         {
             "name": "lower",

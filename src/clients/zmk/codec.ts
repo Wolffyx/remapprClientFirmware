@@ -1,5 +1,6 @@
 // Pattern check: Strategy (Tier 1) — applied — ZmkCodec implements KeycodeCodec for ZMK behavior bindings; HID page 7 + page 12 → ZMK key_press / consumer_press.
 import { HID_USAGE_BY_CANONICAL, HID_USAGE_DECODE } from '../../catalog/entries'
+import { zmkNames } from '../../catalog/firmwareSpellings'
 import type { CanonicalKeyId } from '../../catalog/types'
 import type { DecodedKeycode, EncodedKeycode, KeycodeCodec } from '../../codec'
 
@@ -19,6 +20,10 @@ export class ZmkCodec implements KeycodeCodec {
 
     supports(id: CanonicalKeyId): boolean {
         return HID_USAGE_BY_CANONICAL.has(id)
+    }
+
+    names(id: CanonicalKeyId): readonly string[] {
+        return zmkNames(id)
     }
 }
 

@@ -325,6 +325,40 @@ describe('RemapprJoystickService', () => {
         await svc.disconnect()
     })
 
+    it('offers the stick fields its AXES parts hold', async () => {
+        const fields = async (over: Partial<JoystickServiceDeps>) =>
+            (await make(over).svc.controls.getCatalog()).fields.stick
+        const all = ['out', 'inner', 'outer', 'round', 'curve', 'invY', 'click']
+        expect(await fields({})).toEqual(all)
+        expect(
+            await fields({ axesSettings: async () => undefined }),
+        ).toEqual(all)
+        expect(
+            await fields({
+                axesSettings: async () =>
+                    new Set(['deadzoneInner', 'axisInvert']),
+            }),
+        ).toEqual(['out', 'inner', 'invY', 'click'])
+        // A part list that cannot be read leaves every field offered.
+        expect(
+            await fields({
+                axesSettings: () => Promise.reject(new Error('GET_PARTS')),
+            }),
+        ).toEqual(all)
+    })
+
+    it('offers unpair with a radio, and writes it as a button action', async () => {
+        const ids = async (hwCaps?: number) =>
+            (await make({ hwCaps }).svc.controls.getCatalog()).actions.map((a) => a.id)
+        expect(await ids(HwCap.USB)).not.toContain('sys:unpair')
+        expect(await ids(HwCap.USB | HwCap.RADIO_2G4)).toContain('sys:unpair')
+
+        const { svc, writes } = make({ hwCaps: HwCap.RADIO_2G4 })
+        await svc.controls.setBinding!('p0', 'btn:0', { a: 'sys:unpair' })
+        await svc.commit()
+        expect(writes[0]?.joystick?.buttonActions?.[0]).toEqual({ action: 'unpair' })
+    })
+
     it('offers show-battery only with a battery, and writes it as a button action', async () => {
         const ids = async (hwCaps?: number) =>
             (await make({ hwCaps }).svc.controls.getCatalog()).actions.map((a) => a.id)

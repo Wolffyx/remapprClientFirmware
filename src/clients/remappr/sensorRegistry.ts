@@ -181,7 +181,7 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         macro: 'SCAN_PERIOD_MS',
         label: 'Scan period',
         type: 'int',
-        help: 'Time between full scans of the key matrix.',
+        help: 'Time between reads (a full scan of a key matrix, one reading of a slider): shorter reacts faster, longer saves power.',
     },
     {
         id: 0x31,
@@ -221,7 +221,7 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         macro: 'AXIS_INVERT',
         label: 'Invert',
         type: 'bool',
-        help: 'Reverse the axis direction.',
+        help: 'Reverse the direction (an axis, or which end of a slider reads full).',
     },
     {
         id: 0x41,
@@ -266,7 +266,7 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         macro: 'DEADBAND',
         label: 'Deadband',
         type: 'int',
-        help: 'The smallest change the axis reports: higher hides jitter, lower follows small moves.',
+        help: 'The smallest move that counts, so a jittery slider does not keep sending the same value.',
     },
     {
         id: 0x50,
@@ -324,6 +324,7 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         macro: 'BRIGHTNESS',
         label: 'Brightness',
         type: 'int',
+        help: 'How bright the display is while the device is awake.',
     },
     {
         id: 0x71,
@@ -331,7 +332,7 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         macro: 'INVERT',
         label: 'Invert',
         type: 'bool',
-        help: 'Flip every pixel: light on dark becomes dark on light.',
+        help: 'Light background with dark content.',
     },
     {
         id: 0x72,
@@ -339,6 +340,7 @@ export const SENSOR_SETTINGS: readonly RegistrySetting[] = [
         macro: 'ROTATION',
         label: 'Rotation',
         type: 'enum',
+        help: 'Turns what the display shows, clockwise, for a panel mounted sideways or upside down.',
         options: [
             { code: 0, name: 'deg0', label: '0°' },
             { code: 1, name: 'deg90', label: '90°' },
@@ -363,8 +365,8 @@ export const SENSOR_PROCEDURES: readonly RegistryProcedure[] = [
         name: 'axisCalibration',
         label: 'Axis calibration',
         phases: [
-            'Move the stick to every edge, slowly, then press Next.',
-            'Let the stick rest at the centre while it measures.',
+            'Move the stick or slider slowly to every end of its travel, then press Next.',
+            'Let go of it and leave it still for a second, then press Next.',
         ],
     },
 ]

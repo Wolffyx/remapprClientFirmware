@@ -1,279 +1,407 @@
-// Pattern check: Dispatch Map (Tier 0) — applied — widget kind → wire packer / reader maps; one table, no class family.
+// Pattern check: no GoF pattern (-) — rejected — pure encode/decode functions for TBL_DISPLAY mirroring joystick.ts / radio.ts; per-kind fields via a small dispatch map.
 //
-// What the node's displays show (`node.display`) <-> TBL_DISPLAY (id 31, v1).
-// Byte layout mirrors firmware include/remappr/screen.h and
-// lib/config_blob/decode_display.c (display part design §3): pages, then
-// widgets, then a string pool (TEXT) and a bitmap pool (IMAGE) the widgets
-// point into. Which part a page names is the device's check (it knows its
-// parts); everything else the firmware refuses is checked here first.
-import type { DiagnosticBag } from '../../diagnostics'
+// What a device's displays show (a document's `displays`) <-> TBL_DISPLAY
+// (table 31, version 1). Byte layout mirrors firmware include/remappr/screen.h
+// and lib/config_blob/decode_display.c (display part design §3):
+//
+//   u8 page_count, u8 widget_count, u16 strings_len, u16 bitmaps_len, u16 0
+//   page_count x {u8 part, u8 first_widget, u8 widget_count, u8 flags}
+//   widget_count x {u8 kind, u8 flags, u8 x, u8 y, u8 w, u8 h, u8 font,
+//                   u8 source, u16 arg, u16 arg2}
+//   string pool, bitmap pool
+import {
+    CLOCK_FORMATS,
+    PAGE_DEFAULT,
+    SCREEN_ALIGN,
+    SCREEN_FONTS,
+    SCREEN_KINDS,
+    type ScreenWidgetKind,
+    W_ALIGN_MASK,
+    W_ALIGN_SHIFT,
+    W_FRAME,
+    W_INVERT,
+    screenSourceId,
+    screenSourceName,
+} from '../../../clients/remappr/screenRegistry'
+import { registrySetting, sensorSettingKey } from '../../../clients/remappr/sensorRegistry'
+import type { SensorInfo } from '../../../devices/types'
 import type {
     ConfigDisplay,
-    ConfigDisplayPage,
-    ConfigDisplayWidget,
-    DisplaySource,
-    DisplayWidgetBox,
+    ConfigScreenPage,
+    ConfigScreenWidget,
+    ConfigSensorValue,
 } from '../../types'
-import {
-    bytesToHex,
-    type DisplayPageRecord,
-    type DisplayTable,
-    type DisplayWidgetRecord,
-    hexToBytes,
-    SCREEN_BITMAPS_MAX,
-    SCREEN_PAGE_DEFAULT,
-    SCREEN_PAGES_MAX,
-    SCREEN_STRINGS_MAX,
-    SCREEN_TBL_HDR_LEN,
-    SCREEN_TBL_PAGE_LEN,
-    SCREEN_TBL_WIDGET_LEN,
-    SCREEN_W_ALIGN_MASK,
-    SCREEN_W_ALIGN_SHIFT,
-    SCREEN_W_FRAME,
-    SCREEN_W_INVERT,
-    SCREEN_WIDGETS_MAX,
-    ScreenKind,
-} from './blobWriter'
-import { ByteReader, type TableFrame } from './decode'
+import type { SensorTableEntry } from './blobWriter'
+import { ByteReader } from './decode'
+import { type SensorSkip, sensorEntries } from './sensor'
 
-const SOURCES: Readonly<Record<Exclude<DisplaySource, number>, number>> = {
-    activeLayer: 0x01,
-    battery: 0x02,
-    charging: 0x03,
-    connection: 0x04,
-    capsLock: 0x05,
-    numLock: 0x06,
-    wpm: 0x07,
-    deviceName: 0x08,
+/** What one device holds (firmware REMAPPR_SCREEN_*_MAX). */
+export const SCREEN_LIMITS = {
+    pages: 16,
+    widgets: 64,
+    strings: 1024,
+    bitmaps: 4096,
+} as const
+
+const HDR_LEN = 8
+const PAGE_LEN = 4
+const WIDGET_LEN = 12
+
+/** A display document that cannot be written, and where. */
+export interface DisplayProblem {
+    path: (string | number)[]
+    message: string
 }
-const SOURCE_BY_CODE = new Map(
-    Object.entries(SOURCES).map(([k, v]) => [v, k as Exclude<DisplaySource, number>]),
-)
-const ALIGNS = ['left', 'centre', 'right'] as const
-const CLOCKS = ['hm', 'hms', 'date'] as const
 
-const sourceCode = (s: DisplaySource): number =>
-    typeof s === 'number' ? s : SOURCES[s]
-const sourceOf = (code: number): DisplaySource => SOURCE_BY_CODE.get(code) ?? code
+interface WidgetRecord {
+    kind: number
+    flags: number
+    x: number
+    y: number
+    w: number
+    h: number
+    font: number
+    source: number
+    arg: number
+    arg2: number
+}
 
-const TEXT = new TextEncoder()
-const UTF8 = new TextDecoder()
-
-/** The string and bitmap pools a table is being packed into. */
+/** Pools shared by every widget of the table (strings deduplicated). */
 interface Pools {
     strings: number[]
+    stringAt: Map<string, number>
     bitmaps: number[]
 }
 
-type Packed = Pick<DisplayWidgetRecord, 'source' | 'arg' | 'arg2'>
+const ascii = (s: string): number[] =>
+    Array.from(s, (c) => {
+        const code = c.charCodeAt(0)
+        return code >= 0x20 && code <= 0x7e ? code : 0x3f // '?'
+    })
 
-/** Per kind: the widget's source / arg / arg2, adding to the pools. */
-const PACK: {
-    [K in ConfigDisplayWidget['kind']]: (
-        w: Extract<ConfigDisplayWidget, { kind: K }>,
-        pools: Pools,
-    ) => Packed
-} = {
+function fromBase64(data: string): number[] | undefined {
+    try {
+        return Array.from(atob(data), (c) => c.charCodeAt(0))
+    } catch {
+        return undefined // not base64: reported by the caller
+    }
+}
+
+const toBase64 = (bytes: Uint8Array): string =>
+    btoa(String.fromCharCode(...bytes))
+
+type KindFields = (
+    w: ConfigScreenWidget,
+    pools: Pools,
+) => Pick<WidgetRecord, 'source' | 'arg' | 'arg2'> | string
+
+/* Kind -> its source / arg / arg2, or why it cannot be written (Dispatch Map). */
+const KIND_FIELDS: Record<ScreenWidgetKind, KindFields> = {
     text: (w, pools) => {
-        const bytes = TEXT.encode(w.text)
-        const arg = pools.strings.length
-        pools.strings.push(...bytes)
-        return { source: 0, arg, arg2: bytes.length }
+        const bytes = ascii(w.text ?? '')
+        const key = String.fromCharCode(...bytes)
+        let at = pools.stringAt.get(key)
+        if (at === undefined) {
+            at = pools.strings.length
+            pools.strings.push(...bytes)
+            pools.stringAt.set(key, at)
+        }
+        return { source: 0, arg: at, arg2: bytes.length }
     },
-    value: (w) => ({ source: sourceCode(w.source), arg: 0, arg2: 0 }),
-    bar: (w) => ({ source: sourceCode(w.source), arg: 0, arg2: w.full }),
+    value: (w) => sourceFields(w, 0),
+    bar: (w) => sourceFields(w, w.max ?? 0),
     image: (w, pools) => {
-        const arg = pools.bitmaps.length
-        pools.bitmaps.push(...hexToBytes(w.bitmap))
-        return { source: 0, arg, arg2: (w.width & 0xff) | ((w.height & 0xff) << 8) }
+        const img = w.image
+        const rows = img ? fromBase64(img.data) : undefined
+        if (!img || !rows) return 'image data is not base64'
+        const need = Math.ceil(img.width / 8) * img.height
+        if (rows.length !== need) {
+            return `image needs ${need} bytes for ${img.width}x${img.height}, has ${rows.length}`
+        }
+        const at = pools.bitmaps.length
+        pools.bitmaps.push(...rows)
+        return { source: 0, arg: at, arg2: img.width | (img.height << 8) }
     },
-    clock: (w) => ({ source: CLOCKS.indexOf(w.format), arg: 0, arg2: 0 }),
+    clock: (w) => ({
+        source: CLOCK_FORMATS[w.format ?? 'hm'],
+        arg: 0,
+        arg2: 0,
+    }),
     rect: () => ({ source: 0, arg: 0, arg2: 0 }),
 }
 
-function boxFlags(b: DisplayWidgetBox): number {
-    const align = ALIGNS.indexOf(b.align ?? 'left')
-    return (
-        (b.invert ? SCREEN_W_INVERT : 0) |
-        (align << SCREEN_W_ALIGN_SHIFT) |
-        (b.frame ? SCREEN_W_FRAME : 0)
-    )
+function sourceFields(
+    w: ConfigScreenWidget,
+    arg2: number,
+): Pick<WidgetRecord, 'source' | 'arg' | 'arg2'> | string {
+    const id = w.source === undefined ? undefined : screenSourceId(w.source)
+    if (id === undefined) return `"${w.source}" is not a value a screen can show`
+    return { source: id, arg: 0, arg2 }
 }
 
-function packWidget(w: ConfigDisplayWidget, pools: Pools): DisplayWidgetRecord {
-    const pack = PACK[w.kind] as (x: ConfigDisplayWidget, p: Pools) => Packed
+function widgetRecord(
+    w: ConfigScreenWidget,
+    pools: Pools,
+): WidgetRecord | string {
+    const fields = KIND_FIELDS[w.kind](w, pools)
+    if (typeof fields === 'string') return fields
+    const flags =
+        (w.invert ? W_INVERT : 0) |
+        (SCREEN_ALIGN[w.align ?? 'left'] << W_ALIGN_SHIFT) |
+        (w.frame ? W_FRAME : 0)
     return {
-        kind: ScreenKind[w.kind],
-        flags: boxFlags(w),
+        kind: SCREEN_KINDS[w.kind],
+        flags,
         x: w.x,
         y: w.y,
         w: w.w,
         h: w.h,
-        font: w.font === 'large' ? 1 : 0,
-        ...pack(w, pools),
+        font: SCREEN_FONTS[w.font ?? 'small'],
+        ...fields,
     }
 }
 
-/** Why `w` would be refused, or null. */
-function widgetRefusal(w: ConfigDisplayWidget): string | null {
-    if (w.kind !== 'image') return null
-    const need = Math.ceil(w.width / 8) * w.height
-    const have = w.bitmap.length / 2
-    return have === need
-        ? null
-        : `a ${w.width}x${w.height} image takes ${need} bitmap bytes, not ${have}`
+function limitProblems(
+    pages: number,
+    widgets: number,
+    pools: Pools,
+): DisplayProblem[] {
+    const over: [string, number, number][] = [
+        ['pages', pages, SCREEN_LIMITS.pages],
+        ['widgets', widgets, SCREEN_LIMITS.widgets],
+        ['bytes of text', pools.strings.length, SCREEN_LIMITS.strings],
+        ['bytes of images', pools.bitmaps.length, SCREEN_LIMITS.bitmaps],
+    ]
+    return over
+        .filter(([, n, max]) => n > max)
+        .map(([what, n, max]) => ({
+            path: [],
+            message: `${n} ${what} on the displays, the device holds ${max}`,
+        }))
+}
+
+function writeTable(
+    pages: number[][],
+    widgets: WidgetRecord[],
+    pools: Pools,
+): Uint8Array {
+    const out = new Uint8Array(
+        HDR_LEN +
+            pages.length * PAGE_LEN +
+            widgets.length * WIDGET_LEN +
+            pools.strings.length +
+            pools.bitmaps.length,
+    )
+    const dv = new DataView(out.buffer)
+    out[0] = pages.length
+    out[1] = widgets.length
+    dv.setUint16(2, pools.strings.length, true)
+    dv.setUint16(4, pools.bitmaps.length, true)
+    let at = HDR_LEN
+    for (const p of pages) {
+        out.set(p, at)
+        at += PAGE_LEN
+    }
+    for (const w of widgets) {
+        out.set([w.kind, w.flags, w.x, w.y, w.w, w.h, w.font, w.source], at)
+        dv.setUint16(at + 8, w.arg, true)
+        dv.setUint16(at + 10, w.arg2, true)
+        at += WIDGET_LEN
+    }
+    out.set(pools.strings, at)
+    out.set(pools.bitmaps, at + pools.strings.length)
+    return out
 }
 
 /**
- * `node.display` -> TBL_DISPLAY, or undefined (with an error) when the device
- * would refuse it: more pages, widgets or pool bytes than a device holds, or an
- * image whose bitmap does not match its size.
+ * A document's displays -> the TBL_DISPLAY payload, or the problems that
+ * keep it from being written (an unknown value, bad image data, more than
+ * the device holds). Paths are relative to the `displays` array.
  */
-export function displayRecord(
-    d: ConfigDisplay,
-    diag: DiagnosticBag,
-): DisplayTable | undefined {
-    const path = ['node', 'display']
-    const pools: Pools = { strings: [], bitmaps: [] }
-    const pages: DisplayPageRecord[] = []
-    const widgets: DisplayWidgetRecord[] = []
-    let ok = true
-    d.pages.forEach((p, pi) => {
-        pages.push({
-            part: p.part,
-            first: widgets.length,
-            count: p.widgets.length,
-            flags: p.default ? SCREEN_PAGE_DEFAULT : 0,
-        })
-        p.widgets.forEach((w, wi) => {
-            const refused = widgetRefusal(w)
-            if (refused) {
-                diag.error(refused, [...path, 'pages', pi, 'widgets', wi])
-                ok = false
-            }
-            widgets.push(packWidget(w, pools))
-        })
-    })
-    const limits: [number, number, string][] = [
-        [pages.length, SCREEN_PAGES_MAX, 'pages'],
-        [widgets.length, SCREEN_WIDGETS_MAX, 'widgets'],
-        [pools.strings.length, SCREEN_STRINGS_MAX, 'bytes of text'],
-        [pools.bitmaps.length, SCREEN_BITMAPS_MAX, 'bytes of images'],
-    ]
-    for (const [n, max, what] of limits) {
-        if (n <= max) continue
-        diag.error(`the displays take ${n} ${what}; a device holds ${max}`, path)
-        ok = false
+export function encodeDisplays(
+    displays: readonly ConfigDisplay[],
+): { payload?: Uint8Array; problems: DisplayProblem[] } {
+    const pools: Pools = { strings: [], stringAt: new Map(), bitmaps: [] }
+    const pages: number[][] = []
+    const widgets: WidgetRecord[] = []
+    const problems: DisplayProblem[] = []
+    displays.forEach((d, di) =>
+        d.pages.forEach((p, pi) => {
+            pages.push([
+                d.part,
+                widgets.length,
+                p.widgets.length,
+                p.default ? PAGE_DEFAULT : 0,
+            ])
+            p.widgets.forEach((w, wi) => {
+                const rec = widgetRecord(w, pools)
+                if (typeof rec === 'string') {
+                    problems.push({ path: [di, 'pages', pi, 'widgets', wi], message: rec })
+                    return
+                }
+                widgets.push(rec)
+            })
+        }),
+    )
+    problems.push(...limitProblems(pages.length, widgets.length, pools))
+    if (problems.length > 0) return { problems }
+    return { payload: writeTable(pages, widgets, pools), problems }
+}
+
+/* ---- decode ------------------------------------------------------------------ */
+
+const KIND_BY_CODE = new Map<number, ScreenWidgetKind>(
+    Object.entries(SCREEN_KINDS).map(([k, v]) => [v, k as ScreenWidgetKind]),
+)
+const ALIGN_BY_CODE = Object.keys(SCREEN_ALIGN) as ConfigScreenWidget['align'][]
+const FORMAT_BY_CODE = Object.keys(CLOCK_FORMATS) as ConfigScreenWidget['format'][]
+
+/** Whether a widget's text or image lies inside its pool (the device refuses
+ *  one that does not), and its box flags and font are ones this client knows. */
+function widgetFits(
+    kind: ScreenWidgetKind,
+    rec: WidgetRecord,
+    strings: Uint8Array,
+    bitmaps: Uint8Array,
+): boolean {
+    const known = W_INVERT | W_ALIGN_MASK | W_FRAME
+    if (rec.flags & ~known) return false
+    if (rec.font !== SCREEN_FONTS.small && rec.font !== SCREEN_FONTS.large) return false
+    if (kind === 'text') return rec.arg + rec.arg2 <= strings.length
+    if (kind === 'clock') return FORMAT_BY_CODE[rec.source] !== undefined
+    if (kind !== 'image') return true
+    const width = rec.arg2 & 0xff
+    const height = rec.arg2 >> 8
+    const len = Math.ceil(width / 8) * height
+    return width > 0 && height > 0 && rec.arg + len <= bitmaps.length
+}
+
+/** The kind-specific fields of a decoded widget. */
+function kindView(
+    kind: ScreenWidgetKind,
+    rec: WidgetRecord,
+    strings: Uint8Array,
+    bitmaps: Uint8Array,
+): Partial<ConfigScreenWidget> {
+    if (kind === 'text') {
+        return { text: String.fromCharCode(...strings.subarray(rec.arg, rec.arg + rec.arg2)) }
     }
-    if (!ok) return undefined
+    if (kind === 'value') return { source: screenSourceName(rec.source) }
+    if (kind === 'bar') return { source: screenSourceName(rec.source), max: rec.arg2 }
+    if (kind === 'clock') return { format: FORMAT_BY_CODE[rec.source] ?? 'hm' }
+    if (kind !== 'image') return {}
+    const width = rec.arg2 & 0xff
+    const height = rec.arg2 >> 8
+    const len = Math.ceil(width / 8) * height
+    return { image: { width, height, data: toBase64(bitmaps.subarray(rec.arg, rec.arg + len)) } }
+}
+
+function widgetView(
+    rec: WidgetRecord,
+    strings: Uint8Array,
+    bitmaps: Uint8Array,
+): ConfigScreenWidget | undefined {
+    const kind = KIND_BY_CODE.get(rec.kind)
+    if (!kind || !widgetFits(kind, rec, strings, bitmaps)) return undefined
+    const align = ALIGN_BY_CODE[(rec.flags & W_ALIGN_MASK) >> W_ALIGN_SHIFT]
     return {
-        pages,
-        widgets,
-        strings: Uint8Array.from(pools.strings),
-        bitmaps: Uint8Array.from(pools.bitmaps),
-    }
-}
-
-/* ── reader ──────────────────────────────────────────────────────────────── */
-
-interface View {
-    strings: Uint8Array
-    bitmaps: Uint8Array
-}
-
-type Body = Omit<ConfigDisplayWidget, keyof DisplayWidgetBox>
-
-/** Per kind: the widget's own fields from the wire; null when it does not
- *  fit the pools (the device refuses it too). */
-const READ: Readonly<Record<number, (w: DisplayWidgetRecord, v: View) => Body | null>> = {
-    [ScreenKind.text]: (w, v) =>
-        w.arg + w.arg2 <= v.strings.length
-            ? { kind: 'text', text: UTF8.decode(v.strings.subarray(w.arg, w.arg + w.arg2)) }
-            : null,
-    [ScreenKind.value]: (w) => ({ kind: 'value', source: sourceOf(w.source) }),
-    [ScreenKind.bar]: (w) =>
-        w.arg2 > 0 ? { kind: 'bar', source: sourceOf(w.source), full: w.arg2 } : null,
-    [ScreenKind.image]: (w, v) => {
-        const width = w.arg2 & 0xff
-        const height = w.arg2 >> 8
-        const len = Math.ceil(width / 8) * height
-        if (!width || !height || w.arg + len > v.bitmaps.length) return null
-        const bitmap = bytesToHex(v.bitmaps.subarray(w.arg, w.arg + len))
-        return { kind: 'image', width, height, bitmap }
-    },
-    [ScreenKind.clock]: (w) =>
-        CLOCKS[w.source] ? { kind: 'clock', format: CLOCKS[w.source] } : null,
-    [ScreenKind.rect]: () => ({ kind: 'rect' }),
-}
-
-function boxOf(w: DisplayWidgetRecord): DisplayWidgetBox {
-    const align = ALIGNS[(w.flags & SCREEN_W_ALIGN_MASK) >> SCREEN_W_ALIGN_SHIFT]
-    return {
-        x: w.x,
-        y: w.y,
-        w: w.w,
-        h: w.h,
-        ...(w.font === 1 ? { font: 'large' as const } : {}),
+        kind,
+        x: rec.x,
+        y: rec.y,
+        w: rec.w,
+        h: rec.h,
+        ...(rec.font === SCREEN_FONTS.large ? { font: 'large' as const } : {}),
         ...(align && align !== 'left' ? { align } : {}),
-        ...(w.flags & SCREEN_W_INVERT ? { invert: true } : {}),
-        ...(w.flags & SCREEN_W_FRAME ? { frame: true } : {}),
+        ...(rec.flags & W_INVERT ? { invert: true } : {}),
+        ...(rec.flags & W_FRAME ? { frame: true } : {}),
+        ...kindView(kind, rec, strings, bitmaps),
     }
 }
 
-function readWidget(r: ByteReader): DisplayWidgetRecord {
-    const b = Array.from({ length: 8 }, () => r.u8())
-    const [kind, flags, x, y, w, h, font, source] = b
+function readWidget(r: ByteReader): WidgetRecord {
+    const [kind, flags, x, y, w, h, font, source] = Array.from({ length: 8 }, () => r.u8())
     return { kind, flags, x, y, w, h, font, source, arg: r.u16(), arg2: r.u16() }
 }
 
 /**
- * TBL_DISPLAY payload -> `node.display`. Returns an error message when the
- * table is short for its counts, or holds what this client cannot show (an
- * unknown widget kind or flag, a widget past its pool): a save then carries
- * the device's table as read.
+ * TBL_DISPLAY payload in [start, end) -> displays, grouped by part in page
+ * order. Returns an error message for a frame too short for its counts, or
+ * for what this client cannot show in full (an unknown widget kind, flag or
+ * font, a widget past its pool, an unknown page flag): a keymap save then
+ * carries the device's table as read (carry.ts).
  */
 export function readDisplayTable(
     bytes: Uint8Array,
-    t: TableFrame,
-): ConfigDisplay | string {
-    if (t.end - t.start < SCREEN_TBL_HDR_LEN) return 'display table header truncated'
-    const r = ByteReader.frame(bytes, t)
+    start: number,
+    end: number,
+): ConfigDisplay[] | string {
+    if (end - start < HDR_LEN) return 'display table header truncated'
+    const r = new ByteReader(bytes, end)
+    r.seek(start)
     const pageCount = r.u8()
     const widgetCount = r.u8()
     const stringsLen = r.u16()
     const bitmapsLen = r.u16()
-    r.u16() // reserved
-    const pagesAt = t.start + SCREEN_TBL_HDR_LEN
-    const stringsAt =
-        pagesAt + pageCount * SCREEN_TBL_PAGE_LEN + widgetCount * SCREEN_TBL_WIDGET_LEN
-    if (stringsAt + stringsLen + bitmapsLen > t.end) return 'display table truncated'
-    const pages = Array.from({ length: pageCount }, () => {
-        const [part, first, count, flags] = [r.u8(), r.u8(), r.u8(), r.u8()]
-        return { part, first, count, flags }
-    })
-    const records = Array.from({ length: widgetCount }, () => readWidget(r))
-    const view: View = {
-        strings: bytes.subarray(stringsAt, stringsAt + stringsLen),
-        bitmaps: bytes.subarray(stringsAt + stringsLen, stringsAt + stringsLen + bitmapsLen),
-    }
-    const known = SCREEN_W_INVERT | SCREEN_W_ALIGN_MASK | SCREEN_W_FRAME
-    const widgets: (ConfigDisplayWidget | null)[] = records.map((w) => {
-        const body = READ[w.kind]?.(w, view)
-        if (!body || w.flags & ~known || w.font > 1) return null
-        return { ...boxOf(w), ...body } as ConfigDisplayWidget
-    })
-    const out: ConfigDisplayPage[] = []
-    for (const p of pages) {
-        const run = widgets.slice(p.first, p.first + p.count)
-        if (run.length !== p.count || run.some((w) => w === null)) {
+    r.u16()
+    const need = HDR_LEN + pageCount * PAGE_LEN + widgetCount * WIDGET_LEN + stringsLen + bitmapsLen
+    if (start + need > end) return 'display table truncated'
+    const pages = Array.from({ length: pageCount }, () => [r.u8(), r.u8(), r.u8(), r.u8()])
+    const recs = Array.from({ length: widgetCount }, () => readWidget(r))
+    const poolAt = start + HDR_LEN + pageCount * PAGE_LEN + widgetCount * WIDGET_LEN
+    const strings = bytes.subarray(poolAt, poolAt + stringsLen)
+    const bitmaps = bytes.subarray(poolAt + stringsLen, poolAt + stringsLen + bitmapsLen)
+    const byPart = new Map<number, ConfigScreenPage[]>()
+    for (const [part, first, count, flags] of pages) {
+        const widgets = recs
+            .slice(first, first + count)
+            .map((rec) => widgetView(rec, strings, bitmaps))
+        if (widgets.length !== count || widgets.some((w) => w === undefined)) {
             return 'display table holds a widget this client cannot show'
         }
-        if (p.flags & ~SCREEN_PAGE_DEFAULT) return 'display page flag unknown'
-        out.push({
-            part: p.part,
-            ...(p.flags & SCREEN_PAGE_DEFAULT ? { default: true } : {}),
-            widgets: run as ConfigDisplayWidget[],
-        })
+        if (flags & ~PAGE_DEFAULT) return 'display page flag unknown'
+        const page: ConfigScreenPage = {
+            ...(flags & PAGE_DEFAULT ? { default: true } : {}),
+            widgets: widgets as ConfigScreenWidget[],
+        }
+        byPart.set(part, [...(byPart.get(part) ?? []), page])
     }
-    return { pages: out }
+    return [...byPart].map(([part, ps]) => ({ part, pages: ps }))
+}
+
+/* ---- the display parts' own settings (TBL_PART) ------------------------------ */
+
+/**
+ * Each display's `settings` -> TBL_PART entries for its part. A setting the
+ * registry does not know, or (with `parts`, the device's description) one the
+ * part would refuse, is skipped with its display's index.
+ */
+export function displaySettingEntries(
+    displays: readonly ConfigDisplay[] | undefined,
+    parts?: readonly SensorInfo[],
+): { entries: SensorTableEntry[]; skipped: (SensorSkip & { display: number })[] } {
+    const entries: SensorTableEntry[] = []
+    const skipped: (SensorSkip & { display: number })[] = []
+    ;(displays ?? []).forEach((d, display) => {
+        const r = sensorEntries(d.settings, d.part, parts)
+        entries.push(...r.entries)
+        skipped.push(...r.skipped.map((k) => ({ ...k, display })))
+    })
+    return { entries, skipped }
+}
+
+/** The displays with their parts' settings read back from TBL_PART entries
+ *  (channel 0; a BOOL the registry knows as a boolean). */
+export function withDisplaySettings(
+    displays: readonly ConfigDisplay[],
+    entries: readonly SensorTableEntry[],
+): ConfigDisplay[] {
+    return displays.map((d) => {
+        const settings: Record<string, ConfigSensorValue> = {}
+        for (const e of entries) {
+            if (e.sensor !== d.part || (e.ch ?? 0) !== 0) continue
+            const bool = registrySetting(e.id)?.type === 'bool'
+            settings[sensorSettingKey(e.id)] = bool ? e.value !== 0 : e.value
+        }
+        return Object.keys(settings).length ? { ...d, settings } : { ...d }
+    })
 }

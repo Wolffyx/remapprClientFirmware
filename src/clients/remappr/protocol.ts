@@ -201,8 +201,8 @@ export const Namespace = {
      *  (sensor-settings plan §3). Provisional (ns_version 0): served only when
      *  the personality map lists it. */
     SENSOR: 0x0a,
-    /** Host-pushed values (clock, CPU, media, text) that a device's screens
-     *  show (include/remappr/host_values.h). Served only when listed. */
+    /** Values the host pushes for the device's screens (display part design
+     *  §4); listed in the personality map when the firmware serves it. */
     HOST: 0x0b,
     /** Cluster identity and members (firmware universal device model §7.1,
      *  include/remappr/cluster_ns.h). Served only when listed. */
@@ -336,6 +336,7 @@ export const InputClass = {
     HAT: 7,
     AXIS: 8,
     SLIDER: 9,
+    /** A screen: drawn where it sits, never bound. */
     DISPLAY: 10,
 } as const
 
@@ -540,7 +541,11 @@ export interface ControlResponse {
 }
 
 /** Build a legacy request frame `[cmd][seq][arg_len u16][arg]` (no padding). */
-export function buildRequest(cmd: number, seq: number, arg: Uint8Array): Uint8Array {
+export function buildRequest(
+    cmd: number,
+    seq: number,
+    arg: Uint8Array,
+): Uint8Array {
     const out = new Uint8Array(4 + arg.length)
     const dv = new DataView(out.buffer)
     out[0] = cmd
@@ -939,7 +944,9 @@ export function parseLinkLimits(d: Uint8Array): LinkLimitKnob[] {
     const count = d[0]
     const need = 1 + count * 8
     if (d.byteLength < need)
-        throw new Error(`link-limits reply too short (${d.byteLength} B, need ${need})`)
+        throw new Error(
+            `link-limits reply too short (${d.byteLength} B, need ${need})`,
+        )
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
     const out: LinkLimitKnob[] = []
     for (let i = 0; i < count; i++) {
@@ -1348,96 +1355,6 @@ export function parseClusterConfigRefused(d: Uint8Array): {
         crc: v.getUint32(7, true),
         reason: d[11],
     }
-}
-
-/* ── HOST namespace (0x0B) ──────────────────────────────────────────────── */
-
-/** enum remappr_host_verb (host_values.h). */
-export const HostVerb = {
-    /** → `u8 ver(=1), u8 n, n × u8 key`: the keys the device's screens show. */
-    GET_KEYS: 0x01,
-    /** `u8 key, u8 type, u8 off, u8 total, data` (mutating). */
-    SET_VALUE: 0x02,
-    /** Drop every stored value (mutating). */
-    CLEAR: 0x03,
-} as const
-
-/** Value types (REMAPPR_HOST_TYPE_*). */
-export const HostType = {
-    /** i32 (percentages, counts). */
-    INT: 0,
-    /** UTF-8, up to HOST_TEXT_MAX bytes, sent in pieces. */
-    TEXT: 1,
-    /** u32 local seconds since 1970. */
-    TIME: 2,
-} as const
-
-/** Well-known keys (REMAPPR_HOST_KEY_*); 0x10..0x1F are user text slots. */
-export const HostKey = {
-    TIME: 0x01,
-    CPU: 0x02,
-    RAM: 0x03,
-    MEDIA_TITLE: 0x04,
-    MEDIA_ARTIST: 0x05,
-    VOLUME: 0x06,
-    NOTIFICATION: 0x07,
-    USER_FIRST: 0x10,
-    USER_LAST: 0x1f,
-} as const
-
-/** Most data bytes one SET_VALUE carries (REMAPPR_HOST_DATA_MAX). */
-export const HOST_DATA_MAX = 20
-/** Longest TEXT value (REMAPPR_HOST_TEXT_MAX). */
-export const HOST_TEXT_MAX = 64
-/** Highest key the device stores (REMAPPR_HOST_KEY_MAX). */
-export const HOST_KEY_MAX = 0x3f
-
-function hostKeyCheck(key: number): void {
-    if (!Number.isInteger(key) || key < 1 || key > HOST_KEY_MAX)
-        throw new Error(`host value key ${key} out of range (1..${HOST_KEY_MAX})`)
-}
-
-/** SET_VALUE arg for an INT (i32) or TIME (u32) value. */
-export function buildHostNumberArg(key: number, type: number, value: number): Uint8Array {
-    hostKeyCheck(key)
-    if (type !== HostType.INT && type !== HostType.TIME)
-        throw new Error(`host value type ${type} is not a number`)
-    const out = new Uint8Array(8)
-    out.set([key, type, 0, 4])
-    const dv = new DataView(out.buffer)
-    if (type === HostType.INT) dv.setInt32(4, value, true)
-    else dv.setUint32(4, value >>> 0, true)
-    return out
-}
-
-/** SET_VALUE args for a TEXT value: the UTF-8 bytes (truncated to
- *  HOST_TEXT_MAX on a character boundary) in HOST_DATA_MAX pieces, in order.
- *  An empty text is one piece with total 0. */
-export function buildHostTextArgs(key: number, text: string): Uint8Array[] {
-    hostKeyCheck(key)
-    let raw = new TextEncoder().encode(text)
-    if (raw.length > HOST_TEXT_MAX) {
-        let end = HOST_TEXT_MAX
-        while (end > 0 && (raw[end] & 0xc0) === 0x80) end-- // no split character
-        raw = raw.subarray(0, end)
-    }
-    const pieces: Uint8Array[] = []
-    for (let off = 0; off === 0 || off < raw.length; off += HOST_DATA_MAX) {
-        const piece = raw.subarray(off, Math.min(off + HOST_DATA_MAX, raw.length))
-        const arg = new Uint8Array(4 + piece.length)
-        arg.set([key, HostType.TEXT, off, raw.length])
-        arg.set(piece, 4)
-        pieces.push(arg)
-    }
-    return pieces
-}
-
-/** GET_KEYS reply → the keys the device's screens show. */
-export function parseHostKeys(d: Uint8Array): number[] {
-    if (d.length < 2) throw new Error(`host keys reply too short (${d.length} B)`)
-    if (d[0] !== 1) throw new Error(`host keys reply version ${d[0]} not supported`)
-    if (d.length < 2 + d[1]) throw new Error(`host keys reply lists ${d[1]} keys in ${d.length} B`)
-    return [...d.subarray(2, 2 + d[1])]
 }
 
 /** GET_CONFIG_METADATA reply: a 20-byte RMBC header of the selected slot. */
@@ -2133,7 +2050,8 @@ export function parseCalSuggestion(d: Uint8Array): CalSuggestion[] {
     if (d[0] !== 1) throw new Error(`unknown calibrate reply version ${d[0]}`)
     const n = d[1]
     if (d.length < 2 + 2 * n) throw new Error('calibrate reply too short')
-    const pct = (v: number): number | null => (v === CAL_SUGGEST_NONE ? null : v)
+    const pct = (v: number): number | null =>
+        v === CAL_SUGGEST_NONE ? null : v
     return Array.from({ length: n }, (_, i) => ({
         inner: pct(d[2 + 2 * i]),
         outer: pct(d[3 + 2 * i]),
@@ -2268,7 +2186,8 @@ function sensorReplyVersion(
     known: readonly number[] = [1],
 ): number {
     if (d.length < min) throw new Error(`${what} reply too short`)
-    if (!known.includes(d[0])) throw new Error(`unknown ${what} version ${d[0]}`)
+    if (!known.includes(d[0]))
+        throw new Error(`unknown ${what} version ${d[0]}`)
     return d[0]
 }
 
@@ -2358,7 +2277,8 @@ export function parseSensorSetting(d: Uint8Array): SensorSettingRecord {
         o += SETTING_INT_LEN
     } else if (rec.type === SensorTypeCode.ENUM) {
         const n = d[o] ?? 0
-        if (d.length < o + 3 + n) throw new Error('sensor setting reply too short')
+        if (d.length < o + 3 + n)
+            throw new Error('sensor setting reply too short')
         rec.options = Array.from(d.subarray(o + 1, o + 1 + n))
         rec.gatedMask = d[o + 1 + n]
         rec.procedure = d[o + 2 + n]
@@ -2467,7 +2387,8 @@ const IO_REC_LEN = 8
 export function parseSensorIoPage(d: Uint8Array): SensorIoPage {
     sensorReplyVersion(d, 3, 'sensor io')
     const n = d[2]
-    if (d.length < 3 + n * IO_REC_LEN) throw new Error('sensor io reply too short')
+    if (d.length < 3 + n * IO_REC_LEN)
+        throw new Error('sensor io reply too short')
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
     const io = Array.from({ length: n }, (_, i) => {
         const o = 3 + i * IO_REC_LEN
@@ -2492,7 +2413,9 @@ export interface SensorSuggestionRecord {
 const SUGGEST_REC_LEN = 5
 
 /** GET_PROCEDURE_RESULT reply: u8 ver | u8 n | n × {u8 setting_id | i32 value}. */
-export function parseSensorSuggestions(d: Uint8Array): SensorSuggestionRecord[] {
+export function parseSensorSuggestions(
+    d: Uint8Array,
+): SensorSuggestionRecord[] {
     sensorReplyVersion(d, 2, 'sensor result')
     const n = d[1]
     if (d.length < 2 + n * SUGGEST_REC_LEN)

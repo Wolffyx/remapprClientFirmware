@@ -9,9 +9,6 @@ import {
     BehaviorType,
     BLOB_HEADER_LEN,
     crc32,
-    ScreenKind,
-    SliderKind,
-    SliderTarget,
     TableId,
 } from '../compilers/remappr/blobWriter'
 import {
@@ -21,7 +18,7 @@ import {
     readBlobFrames,
     type TableFrame,
 } from '../compilers/remappr/decode'
-import { readSensorEntries } from '../compilers/remappr/sensor'
+import { readPartEntries } from '../compilers/remappr/sensor'
 import { capabilityWarnings, configRequiredFeatures } from '../featureWarnings'
 import { LimitsFeature } from '../../clients/remappr/protocol'
 import { remapprCodec } from '../../clients/remappr/codec'
@@ -31,7 +28,11 @@ const kb = (n: number, slider: number[] = []): string =>
     `"keyboard": { "id": "k", "name": "K", "keys": [${Array.from(
         { length: n },
         (_, i) => `{"x":${i},"y":0${slider.includes(i) ? ',"element":"slider"' : ''}}`,
-    ).join(',')}] }`
+    ).join(',')}]${
+        slider.length
+            ? `, "sliders": [${slider.map((k) => `{"x":${k},"y":0,"key":${k}}`).join(',')}]`
+            : ''
+    } }`
 
 const keymap = (body: string, n = 2, slider: number[] = []): string => `{
     "schemaVersion": 1, "kind": "remappr.keymap",
@@ -286,195 +287,121 @@ describe('sensor defaults on the part JSON names (L3.26)', () => {
         )
         const t = frame(r.blob, TableId.Sensor)
         expect(t).toBeDefined()
-        const entries = readSensorEntries(r.blob, t!.start, t!.end)
+        const entries = readPartEntries(r.blob, t!.start, t!.end)
         expect(entries).not.toHaveLength(0)
         expect((entries as { sensor: number }[]).every((e) => e.sensor === 2)).toBe(true)
     })
 })
 
-describe('TBL_SLIDER from layers[].sliderBindings (L3.20)', () => {
-    // keys 1 and 3 are sliders: ranks 0 and 1
-    const json = (bindings: string) =>
+// TBL_SLIDER and TBL_DISPLAY are written and read by compilers/remappr/slider.ts
+// and display.ts (remappr.slider / remappr.display tests). These cases are the
+// carry rules of a keymap save around them (later-audit L3.7, L3.20).
+describe('TBL_SLIDER on a save (L3.20)', () => {
+    // keys 1 and 3 are sliders: slots 0 and 1
+    const json = (sliders: string) =>
         keymap(
             `"layers": [{ "name": "b", "bindings": ["A", "B", "C", "D"],
-                "sliderBindings": ${bindings} }]`,
+                "sliders": ${sliders} }]`,
             4,
             [1, 3],
         )
-    const entries = (blob: Uint8Array) => {
-        const t = frame(blob, TableId.Slider)!
-        expect(t.version).toBe(1)
-        const r = ByteReader.frame(blob, t)
-        return Array.from({ length: r.u16() }, () => ({
-            slider: r.u8(),
-            layer: r.u8(),
-            kind: r.u8(),
-            arg: r.u8(),
-            min: r.u8(),
-            max: r.u8(),
-            up: r.u16(),
-            down: r.u16(),
-        }))
-    }
-
-    it('writes a brightness slider as LEVEL and volume as STEPS over consumer keys', () => {
-        const r = compile(
-            json(`{ "1": { "map": "brightness", "min": 10, "max": 200 },
-                    "3": { "map": "volume", "steps": 12 } }`),
-        )
-        expect(errors(r)).toEqual([])
-        const [level, steps] = entries(r.blob)
-        expect(level).toEqual({
-            slider: 0,
-            layer: 0,
-            kind: SliderKind.level,
-            arg: SliderTarget.rgbBrightness,
-            min: 10,
-            max: 200,
-            up: 0xffff,
-            down: 0xffff,
-        })
-        expect(steps).toMatchObject({ slider: 1, kind: SliderKind.steps, arg: 12, min: 0, max: 0 })
-        const recs = behaviors(r.blob)
-        expect(recs[steps.up]).toMatchObject({ type: BehaviorType.Consumer, tap: 0xe9 })
-        expect(recs[steps.down]).toMatchObject({ type: BehaviorType.Consumer, tap: 0xea })
-    })
-
-    it('writes hue, mouse wheel and custom steps', () => {
-        const r = compile(
-            json(`{ "1": { "map": "hue" },
-                    "3": { "map": "custom", "action": "A", "downAction": "B" } }`),
-        )
-        expect(errors(r)).toEqual([])
-        const [hue, custom] = entries(r.blob)
-        expect(hue).toMatchObject({ arg: SliderTarget.rgbHue, min: 0, max: 255 })
-        expect(custom).toMatchObject({ kind: SliderKind.steps, arg: 20 })
-        const recs = behaviors(r.blob)
-        expect(recs[custom.up]).toMatchObject({ type: BehaviorType.Key, tap: 0x04 })
-        expect(recs[custom.down]).toMatchObject({ type: BehaviorType.Key, tap: 0x05 })
-        const wheel = compile(json(`{ "1": { "map": "mouse_wheel" } }`))
-        const [w] = entries(wheel.blob)
-        expect(behaviors(wheel.blob)[w.up].type).toBe(BehaviorType.Mouse)
-    })
-
-    it('refuses what it cannot write instead of dropping it', () => {
-        expect(errors(compile(json(`{ "0": { "map": "brightness" } }`)))).toEqual([
-            'key 0 is not a slider (element "slider")',
-        ])
-        expect(errors(compile(json(`{ "1": { "map": "custom" } }`)))).toEqual([
-            'a custom slider needs an action',
-        ])
-        expect(errors(compile(json(`{ "1": { "map": "brightness", "max": 300 } }`)))).toEqual([
-            "a brightness slider's min and max are 0..255",
-        ])
-    })
+    const sliderFrames = (blob: Uint8Array) => framesOf(blob, TableId.Slider)
 
     it('a written slider table replaces the device one instead of being refused', () => {
-        const device = compile(json(`{ "1": { "map": "volume" } }`)).blob
-        const edited = buildRemapprBlob(parseKeymap(json(`{ "1": { "map": "hue" } }`)), {
-            configVersion: 2,
-            carryFrom: device,
-        })
+        const device = compile(json(`[{ "map": "volume" }, null]`)).blob
+        const edited = buildRemapprBlob(
+            parseKeymap(json(`[{ "map": "rgb_hue" }, null]`)),
+            { configVersion: 2, carryFrom: device },
+        )
         expect(errors(edited)).toEqual([])
-        expect(framesOf(edited.blob, TableId.Slider)).toHaveLength(1)
-        expect(entries(edited.blob)[0].arg).toBe(SliderTarget.rgbHue)
+        expect(sliderFrames(edited.blob)).toHaveLength(1)
+        const t = sliderFrames(edited.blob)[0]
+        expect(edited.blob[t.start + 2 + 2]).toBe(1) // LEVEL
+    })
+
+    it('sliders deleted from a read config stay deleted (not carried)', () => {
+        const device = compile(json(`[{ "map": "volume" }, null]`)).blob
+        const edited = parseKeymap(json(`[null, null]`))
+        const r = buildRemapprBlob(edited, { configVersion: 2, carryFrom: device })
+        expect(errors(r)).toEqual([])
+        expect(sliderFrames(r.blob)).toHaveLength(0)
+    })
+
+    it('a slider table this client cannot read is carried while the keymap is unchanged', () => {
+        const device = compile(json(`[{ "map": "rgb_hue" }, null]`)).blob
+        const t = sliderFrames(device)[0]
+        const unknown = device.slice()
+        unknown[t.start + 2 + 2] = 0x7f // entry 0: a kind this client does not know
+        new DataView(unknown.buffer).setUint32(16, crc32(unknown.subarray(BLOB_HEADER_LEN)), true)
+        const edited = parseKeymap(json(`[null, null]`))
+        const r = buildRemapprBlob(edited, { configVersion: 2, carryFrom: unknown })
+        expect(errors(r)).toEqual([])
+        const out = sliderFrames(r.blob)
+        expect(out).toHaveLength(1)
+        expect(Array.from(r.blob.subarray(out[0].start, out[0].end))).toEqual(
+            Array.from(unknown.subarray(t.start, t.end)),
+        )
     })
 })
 
-describe('TBL_DISPLAY from node.display (L3.20)', () => {
-    const display = {
-        pages: [
-            {
-                part: 3,
-                default: true,
-                widgets: [
-                    { kind: 'text', text: 'Layer', x: 0, y: 0, w: 30, h: 8 },
-                    { kind: 'value', source: 'activeLayer', x: 32, y: 0, w: 12, h: 8, font: 'large' },
-                    { kind: 'bar', source: 'battery', full: 100, x: 0, y: 10, w: 64, h: 4, frame: true },
-                    { kind: 'image', width: 8, height: 2, bitmap: 'ff81', x: 0, y: 16, w: 8, h: 2 },
-                ],
-            },
-            {
-                part: 3,
-                widgets: [
-                    { kind: 'clock', format: 'hms', x: 0, y: 0, w: 48, h: 8, align: 'centre' },
-                    { kind: 'rect', x: 0, y: 9, w: 64, h: 1, invert: true },
-                    { kind: 'value', source: 0x41, x: 0, y: 12, w: 40, h: 8 },
-                ],
-            },
-        ],
-    }
-    const json = (d: unknown) =>
-        keymap(`"layers": [{ "name": "b", "bindings": ["A", "B"] }],
-            "node": { "display": ${JSON.stringify(d)} }`)
-
-    it('writes pages, widgets and the pools as the firmware lays them out', () => {
-        const r = compile(json(display))
-        expect(errors(r)).toEqual([])
-        const t = frame(r.blob, TableId.Display)!
-        expect(t.version).toBe(1)
-        const b = r.blob.subarray(t.start, t.end)
-        // 2 pages, 7 widgets, 5 string bytes, 2 bitmap bytes, reserved
-        expect(Array.from(b.subarray(0, 8))).toEqual([2, 7, 5, 0, 2, 0, 0, 0])
-        expect(Array.from(b.subarray(8, 16))).toEqual([3, 0, 4, 1, 3, 4, 3, 0])
-        const w0 = 16
-        expect(b[w0]).toBe(ScreenKind.text)
-        expect(Array.from(b.subarray(w0 + 8, w0 + 12))).toEqual([0, 0, 5, 0]) // offset 0, len 5
-        const pools = 16 + 7 * 12
-        expect(new TextDecoder().decode(b.subarray(pools, pools + 5))).toBe('Layer')
-        expect(Array.from(b.subarray(pools + 5, pools + 7))).toEqual([0xff, 0x81])
-    })
-
-    it('reads it back to the same section, byte-stable', () => {
-        const r = compile(json(display))
-        const decoded = decodeRemapprBlob(r.blob)
-        expect(decoded.config!.node?.display).toEqual(display)
-        roundTrips(json(display))
-    })
-
-    it('refuses what a device would refuse', () => {
-        const badImage = {
+describe('TBL_DISPLAY on a save (L3.20)', () => {
+    const displays = [
+        {
+            part: 3,
             pages: [
-                { part: 0, widgets: [{ kind: 'image', width: 9, height: 2, bitmap: 'ff81', x: 0, y: 0, w: 9, h: 2 }] },
+                {
+                    default: true,
+                    widgets: [
+                        { kind: 'text', text: 'Layer', x: 0, y: 0, w: 30, h: 8 },
+                        { kind: 'value', source: 'activeLayer', x: 32, y: 0, w: 12, h: 8 },
+                    ],
+                },
             ],
-        }
-        expect(errors(compile(json(badImage)))).toEqual([
-            'a 9x2 image takes 4 bitmap bytes, not 2',
-        ])
-        const many = {
-            pages: Array.from({ length: 17 }, () => ({ part: 0, widgets: [] })),
-        }
-        expect(errors(compile(json(many)))).toEqual([
-            'the displays take 17 pages; a device holds 16',
-        ])
-    })
+        },
+    ]
+    const json = (d?: unknown) =>
+        keymap(`"layers": [{ "name": "b", "bindings": ["A", "B"] }]${
+            d ? `, "node": { "displays": ${JSON.stringify(d)} }` : ''
+        }`)
+    const deviceBlob = () => {
+        const r = compile(json(displays))
+        expect(errors(r)).toEqual([])
+        return r.blob
+    }
 
     it('a display section deleted from a read config stays deleted (not carried)', () => {
-        const device = compile(json(display)).blob
-        const edited = parseKeymap(keymap(`"layers": [{ "name": "b", "bindings": ["A", "B"] }]`))
-        const r = buildRemapprBlob(edited, { configVersion: 2, carryFrom: device })
+        const r = buildRemapprBlob(parseKeymap(json()), {
+            configVersion: 2,
+            carryFrom: deviceBlob(),
+        })
         expect(errors(r)).toEqual([])
         expect(frame(r.blob, TableId.Display)).toBeUndefined()
     })
 
-    it('a display table this client cannot show is carried as read', () => {
-        const device = compile(json(display)).blob
+    const corrupt = (at: number, value: number) => {
+        const device = deviceBlob()
         const t = frame(device, TableId.Display)!
-        const unknown = device.slice()
-        unknown[t.start + 16] = 0x7f // widget 0: a kind this client does not know
-        new DataView(unknown.buffer).setUint32(16, crc32(unknown.subarray(BLOB_HEADER_LEN)), true)
-        const edited = parseKeymap(keymap(`"layers": [{ "name": "b", "bindings": ["A", "B"] }]`))
-        const r = buildRemapprBlob(edited, { configVersion: 2, carryFrom: unknown })
+        const out = device.slice()
+        out[t.start + at] = value
+        new DataView(out.buffer).setUint32(16, crc32(out.subarray(BLOB_HEADER_LEN)), true)
+        return { blob: out, t }
+    }
+    // 8-byte header, one 4-byte page, then 12-byte widgets.
+    const W0 = 8 + 4
+
+    it.each([
+        ['a widget kind this client does not know', W0, 0x7f],
+        ['a widget flag this client does not know', W0 + 1, 0x80],
+        ['a font this client does not know', W0 + 6, 7],
+        ['text past the string pool', W0 + 10, 0xff],
+    ])('a display table with %s is carried as read', (_what, at, value) => {
+        const { blob, t } = corrupt(at, value)
+        expect(decodeRemapprBlob(blob).config?.node?.displays).toBeUndefined()
+        const r = buildRemapprBlob(parseKeymap(json()), { configVersion: 2, carryFrom: blob })
         const out = frame(r.blob, TableId.Display)!
         expect(Array.from(r.blob.subarray(out.start, out.end))).toEqual(
-            Array.from(unknown.subarray(t.start, t.end)),
+            Array.from(blob.subarray(t.start, t.end)),
         )
-    })
-
-    it('an empty page list writes an empty table, which clears the screens', () => {
-        const r = compile(json({ pages: [] }))
-        const t = frame(r.blob, TableId.Display)!
-        expect(Array.from(r.blob.subarray(t.start, t.end))).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
     })
 })
 
@@ -520,7 +447,7 @@ describe("the device's config pools (combos, combo keys, sliders)", () => {
 
     it('refuses more slider bindings than the device holds, and follows the build limits', () => {
         const json = keymap(
-            `"layers": [${layers(9, ', "sliderBindings": { "1": { "map": "hue" } }')}]`,
+            `"layers": [${layers(9, ', "sliders": [{ "map": "rgb_hue" }]')}]`,
             10,
             [1],
         )

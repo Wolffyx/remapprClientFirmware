@@ -100,11 +100,12 @@ function allActions(config: ConfigKeymap): CanonAction[] {
     const out: CanonAction[] = []
     for (const l of config.layers) {
         out.push(...l.bindings)
-        for (const e of [...(l.encoders ?? []), ...Object.values(l.encoderBindings ?? {})]) {
+        for (const e of l.encoders ?? []) {
             out.push(e.cw, e.ccw, ...(e.press ? [e.press] : []))
         }
-        for (const s of Object.values(l.sliderBindings ?? {})) {
-            out.push(...(s.action ? [s.action] : []), ...(s.downAction ? [s.downAction] : []))
+        for (const s of l.sliders ?? []) {
+            if (!s) continue
+            for (const a of [s.action, s.up, s.down]) if (a) out.push(a)
         }
     }
     out.push(...(config.combos ?? []).map((c) => c.action))

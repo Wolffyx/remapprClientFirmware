@@ -10,6 +10,7 @@ export type {
     DynamicEntryCounts,
     EncoderAction,
     EncoderSlot,
+    SliderSlot,
     ExportedFile,
     KeyAction,
     HoldTapLabelData,
@@ -149,3 +150,12 @@ export {
     type DemoDeviceId,
     type DemoDevicePreview,
 } from './clients/mock/devices/demoDevices'
+export {
+    type IdentityApi,
+    type IdentitySource,
+    activeLayoutSource,
+    createIdentity,
+    layoutIdentifier,
+    nameIdentifier,
+    usbIdentifier,
+} from './identity'

@@ -2,7 +2,8 @@
 // strategy for the Remappr live blob, sibling of MockCodec/ZmkCodec. The blob
 // stores keycodes as HID (page<<16)|usage, so encode/decode is a straight catalog
 // lookup with no firmware-specific quantum range (unlike Vial's macro slots).
-import { HID_USAGE_BY_CANONICAL } from '../../catalog/entries'
+import { HID_USAGE_BY_CANONICAL, HID_USAGE_DECODE } from '../../catalog/entries'
+import { remapprNames } from '../../catalog/firmwareSpellings'
 import type { CanonicalKeyId } from '../../catalog/types'
 import type { DecodedKeycode, EncodedKeycode, KeycodeCodec } from '../../codec'
 
@@ -12,11 +13,6 @@ const KBD_USAGE_MAX = 0xa7
 const sendable = (page: number, usage: number): boolean =>
     page !== 7 || usage <= KBD_USAGE_MAX || (usage >= 0xe0 && usage <= 0xe7)
 
-const BY_PACKED: Map<number, CanonicalKeyId> = new Map()
-for (const [id, usage] of HID_USAGE_BY_CANONICAL.entries()) {
-    BY_PACKED.set((usage.page << 16) | usage.usage, id)
-}
-
 export class RemapprCodec implements KeycodeCodec {
     encode(id: CanonicalKeyId): EncodedKeycode | null {
         const usage = HID_USAGE_BY_CANONICAL.get(id)
@@ -24,13 +20,19 @@ export class RemapprCodec implements KeycodeCodec {
     }
 
     decode(rawValue: number): DecodedKeycode | null {
-        const id = BY_PACKED.get(rawValue >>> 0)
+        // Alias-aware: a usage folded onto a primary (Keypad Enter, Play)
+        // still decodes, as the ZMK codec does.
+        const id = HID_USAGE_DECODE.get(rawValue >>> 0)
         return id ? { canonicalId: id } : null
     }
 
     supports(id: CanonicalKeyId): boolean {
         const usage = HID_USAGE_BY_CANONICAL.get(id)
         return usage !== undefined && sendable(usage.page, usage.usage)
+    }
+
+    names(id: CanonicalKeyId): readonly string[] {
+        return remapprNames(id)
     }
 }
 
