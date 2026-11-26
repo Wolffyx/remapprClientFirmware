@@ -31,6 +31,7 @@ export type {
 } from './types'
 
 export { isUnlocked } from './types'
+export { describeMacro, heldAtEnd } from './macroText'
 
 // Device-controls vocabulary (mice, gamepads, flight sticks, generic HID): the
 // model a ControlsApi serves. Also importable as `@firmware/devices`.

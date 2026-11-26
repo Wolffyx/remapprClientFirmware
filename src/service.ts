@@ -192,6 +192,25 @@ export interface MacroApi {
 
     setMacro?(idx: number, actions: MacroAction[]): Promise<void>
 
+    /** The action kinds this firmware's macros can hold, for the editor to
+     *  offer. Absent = the basic set (tap, down, up, delay, text). */
+    actionKinds?: readonly MacroAction['kind'][]
+
+    /** The macro names the macro at `idx` may run as a `call` step: never
+     *  itself, nor one that would loop back to it. Absent = any other macro. */
+    callTargets?(idx: number): readonly string[]
+
+    /** The macros left out of {@link callTargets} and why, in plain words
+     *  ("is this macro."), for the editor to explain the missing choices. */
+    excludedCallTargets?(idx: number): readonly { macro: string; reason: string }[]
+
+    /** The macro's own description, when it has one. */
+    description?(idx: number): string | undefined
+
+    /** Why the macro at `idx` can't be edited here (it has steps the editor
+     *  can't show), or null when it can. The editor shows it view-only. */
+    editBlockedReason?(idx: number): string | null
+
     /** Real per-index macro names (e.g. §24 config-blob DT names); index =
      *  pool position. Only firmwares whose macro pool is key-assignable
      *  implement this; the keycode picker keys off its presence to list macros
