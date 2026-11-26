@@ -6,9 +6,8 @@
 // Each payload byte travels XOR 0xFF (an unused byte is 0xFF on the wire), and
 // a reply echoes the command byte. No checksum, no sequence number.
 //
-// Frame format and command table: github.com/aipno/mchose-linux
-// (docs/PROTOCOL.md, K7 Ultra). The tri-state 0x42 fields and the performance
-// mode bits were measured on an A7X Ultra, firmware 5.30.3.0.
+// The tri-state 0x42 fields and the performance mode bits were measured on an
+// A7X Ultra, firmware 5.30.3.0.
 import { ProtocolError } from '../../errors'
 import type { FeatureReports } from '../../transport'
 
