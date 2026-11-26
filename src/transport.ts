@@ -1,10 +1,22 @@
 // pattern-check: skip neutral type re-export — bytes-stream Transport contract shared by every FirmwareAdapter.
 import type { RpcTransport } from '@zmkfirmware/zmk-studio-ts-client/transport/index'
 
+// pattern-check: skip — optional capability field on the existing Transport DTO, plain interface.
+/** HID feature reports (HIDIOCSFEATURE / HIDIOCGFEATURE), for vendor protocols
+ *  that configure the device through them instead of input/output reports.
+ *  Payloads never carry the report id: the transport adds and strips it. */
+export interface FeatureReports {
+    send(reportId: number, payload: Uint8Array): Promise<void>
+    /** Read `length` payload bytes of feature report `reportId`. */
+    receive(reportId: number, length: number): Promise<Uint8Array>
+}
+
 export type Transport = RpcTransport & {
     /** Optional VID/PID surfaced by HID transports (used by VIA registry lookup). */
     vid?: number
     pid?: number
+    /** Present on HID transports that can exchange feature reports. */
+    feature?: FeatureReports
 }
 
 // pattern-check: skip mechanical move of existing pure helpers from qmk/adapter.ts (dedupe)

@@ -42,6 +42,7 @@ import type {
     LockState,
     UnlockOptions,
     MacroAction,
+    MacroPlayMode,
     TapDanceEntry,
 } from './types'
 
@@ -207,7 +208,20 @@ export interface MacroApi {
 
     getMacro(idx: number): Promise<MacroAction[]>
 
-    setMacro?(idx: number, actions: MacroAction[]): Promise<void>
+    /** Writes the steps; `playMode`, on firmware that offers {@link playModes},
+     *  is written with them (absent = the macro keeps the mode it has). */
+    setMacro?(
+        idx: number,
+        actions: MacroAction[],
+        playMode?: MacroPlayMode,
+    ): Promise<void>
+
+    /** The play modes each macro can choose from, when the firmware lets every
+     *  macro choose; the UI offers exactly these. Absent = not a setting. */
+    readonly playModes?: readonly MacroPlayMode[]
+
+    /** The mode macro `idx` plays in; present with {@link playModes}. */
+    getPlayMode?(idx: number): Promise<MacroPlayMode>
 
     /** Real per-index macro names (e.g. §24 config-blob DT names); index =
      *  pool position. Only firmwares whose macro pool is key-assignable
