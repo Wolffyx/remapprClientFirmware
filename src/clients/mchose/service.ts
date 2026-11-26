@@ -456,6 +456,8 @@ export class MchoseMouseService extends KeylessServiceBase {
             setMacro: (idx, actions, playMode) =>
                 this.setMacro(macroSlot(idx), actions, playMode),
             playModes: PLAY_MODES,
+            // Keys, mouse buttons and delays only: no text, pause or calls.
+            actionKinds: ['tap', 'down', 'up', 'delay'],
             getPlayMode: async (idx) =>
                 playModeOf((await this.storedMacro(macroSlot(idx))).condition),
         }

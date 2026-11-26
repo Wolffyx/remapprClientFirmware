@@ -590,6 +590,8 @@ describe('MCHOSE macros', () => {
         const s = service(m)
         expect(s.macros.getCount()).toBe(5)
         expect(s.macros.listNames?.()[0]).toBe('Side · front')
+        // The editor offers only what a mouse macro can hold.
+        expect(s.macros.actionKinds).toEqual(['tap', 'down', 'up', 'delay'])
         expect(await s.macros.getMacro(0)).toEqual([])
         const steps = [
             { kind: 'tap' as const, keycode: 0x04 },
