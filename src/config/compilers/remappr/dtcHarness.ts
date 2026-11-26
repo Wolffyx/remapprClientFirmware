@@ -13,15 +13,21 @@
 // It needs `cpp`, `dtc`, a Zephyr tree and a remappr-firmware tree. Set
 // ZEPHYR_BASE and REMAPPR_FIRMWARE, or keep them under
 // ~/Projects/remappr-ws/{zephyr,remappr-firmware}. Without them `dtcToolchain()`
-// returns null and the callers skip.
+// returns null and the callers skip. Firmware that generates its behavior
+// headers at build time (tools/behaviors/gen_behaviors.py) also needs python3:
+// the harness runs the generator as the build does, into a temp folder named
+// for a hash of its inputs, so runs share it and an edited manifest regenerates.
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
     existsSync,
     mkdirSync,
     mkdtempSync,
     readdirSync,
     readFileSync,
+    renameSync,
     rmSync,
+    statSync,
     writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -30,6 +36,8 @@ import { join } from 'node:path'
 export interface DtcToolchain {
     zephyr: string
     firmware: string
+    /** gen_behaviors.py output (include/, dts/), for firmware that has it. */
+    generated?: string
 }
 
 export interface DtcResult {
@@ -53,7 +61,45 @@ export function dtcToolchain(): DtcToolchain | null {
     ]
     if (!headers.every((h) => existsSync(h))) return null
     if (!onPath('cpp') || !onPath('dtc')) return null
-    return { zephyr, firmware }
+    if (!existsSync(join(firmware, GENERATOR))) return { zephyr, firmware }
+    if (!onPath('python3')) return null
+    return { zephyr, firmware, generated: generatedHeaders(firmware) }
+}
+
+const GENERATOR = 'tools/behaviors/gen_behaviors.py'
+
+/** Hash of what the generator reads: itself and every file under behaviors/. */
+function generatorInputsHash(firmware: string): string {
+    const root = join(firmware, 'behaviors')
+    const h = createHash('sha256').update(readFileSync(join(firmware, GENERATOR)))
+    const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).sort()
+    for (const f of files) {
+        if (!statSync(join(root, f)).isFile()) continue
+        h.update(f).update(readFileSync(join(root, f)))
+    }
+    return h.digest('hex').slice(0, 16)
+}
+
+/** The firmware's generated behavior headers, made once per input hash. Each
+ *  worker generates into its own folder and renames it into place, so parallel
+ *  workers never read a half-written file. A generator error is thrown. */
+function generatedHeaders(firmware: string): string {
+    const dir = join(tmpdir(), `remappr-behaviors-${generatorInputsHash(firmware)}`)
+    if (existsSync(dir)) return dir
+    const scratch = mkdtempSync(`${dir}-`)
+    execFileSync(
+        'python3',
+        [join(firmware, GENERATOR), '--behaviors', join(firmware, 'behaviors'), '--out', scratch],
+        { stdio: ['ignore', 'ignore', 'pipe'] },
+    )
+    try {
+        renameSync(scratch, dir)
+    } catch (e) {
+        rmSync(scratch, { recursive: true, force: true })
+        // Another worker got there first; its copy is the same.
+        if (!existsSync(dir)) throw e
+    }
+    return dir
 }
 
 const INCLUDES = (tc: DtcToolchain): string[] => [
@@ -61,6 +107,9 @@ const INCLUDES = (tc: DtcToolchain): string[] => [
     `-I${join(tc.zephyr, 'dts/common')}`,
     `-I${join(tc.firmware, 'include')}`,
     `-I${join(tc.firmware, 'dts')}`,
+    ...(tc.generated
+        ? [`-I${join(tc.generated, 'include')}`, `-I${join(tc.generated, 'dts')}`]
+        : []),
 ]
 
 function preprocess(tc: DtcToolchain, file: string, dir: string): string {
