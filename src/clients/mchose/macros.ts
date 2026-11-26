@@ -293,8 +293,10 @@ export async function writeMacro(
     macro: MchoseMacro,
     name: string,
 ): Promise<void> {
-    for (const packet of macroPackets(index, macro))
-        await link.send(LONG, packet)
+    // Name first: on an A7X the name packet often lands in the macro stream
+    // too (its bytes from the 4th on, as page 0); the pages after it win.
     const bytes = [...new TextEncoder().encode(name)].slice(0, 56)
     await link.send(LONG, [Cmd.NAME, index, bytes.length, ...bytes])
+    for (const packet of macroPackets(index, macro))
+        await link.send(LONG, packet)
 }

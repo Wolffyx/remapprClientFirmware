@@ -108,10 +108,13 @@ function fakeMouse(opts: { dropFirst?: number } = {}) {
                 ...page,
             ]
         },
+        // Like the A7X at its worst: the name also lands in the macro stream,
+        // its bytes from the 4th on, two short of the name's length.
         0x53: (b) => {
             names[b[1]] = new TextDecoder().decode(
                 Uint8Array.from(b.slice(3, 3 + b[2])),
             )
+            streams[b[1]] = b.slice(6, 6 + b[2] - 2)
         },
         // ... and binding it to anything else drops the macro.
         0x52: (b) => {
@@ -590,6 +593,31 @@ describe('MCHOSE macros', () => {
         expect(pageFits(good, 4, 0)).toBe(false)
         expect(pageFits(HW_PAGES[0], 4, 0)).toBe(true)
         expect(pageFits(HW_PAGES[1], 4, 1)).toBe(true)
+    })
+
+    it('sends a macro again when its read-back never parses', async () => {
+        const m = fakeMouse()
+        let garbled = 8 // every attempt of the first read-back
+        const hid: FeatureReports = {
+            send: m.hid.send,
+            receive: async (report, length) => {
+                const last = m.sent[m.sent.length - 1]
+                if (last[0] !== 0x65 || garbled-- <= 0) {
+                    return m.hid.receive(report, length)
+                }
+                const zero = new Uint8Array(length).fill(0xff)
+                zero.set([0x65 ^ 0xff, 3 ^ 0xff])
+                return zero
+            },
+        }
+        const s = new MchoseMouseService({
+            link: new MchoseLink(hid, noWait),
+            model: A7X,
+            deviceInfo: { name: A7X.name, firmware: 'mchose' },
+            config: parseConfig(m.cfg),
+        })
+        await s.macros.setMacro?.(0, [{ kind: 'tap', keycode: 0x05 }])
+        expect(m.sent.filter((b) => b[0] === 0x55)).toHaveLength(2)
     })
 
     it('sends a macro again when the mouse drops it', async () => {

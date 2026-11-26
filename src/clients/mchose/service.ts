@@ -278,8 +278,13 @@ export class MchoseMouseService extends KeylessServiceBase {
         slot: number,
         macro: MchoseMacro,
     ): Promise<boolean> {
-        const got = await this.storedMacro(slot)
+        // A page that never reads back whole is a write that did not take.
+        const got = await this.storedMacro(slot).catch((e: unknown) => {
+            if (e instanceof ProtocolError) return null
+            throw e
+        })
         return (
+            got !== null &&
             got.condition === macro.condition &&
             JSON.stringify(got.events) === JSON.stringify(macro.events)
         )
