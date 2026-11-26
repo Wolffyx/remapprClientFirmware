@@ -304,7 +304,7 @@ describe('MCHOSE status pushes', () => {
         expect(pushedStage(other)).toBeNull()
     })
 
-    it('shows the pushed stage and keeps it through other writes', async () => {
+    it('re-reads the config when a DPI button moves the stage', async () => {
         const m = fakeMouse()
         let push: (r: Uint8Array) => void = () => {}
         const s = new MchoseMouseService({
@@ -314,26 +314,57 @@ describe('MCHOSE status pushes', () => {
             config: parseConfig(m.cfg),
             onPush: (cb) => (push = cb),
         })
-        const changes: string[] = []
-        s.controls.onChanged((c) => changes.push(c.type))
+        const changed = new Promise<void>((resolve) =>
+            s.controls.onChanged(() => resolve()),
+        )
+        // The button press moves the stored stage, then the push names it.
+        m.cfg[1] = (m.cfg[1] & 0xf0) | 3
         push(Uint8Array.of(0x13, ...inverted))
-        expect(changes).toEqual(['bindings'])
+        await changed
         const b = await s.controls.getBindings('p0')
         expect((b.sensor as SensorBinding).active).toBe(3)
 
-        // A button remap must not put the mouse back on the stored stage.
-        await s.controls.setBinding?.('p0', 'back', { a: 'mchose:2:000400' })
-        expect(m.sent.some((w) => w[0] === 0x40)).toBe(false)
-
-        // Choosing a stage writes it, and the stored one is live again.
+        // A push naming the stage it already shows reads nothing.
+        const reads = m.sent.length
+        push(inverted)
+        expect(m.sent.length).toBe(reads)
+    })
+    it('ignores the pushes its own DPI write causes', async () => {
+        const m = fakeMouse()
+        let push: (r: Uint8Array) => void = () => {}
+        // Like the mouse: a DPI write pushes the stage it moved to.
+        const hid: FeatureReports = {
+            receive: m.hid.receive,
+            send: async (report, payload) => {
+                await m.hid.send(report, payload)
+                if ((payload[0] ^ 0xff) !== 0x40) return
+                push(
+                    Uint8Array.of(
+                        0x13,
+                        ...hexBytes('e2 01 01 00 64 04').map((b) => b ^ 0xff),
+                    ),
+                )
+            },
+        }
+        const s = new MchoseMouseService({
+            link: new MchoseLink(hid, noWait),
+            model: A7X,
+            deviceInfo: { name: A7X.name, firmware: 'mchose' },
+            config: parseConfig(m.cfg),
+            onPush: (cb) => (push = cb),
+        })
         const sensor = (await s.controls.getBindings('p0')).sensor
+        const before = m.sent.length
         await s.controls.setBinding?.('p0', 'sensor', {
             ...(sensor as SensorBinding),
             active: 4,
         })
-        expect(m.cfg[1] & 0x0f).toBe(4)
-        const after = await s.controls.getBindings('p0')
-        expect((after.sensor as SensorBinding).active).toBe(4)
+        await Promise.resolve()
+        // A fresh read, the 0x40 write and one confirming read, nothing
+        // chasing the push.
+        expect(m.sent.slice(before).map((b) => b[0])).toEqual([
+            0x67, 0x40, 0x67,
+        ])
     })
 })
 
