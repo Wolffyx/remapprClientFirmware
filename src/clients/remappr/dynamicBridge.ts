@@ -43,7 +43,7 @@ function usageOf(a: CanonAction | undefined): number {
 
 // pattern-check: skip — bug fix: exhaustive macro-step mapper; pure data transform
 /** A macro's canonical steps → the app's flat MacroAction buffer. Advanced ZMK
- *  macro controls (param forwarding, tap-time override, pause-for-release) have no
+ *  macro controls (param forwarding, tap-time override, pause-for-release, calls) have no
  *  compact-app representation and are dropped for display — the full step list
  *  survives in the config (raise preserves it). */
 export function macroToActions(macro: CanonMacro): MacroAction[] {
@@ -62,6 +62,7 @@ export function macroToActions(macro: CanonMacro): MacroAction[] {
             case 'param':
             case 'tap_time':
             case 'pause_for_release':
+            case 'call':
                 return []
         }
     })
