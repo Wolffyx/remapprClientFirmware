@@ -12,15 +12,18 @@ const isMchoseVid = (vid: number): boolean =>
     (MCHOSE_VIDS as readonly number[]).includes(vid)
 
 /** The transport's byte stream carries the mouse's unsolicited 0x13 pushes;
- *  drain it, so its end tells us the mouse is gone. */
+ *  hand each on, and its end tells us the mouse is gone. */
 function watchClosed(
     transport: Transport,
     cb: (reason?: unknown) => void,
+    pushed: (report: Uint8Array) => void,
 ): void {
     const reader = transport.readable.getReader()
     const drain = async (): Promise<void> => {
-        while (!(await reader.read()).done) {
-            /* pushes are not used yet */
+        for (;;) {
+            const { done, value } = await reader.read()
+            if (done) return
+            pushed(value)
         }
     }
     drain().then(
@@ -77,12 +80,15 @@ export const mchoseAdapter: FirmwareAdapter = {
         const { model, deviceInfo } = await describe(transport, link)
         const config = await readConfig(link)
         signal.throwIfAborted()
+        let pushed: (report: Uint8Array) => void = () => {}
         return new MchoseMouseService({
             link,
             model,
             deviceInfo,
             config,
-            onTransportClosed: (cb) => watchClosed(transport, cb),
+            onPush: (cb) => (pushed = cb),
+            onTransportClosed: (cb) =>
+                watchClosed(transport, cb, (r) => pushed(r)),
             closeTransport: async () => transport.abortController.abort(),
         })
     },

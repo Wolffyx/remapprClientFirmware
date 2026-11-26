@@ -66,6 +66,19 @@ export function decodeReply(
 
 const u16 = (b: Uint8Array, at: number): number => b[at] | (b[at + 1] << 8)
 
+/** Input report 0x13: the mouse pushes its status as it changes. */
+export const PUSH_REPORT = 0x13
+const STATUS_PUSH = 0xe2
+
+/** The live DPI stage a status push carries, else null. The config block
+ *  keeps only the stored stage, so a DPI button press shows only here.
+ *  Electron hands over the report id first, WebHID does not. */
+export function pushedStage(report: Uint8Array): number | null {
+    const payload = report[0] === PUSH_REPORT ? report.subarray(1) : report
+    const d = decodeReply(STATUS_PUSH, payload)
+    return d && d.length > 4 ? d[4] : null
+}
+
 // --- identity ------------------------------------------------------------
 
 export type LinkMode = 'usb' | 'p24g' | 'bt'

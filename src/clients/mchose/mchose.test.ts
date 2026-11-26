@@ -12,6 +12,7 @@ import {
     MchoseLink,
     parseConfig,
     parseIdentity,
+    pushedStage,
     readConfig,
     SHORT,
     writesBetween,
@@ -290,6 +291,51 @@ function service(m: ReturnType<typeof fakeMouse>) {
         config: parseConfig(m.cfg),
     })
 }
+
+describe('MCHOSE status pushes', () => {
+    // Captured on an A7X Ultra after a DPI button press: stage 3 of 6.
+    const status = hexBytes('e2 01 01 00 64 03 03 06 29 41 37 58')
+    const inverted = status.map((b) => b ^ 0xff)
+
+    it('reads the live stage with or without the report id', () => {
+        expect(pushedStage(Uint8Array.of(0x13, ...inverted))).toBe(3)
+        expect(pushedStage(inverted)).toBe(3)
+        const other = hexBytes('e5 06 00 00 00 00').map((b) => b ^ 0xff)
+        expect(pushedStage(other)).toBeNull()
+    })
+
+    it('shows the pushed stage and keeps it through other writes', async () => {
+        const m = fakeMouse()
+        let push: (r: Uint8Array) => void = () => {}
+        const s = new MchoseMouseService({
+            link: m.link,
+            model: A7X,
+            deviceInfo: { name: A7X.name, firmware: 'mchose' },
+            config: parseConfig(m.cfg),
+            onPush: (cb) => (push = cb),
+        })
+        const changes: string[] = []
+        s.controls.onChanged((c) => changes.push(c.type))
+        push(Uint8Array.of(0x13, ...inverted))
+        expect(changes).toEqual(['bindings'])
+        const b = await s.controls.getBindings('p0')
+        expect((b.sensor as SensorBinding).active).toBe(3)
+
+        // A button remap must not put the mouse back on the stored stage.
+        await s.controls.setBinding?.('p0', 'back', { a: 'mchose:2:000400' })
+        expect(m.sent.some((w) => w[0] === 0x40)).toBe(false)
+
+        // Choosing a stage writes it, and the stored one is live again.
+        const sensor = (await s.controls.getBindings('p0')).sensor
+        await s.controls.setBinding?.('p0', 'sensor', {
+            ...(sensor as SensorBinding),
+            active: 4,
+        })
+        expect(m.cfg[1] & 0x0f).toBe(4)
+        const after = await s.controls.getBindings('p0')
+        expect((after.sensor as SensorBinding).active).toBe(4)
+    })
+})
 
 describe('MCHOSE mouse service', () => {
     it('writes only the settings that moved and confirms them', async () => {

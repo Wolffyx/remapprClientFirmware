@@ -56,7 +56,9 @@ import {
     type ButtonSlot,
     type MchoseLink,
     type MouseConfig,
+    Cmd,
     profileCommand,
+    pushedStage,
     readConfig,
     readIdentity,
     SHORT,
@@ -108,6 +110,8 @@ export interface MchoseMouseDeps {
     readonly config: MouseConfig
     /** Calls back once the transport closes on its own. */
     readonly onTransportClosed?: (cb: (reason?: unknown) => void) => void
+    /** Calls back with each report the mouse pushes on its own. */
+    readonly onPush?: (cb: (report: Uint8Array) => void) => void
     readonly closeTransport?: () => Promise<void>
 }
 
@@ -129,6 +133,9 @@ export class MchoseMouseService extends KeylessServiceBase {
     readonly macros: MacroApi
 
     private config: MouseConfig
+    /** The DPI stage the mouse is on, when a push says it left the stored
+     *  one (a DPI button press changes only this). */
+    private liveStage: number | undefined
     private readonly layout: LayoutOverride
     private readonly changeListeners = new Set<(c: ControlsChange) => void>()
 
@@ -150,7 +157,26 @@ export class MchoseMouseService extends KeylessServiceBase {
         this.controls = this.controlsApi()
         this.wireless = this.wirelessApi()
         this.macros = this.macroApi()
+        deps.onPush?.((report) => this.pushed(report))
         deps.onTransportClosed?.((reason) => this.closedBy(reason))
+    }
+
+    /** The config block, on the live DPI stage. */
+    private async read(): Promise<MouseConfig> {
+        const c = await readConfig(this.deps.link)
+        const stage = this.liveStage
+        return stage === undefined || stage >= c.enabledStages
+            ? c
+            : { ...c, stage }
+    }
+
+    private pushed(report: Uint8Array): void {
+        const stage = pushedStage(report)
+        if (stage === null || stage >= this.config.enabledStages) return
+        this.liveStage = stage
+        if (stage === this.config.stage) return
+        this.config = { ...this.config, stage }
+        this.emitBindings()
     }
 
     protected override async close(): Promise<void> {
@@ -166,11 +192,12 @@ export class MchoseMouseService extends KeylessServiceBase {
         const { link } = this.deps
         for (let round = 0; round < 2; round++) {
             for (const w of writesBetween(this.config, wanted)) {
+                if (w.body[0] === Cmd.DPI) this.liveStage = undefined
                 await link.send(w.report, w.body)
             }
             for (let read = 0; read < CONFIRM_READS; read++) {
                 await link.pause(SETTLE_MS)
-                this.config = await readConfig(link)
+                this.config = await this.read()
                 if (writesBetween(this.config, wanted).length === 0) return
             }
         }
@@ -183,7 +210,7 @@ export class MchoseMouseService extends KeylessServiceBase {
     }
 
     private async setSensor(binding: SensorBinding): Promise<void> {
-        const fresh = await readConfig(this.deps.link)
+        const fresh = await this.read()
         this.config = fresh
         await this.apply(configWith(this.deps.model, fresh, binding))
         // The mouse rounds what it cannot hold; let the editor re-read.
@@ -202,7 +229,7 @@ export class MchoseMouseService extends KeylessServiceBase {
         index: number,
         slot: ButtonSlot,
     ): Promise<MouseConfig> {
-        const fresh = await readConfig(this.deps.link)
+        const fresh = await this.read()
         this.config = fresh
         const buttons = fresh.buttons.map((s, i) => (i === index ? slot : s))
         if (!keepsLeftClick(buttons)) {
@@ -234,7 +261,7 @@ export class MchoseMouseService extends KeylessServiceBase {
      *  (the mouse drops a macro its button stops playing). */
     private async storedMacro(slot: number): Promise<MchoseMacro> {
         const { link } = this.deps
-        this.config = await readConfig(link)
+        this.config = await this.read()
         if (this.config.buttons[slot].type !== SlotType.MACRO)
             return EMPTY_MACRO
         return readMacro(link, slot)
@@ -302,9 +329,10 @@ export class MchoseMouseService extends KeylessServiceBase {
         if (index < 0) throw new ProtocolError(`Unknown profile ${id}`)
         const { link } = this.deps
         await link.send(SHORT, profileCommand(index))
+        this.liveStage = undefined
         for (let read = 0; read < CONFIRM_READS; read++) {
             await link.pause(SETTLE_MS)
-            this.config = await readConfig(link)
+            this.config = await this.read()
             if (this.config.profile === index) break
         }
         this.emit({ type: 'profiles' })
@@ -390,7 +418,7 @@ export class MchoseMouseService extends KeylessServiceBase {
             // shortcut: the mouse reads back only its live profile, so every
             // profile id answers with it; select a profile to see another.
             getBindings: async () => {
-                this.config = await readConfig(this.deps.link)
+                this.config = await this.read()
                 return this.bindings()
             },
             setBinding: (_profileId, controlId, binding) =>
@@ -440,7 +468,7 @@ export class MchoseMouseService extends KeylessServiceBase {
                 const minutes = enabled
                     ? Math.min(Math.max(Math.round(timeoutMs / 60_000), 1), 60)
                     : 0
-                this.config = await readConfig(link)
+                this.config = await this.read()
                 await this.apply({ ...this.config, sleepMinutes: minutes })
             },
             onStatusChanged: () => () => {},
