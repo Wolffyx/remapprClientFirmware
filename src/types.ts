@@ -347,3 +347,14 @@ export type MacroAction =
     | { kind: 'up'; keycode: number }
     | { kind: 'delay'; ms: number }
     | { kind: 'text'; text: string }
+    /** Wait until the triggering key is released. Only on firmwares whose
+     *  {@link MacroApi.actionKinds} lists it. */
+    | { kind: 'pause' }
+    /** Run another macro inline, named by its id (a `listNames()` entry). Only
+     *  on firmwares whose {@link MacroApi.actionKinds} lists it. */
+    | { kind: 'call'; macro: string }
+    /** A step the editor shows but can't change (e.g. a custom press time).
+     *  `label` heads the row, `value` is its setting, `phrase` reads in a
+     *  sentence ("sets the press time to 120 ms"). Never offered for editing;
+     *  a macro holding one is view only (see {@link MacroApi.editBlockedReason}). */
+    | { kind: 'locked'; label: string; value: string; phrase: string }

@@ -192,6 +192,15 @@ const ENCODE: Readonly<Record<MacroAction['kind'], StepEncoder>> = {
             'A mouse macro cannot type text: record the keys instead',
         )
     },
+    pause: () => {
+        throw new UnsupportedError('A mouse macro cannot wait for key release')
+    },
+    call: () => {
+        throw new UnsupportedError('A mouse macro cannot run another macro')
+    },
+    locked: () => {
+        throw new UnsupportedError('A mouse macro cannot hold this step')
+    },
 }
 
 export function eventsOf(actions: readonly MacroAction[]): number[][] {

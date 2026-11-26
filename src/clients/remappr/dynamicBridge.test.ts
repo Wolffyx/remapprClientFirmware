@@ -110,11 +110,11 @@ describe('reverse mappers (editing round-trip)', () => {
                 { type: 'wait', ms: 30 },
             ],
         }
-        expect(actionsToMacro('macro_copy', 0, macroToActions(macro))).toEqual(macro)
+        expect(actionsToMacro(macro, macroToActions(macro))).toEqual(macro)
     })
 
     it('passes a text macro action straight through for the compiler', () => {
-        const m = actionsToMacro('t', 0, [{ kind: 'text', text: 'Hi' }])
+        const m = actionsToMacro({ id: 't', params: 0, steps: [] }, [{ kind: 'text', text: 'Hi' }])
         expect(m.steps).toEqual([{ type: 'text', text: 'Hi' }])
     })
 
