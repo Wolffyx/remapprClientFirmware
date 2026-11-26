@@ -38,6 +38,7 @@ export function emitMacros(macros: CanonMacro[], ctx: Ctx): string[] {
                 )
             else if (s.type === 'pause_for_release')
                 bindings.push(`<&macro_pause_for_release>`)
+            else if (s.type === 'call') bindings.push(`<&macro_tap &${sanitize(s.macro)}>`)
             else
                 ctx.diag.warn(
                     `macro "${m.id}" text steps are not generated for ZMK`,

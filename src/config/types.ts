@@ -349,6 +349,9 @@ export type CanonMacroStep =
     | { type: 'tap_time'; ms: number }
     /** Block until the triggering key is released (&macro_pause_for_release). */
     | { type: 'pause_for_release' }
+    /** Run another macro (by its `id`, like a `macro` action's `ref`) inline,
+     *  then continue. Calls may nest but not loop. */
+    | { type: 'call'; macro: string }
 
 export interface CanonMacro {
     id: string
