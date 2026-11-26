@@ -152,6 +152,12 @@ export function encodeMacro(actions: MacroAction[]): Uint8Array {
                     parts.push(c)
                 }
                 break
+            case 'pause':
+            case 'call':
+            case 'locked':
+                throw new ProtocolError(
+                    `Macro encode: this firmware has no "${a.kind}" step`,
+                )
         }
     }
     return new Uint8Array(parts)

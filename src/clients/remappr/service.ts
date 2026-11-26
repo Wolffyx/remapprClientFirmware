@@ -64,9 +64,11 @@ import type { ConfigEditingApi } from '../../configEditing'
 import { lowerConfigToNeutral, raiseNeutralToConfig } from './configBridge'
 import {
     actionsToMacro,
+    callTargets,
     comboToEntry,
     entryToTapDance,
     isRichTapDance,
+    macroBlockedReason,
     macroToActions,
     tapDanceToEntry,
 } from './dynamicBridge'
@@ -77,6 +79,7 @@ import {
     BLOB_ALIGN,
     Cmd,
     CommonVerb,
+    Feature,
     LEGACY_SEALED_CHUNK,
     type Limits,
     type LinkLimitKnob,
@@ -343,6 +346,25 @@ export class RemapprKeyboardService
         this.macros = {
             getCount: () => this.config.macros?.length ?? 0,
             readonly: this.readOnly,
+            // Call needs firmware feature bit 24; the compile refuses it too.
+            actionKinds: [
+                'tap',
+                'down',
+                'up',
+                'delay',
+                'text',
+                'pause',
+                ...((this.limits?.featureBitmask ?? 0) & Feature.MACRO_CALL
+                    ? (['call'] as const)
+                    : []),
+            ],
+            callTargets: (idx) => this.macroCallTargets(idx).allowed,
+            excludedCallTargets: (idx) => this.macroCallTargets(idx).excluded,
+            description: (idx) => this.macroAt(idx)?.description,
+            editBlockedReason: (idx) => {
+                const m = this.config.macros?.[idx]
+                return m ? macroBlockedReason(m) : null
+            },
             // §24 named macros surfaced as key-assignable tiles: the picker
             // lists these by their real DT names in the Macros tab.
             listNames: () => (this.config.macros ?? []).map((m) => m.id),
@@ -359,7 +381,14 @@ export class RemapprKeyboardService
                 this.assertWritable()
                 const m = this.config.macros?.[idx]
                 if (!m) throw new ProtocolError(`No macro at index ${idx}`)
-                this.editedMacros.set(idx, actionsToMacro(m.id, m.params, actions))
+                // Steps the editor can't show (param forwarding, tap-time
+                // overrides) would be lost on save — refuse, as for tap-dances.
+                if (macroBlockedReason(m)) {
+                    throw new ProtocolError(
+                        `Macro "${m.id}" has steps this editor can't change; edit it as JSON instead.`,
+                    )
+                }
+                this.editedMacros.set(idx, actionsToMacro(m, actions))
                 this.markPending(true)
             },
         }
@@ -406,6 +435,13 @@ export class RemapprKeyboardService
         }
 
         this.rpc.onClosed((reason) => this.fireClosed(reason))
+    }
+
+    /** Call targets for macro #idx over the macros with pending edits applied. */
+    private macroCallTargets(idx: number): ReturnType<typeof callTargets> {
+        const all = this.config.macros?.map((m, i) => this.macroAt(i) ?? m) ?? []
+        const self = all[idx]
+        return self ? callTargets(all, self.id) : { allowed: [], excluded: [] }
     }
 
     /** Reject every edit on a read-only (behind-dongle node) view. */
