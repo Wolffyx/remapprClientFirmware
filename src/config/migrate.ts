@@ -50,6 +50,8 @@ const KEYWORD_ACTIONS: Record<string, Obj> = {
     reset: { type: 'reset' },
     softoff: { type: 'soft_off' },
     soft_off: { type: 'soft_off' },
+    battery: { type: 'battery_show' },
+    battery_show: { type: 'battery_show' },
     graveescape: { type: 'grave_escape' },
     grave_escape: { type: 'grave_escape' },
     layerlock: { type: 'layer_lock' },
@@ -229,6 +231,8 @@ export function migrateMacroStep(s: unknown): unknown {
             return { type: 'tap_time', ms: Number(rest.trim()) }
         case 'text':
             return { type: 'text', text: rest } // keep spacing verbatim.
+        case 'call':
+            return { type: 'call', macro: rest.trim() }
         default:
             return { type: 'tap', key: t }
     }
@@ -429,6 +433,7 @@ const KEYWORD_BY_TYPE: Record<string, string> = {
     bootloader: 'bootloader',
     reset: 'reset',
     soft_off: 'softoff',
+    battery_show: 'battery',
     grave_escape: 'graveescape',
     layer_lock: 'layerlock',
 }
@@ -524,6 +529,8 @@ function macroStepToV2(s: unknown): unknown {
             return s.from === undefined && s.to === undefined ? 'param' : s
         case 'pause_for_release':
             return 'pause'
+        case 'call':
+            return `call:${s.macro}`
         default:
             return s
     }

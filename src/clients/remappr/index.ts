@@ -29,15 +29,33 @@ export {
     type RemapprIdentity,
     type RemapprIdentityStore,
 } from './auth'
-export { discover, type DiscoveryResult } from './discovery'
+export {
+    discover,
+    nsVersionOf,
+    servesNamespace,
+    type DiscoveryResult,
+} from './discovery'
 export {
     listNodes,
     getNodeInfo,
+    getErrorCounters,
     establishNodeSession,
     unpairRadio,
     clearAllBonds,
+    enterDongleBootloader,
     type NodeRecord,
 } from './nodes'
+export { hapticPulse, setDisplay, DISPLAY_TEXT_MAX } from './feedback'
+export {
+    servesHost,
+    buildHostValuesApi,
+    buildHostSetArgs,
+    parseHostKeys,
+    HostVerb,
+    HOST_DATA_MAX,
+    HOST_TEXT_MAX,
+    HOST_KEY_MAX,
+} from './hostValues'
 export {
     getRateLimits,
     setReportRate,

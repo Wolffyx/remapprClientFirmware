@@ -6,6 +6,7 @@
 // momentary / toggle / transparent). Richer canonical actions lower to
 // transparent for display and survive in the config across a raise (configBridge).
 import type { ActionType, KeyAction, KeyLabel } from '../../types'
+import type { BehaviorFamilies, BehaviorFamily } from './protocol'
 
 export const REMAPPR_KIND_TRANSPARENT = 'remappr:trans'
 export const REMAPPR_KIND_KEYPRESS = 'remappr:kp'
@@ -19,6 +20,12 @@ export const REMAPPR_KIND_LAYER_TAP = 'remappr:lt'
 export const REMAPPR_KIND_MACRO = 'remappr:macro'
 export const REMAPPR_KIND_TAP_DANCE = 'remappr:td'
 export const REMAPPR_KIND_MOD_MORPH = 'remappr:mm'
+// &battery (system action 11): no params; the device shows its charge.
+export const REMAPPR_KIND_BATTERY_SHOW = 'remappr:battery'
+// A binding the editor cannot show, kept as read from the device (its record
+// rides along as `_wire`). Never offered in the picker: picking any action,
+// Transparent included, replaces it.
+export const REMAPPR_KIND_KEPT = 'remappr:kept'
 
 // Renderer (`HidUsageLabel`, `KeycodePickerGrid`) consumes ZMK-style encoded
 // usages: (page << 16) | id. Keep the adapter on the same encoding so the picker
@@ -68,9 +75,29 @@ const HID_VALUES = (): { value: number; label: string }[] => {
     return out
 }
 
+/** The behavior family a picker kind belongs to; other kinds are core. */
+const KIND_FAMILY: Readonly<Record<string, BehaviorFamily>> = {
+    [REMAPPR_KIND_MOD_TAP]: 'tapHold',
+    [REMAPPR_KIND_LAYER_TAP]: 'tapHold',
+    [REMAPPR_KIND_MACRO]: 'macros',
+    [REMAPPR_KIND_TAP_DANCE]: 'sequences',
+}
+
 // pattern-check: skip — mechanical revert of the enum-slot experiment back to the
 // original bare ActionType factory (named-macro picking moves to the Macros tab).
-export function buildRemapprActionTypes(maxLayers: number): ActionType[] {
+/** The picker's action kinds. `families` (GET_LIMITS) drops the kinds of a
+ *  family the keyboard was built without; null = every family present. */
+export function buildRemapprActionTypes(
+    maxLayers: number,
+    families: BehaviorFamilies | null = null,
+): ActionType[] {
+    return allRemapprActionTypes(maxLayers).filter((t) => {
+        const family = KIND_FAMILY[t.id]
+        return family === undefined || (families?.[family] ?? true)
+    })
+}
+
+function allRemapprActionTypes(maxLayers: number): ActionType[] {
     return [
         {
             id: REMAPPR_KIND_TRANSPARENT,
@@ -149,6 +176,12 @@ export function buildRemapprActionTypes(maxLayers: number): ActionType[] {
             id: REMAPPR_KIND_MOD_MORPH,
             displayName: 'Mod Morph',
             description: 'Morphs under held modifiers (read-only)',
+            slots: [],
+        },
+        {
+            id: REMAPPR_KIND_BATTERY_SHOW,
+            displayName: 'Show Battery',
+            description: "Show the battery's charge on the device's lights or display",
             slots: [],
         },
     ]
@@ -287,6 +320,24 @@ function labelFor(
             secondary: name,
             bindingPrefix: prefix,
             description: `${primary}: ${name}`,
+        }
+    }
+    if (kind === REMAPPR_KIND_BATTERY_SHOW) {
+        return {
+            primary: 'Show Battery',
+            bindingPrefix: 'battery',
+            paramText: 'Batt',
+            paramParts: [{ icon: 'battery', text: 'Batt' }],
+            description: "Show the battery's charge",
+        }
+    }
+    if (kind === REMAPPR_KIND_KEPT) {
+        return {
+            primary: 'Kept',
+            ...(displayName ? { secondary: displayName } : {}),
+            bindingPrefix: 'kept',
+            description:
+                'Kept as read from the device: the editor cannot show this binding. Pick any action to replace it.',
         }
     }
     return { primary: '?' }

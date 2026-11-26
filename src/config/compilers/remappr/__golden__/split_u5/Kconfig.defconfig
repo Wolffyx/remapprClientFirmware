@@ -1,0 +1,19 @@
+if SHIELD_SPLIT_U5
+
+# The matrix + keymap drivers auto-enable from devicetree; the input
+# subsystem itself must be on.
+config INPUT
+	default y
+
+# 1 node-bus port(s) from board.nodeBus.
+config REMAPPR_NODE_BUS
+	default y
+config REMAPPR_NODE_BUS_MAIN
+	default y
+
+# The 2.4 GHz link runs on the radio chip over spi1.
+choice REMAPPR_RADIO_BACKEND
+	default REMAPPR_RADIO_SPI
+endchoice
+
+endif # SHIELD_SPLIT_U5

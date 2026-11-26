@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "kind": "remappr.keymap",
+  "meta": { "name": "Power U5", "target": "zmk" },
+  "keyboard": {
+    "id": "power_u5",
+    "name": "Power U5",
+    "keys": [
+      { "x": 0, "y": 0, "matrix": [0, 0] },
+      { "x": 1, "y": 0, "matrix": [0, 1] }
+    ]
+  },
+  "layers": [{ "name": "base", "bindings": ["A", "B"] }],
+  "board": {
+    "controller": "nucleo_u5a5zj_q",
+    "matrix": { "diode": "row2col", "rows": ["PE11"], "cols": ["PF15", "PE13"] },
+    "battery": {
+      "adc": {
+        "adc": "adc1",
+        "channel": 1,
+        "setup": { "gain": "ADC_GAIN_1", "reference": "ADC_REF_INTERNAL", "resolution": 12 }
+      },
+      "divider": { "outputOhms": 10000, "fullOhms": 13000 }
+    },
+    "statusLeds": [{ "function": "battery", "led": "red_led_1" }],
+    "powerOff": { "partialWake": true }
+  }
+}

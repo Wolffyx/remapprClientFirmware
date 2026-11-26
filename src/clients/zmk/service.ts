@@ -1,5 +1,12 @@
 // Pattern check: Adapter (Tier 1) — extended — backs src/firmware/adapter.ts FirmwareAdapter; ZMK-protocol KeyboardService implementation wrapping call_rpc.
 import {
+    activeLayoutSource,
+    createIdentity,
+    nameIdentifier,
+    usbIdentifier,
+    type IdentityApi,
+} from '@firmware/identity'
+import {
     call_rpc,
     Request,
     RequestResponse,
@@ -29,7 +36,7 @@ import type {
     Layer,
     LockState,
 } from '@firmware/types'
-import { ProtocolError } from '@firmware/errors'
+import { ProtocolError, TransportError } from '@firmware/errors'
 
 import {
     type BehaviorMap,
@@ -43,6 +50,9 @@ import { canSetZmkBinding } from './validateBinding'
 import { zmkNeutralToConfig } from './raise'
 import { serializeKeymap } from '@firmware/config'
 import { generateZMKConfigFile, generateZMKKeymapFile } from './export'
+
+/** Longest wait for one RPC reply; a flash save answers well inside it. */
+export const RPC_DEADLINE_MS = 10_000
 
 const ZMK_CAPABILITIES: Capabilities = {
     lock: 'editor',
@@ -82,7 +92,9 @@ const ZMK_CAPABILITIES: Capabilities = {
 /** Human-readable reason for a ZMK Studio `saveChanges` failure, mapped from the
  *  SaveChangesErrorCode the keyboard returned, so the UI tells the user WHY a save
  *  failed instead of surfacing a bare numeric code. */
-function saveChangesErrorMessage(err: SaveChangesErrorCode | undefined): string {
+function saveChangesErrorMessage(
+    err: SaveChangesErrorCode | undefined,
+): string {
     switch (err) {
         case SaveChangesErrorCode.SAVE_CHANGES_ERR_NO_SPACE:
             return 'Save failed: the keyboard’s settings storage is full.'
@@ -147,6 +159,13 @@ export class ZmkKeyboardService implements KeyboardService {
     private notificationLoop: Promise<void> | null = null
     private readonly notificationAbort = new AbortController()
     public readonly deviceInfo: DeviceInfo
+    /** USB ids, the ZMK device name and the active layout's hash. The shared
+     *  ZMK VID:PID matches nothing on its own; the cloud ignores it. */
+    public readonly identity: IdentityApi = createIdentity([
+        () => usbIdentifier(this.deviceInfo),
+        () => nameIdentifier('zmk_name', this.deviceInfo.name),
+        activeLayoutSource(() => this.getPhysicalLayouts()),
+    ])
 
     constructor(connection: RpcConnection, deviceInfo: DeviceInfo) {
         this.connection = connection
@@ -154,10 +173,34 @@ export class ZmkKeyboardService implements KeyboardService {
         this.notificationLoop = this.runNotificationLoop()
     }
 
+    // A reply that never comes would hold the client library's request lock
+    // (one lock for every ZMK connection) and stall each later request without
+    // a word, so every edit hangs until a reconnect. Past the deadline the
+    // link counts as dead: it is closed, the waiting request fails, and the
+    // app sees the device go instead of freezing.
     private async call(
         request: Omit<Request, 'requestId'>,
     ): Promise<RequestResponse> {
-        return call_rpc(this.connection, request)
+        const rpc = call_rpc(this.connection, request)
+        // The deadline may settle first; the library's own failure (the closed
+        // link) then has nobody waiting on it.
+        rpc.catch(() => undefined)
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const deadline = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+                reject(
+                    new TransportError(
+                        `The keyboard did not answer within ${RPC_DEADLINE_MS / 1000} s`,
+                    ),
+                )
+                void this.disconnect()
+            }, RPC_DEADLINE_MS)
+        })
+        try {
+            return await Promise.race([rpc, deadline])
+        } finally {
+            clearTimeout(timer)
+        }
     }
 
     private async runNotificationLoop(): Promise<void> {
@@ -277,9 +320,7 @@ export class ZmkKeyboardService implements KeyboardService {
             .then((resp) => {
                 const got = resp.keymap?.getPhysicalLayouts
                 if (!got)
-                    throw new ProtocolError(
-                        'getPhysicalLayouts returned empty',
-                    )
+                    throw new ProtocolError('getPhysicalLayouts returned empty')
                 this.layouts = got
                 return got
             })

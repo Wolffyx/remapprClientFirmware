@@ -4,10 +4,42 @@ import { describe, expect, it } from 'vitest'
 
 import {
     EVT_ROLE,
+    Fn,
+    HwCap,
     parseClusterDiag,
+    InputClass,
+    InputForm,
+    InputShape,
+    INPUT_NONE,
+    parseInputLayoutPage,
     parseKeyLayoutChunk,
+    parseBehaviorPage,
+    buildBehaviorsArg,
+    KeyboardVerb,
+    parsePersonalityMap,
+    parseClusterInfo,
+    parseClusterMembers,
+    parseClusterLatency,
+    latencyPercentileUs,
+    buildClusterLatencyArg,
+    parseClusterEvent,
+    parseClusterConfigRefused,
+    ClusterRefuse,
+    buildClusterSetIdArg,
+    buildClusterSetSideArg,
+    buildClusterSplitArg,
+    buildClusterRelay,
+    unwrapClusterRelay,
+    CLUSTER_RELAY_FRAME_MAX,
+    buildUniversal,
+    buildRequest,
+    parseUch,
+    ClusterSide,
+    KNOWN_NS_VERSION,
+    Namespace,
     parseRoleEvent,
     parseUchEvent,
+    reportsHwCap,
 } from './protocol'
 
 /** Build a GET_KEY_LAYOUT chunk: [total u16][start u16][count u8][entries×16].
@@ -24,6 +56,37 @@ function chunk(total: number, start: number, count: number, bodyEntries = count)
     for (let i = 0; i < bodyEntries; i++) d[5 + i * 16] = 0x04 + i
     return d
 }
+
+describe('parseBehaviorPage', () => {
+    // Firmware layout: u8 total | u8 start | u8 count | u16 inert, then
+    // u8 id | u8 flags | u8 missing | u8 name_len | name.
+    const page = Uint8Array.of(
+        9, 2, 2, 0x34, 0x12,
+        2, 0b011, 0, 3, ...new TextEncoder().encode('key'),
+        7, 0b101, 0b10100, 0,
+    )
+
+    it('decodes header and entries', () => {
+        const out = parseBehaviorPage(page)
+        expect(out).toMatchObject({ total: 9, start: 2, count: 2, inertCells: 0x1234 })
+        expect(out.entries[0]).toEqual({
+            id: 2, built: true, used: true, missing: [], name: 'key',
+        })
+        expect(out.entries[1]).toEqual({
+            id: 7, built: true, used: false, missing: ['pointer', 'sysctrl'], name: '',
+        })
+    })
+
+    it('rejects a truncated page', () => {
+        expect(() => parseBehaviorPage(page.subarray(0, 4))).toThrow(/too short/)
+        expect(() => parseBehaviorPage(page.subarray(0, 10))).toThrow(/truncated/)
+    })
+
+    it('matches the firmware verb and arg', () => {
+        expect(KeyboardVerb.GET_BEHAVIORS).toBe(0x46)
+        expect(buildBehaviorsArg(300)).toEqual(Uint8Array.of(44))
+    })
+})
 
 describe('parseKeyLayoutChunk', () => {
     it('parses a complete chunk', () => {
@@ -114,5 +177,209 @@ describe('parseUchEvent + parseRoleEvent (§N4b-3)', () => {
         const role = parseRoleEvent(evt.payload)
         expect(role.coordinator).toBe(true)
         expect(role.term).toBe(5)
+    })
+})
+
+describe('HwCap', () => {
+    it('matches the firmware capability bits', () => {
+        // include/remappr/capabilities.h — a wire ABI, append-only.
+        expect(HwCap.FLASH_STORAGE).toBe(1 << 16)
+        expect(HwCap.ANALOG_AXES).toBe(1 << 17)
+        expect(HwCap.HID_GAMEPAD).toBe(1 << 24)
+    })
+
+    it('treats 0 as not reported', () => {
+        expect(reportsHwCap(0, HwCap.POINTER)).toBeUndefined()
+        expect(reportsHwCap(undefined, HwCap.POINTER)).toBeUndefined()
+        expect(reportsHwCap(HwCap.POINTER, HwCap.POINTER)).toBe(true)
+        expect(reportsHwCap(HwCap.USB, HwCap.POINTER)).toBe(false)
+    })
+})
+
+describe('parseInputLayoutPage (input-layout plan §2)', () => {
+    // The firmware golden (tests/input_layout lmb_wire): a mouse's left button,
+    // rotated -15° about (0.75, 1.5).
+    const LMB = [
+        0x01, 0x0d, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x96, 0x00,
+        0x2c, 0x01, 0x24, 0xfa, 0x4b, 0x00, 0x96, 0x00,
+    ]
+    const page = (count: number, entries: number[]) =>
+        Uint8Array.from([1, InputForm.MOUSE, 4, 0, 1, 0, count, ...entries])
+
+    it('decodes the firmware golden entry', () => {
+        const p = parseInputLayoutPage(page(1, LMB))
+        expect(p).toMatchObject({ version: 1, form: 3, total: 4, start: 1 })
+        expect(p.entries).toEqual([
+            {
+                cls: InputClass.BUTTON,
+                shape: InputShape.MOUSE_LEFT,
+                inputId: 0x0100,
+                position: 0,
+                x: 0,
+                y: 0,
+                w: 150,
+                h: 300,
+                rot: -1500,
+                rotx: 75,
+                roty: 150,
+            },
+        ])
+    })
+
+    it('reads an unbound position as INPUT_NONE', () => {
+        const wheel = [...LMB]
+        wheel[0] = InputClass.WHEEL
+        wheel[4] = 0xff
+        wheel[5] = 0xff
+        expect(parseInputLayoutPage(page(1, wheel)).entries[0]!.position).toBe(
+            INPUT_NONE,
+        )
+    })
+
+    it('rejects a page shorter than its count', () => {
+        expect(() => parseInputLayoutPage(page(2, LMB))).toThrow(/truncated/)
+        expect(() => parseInputLayoutPage(Uint8Array.of(1, 0, 0))).toThrow(
+            /too short/,
+        )
+    })
+})
+
+describe('GET_PERSONALITY_MAP tails (§3.4)', () => {
+    // role, personality, proto 2, one namespace record, then u32 hw_caps.
+    const head = [0, 1, 2, 1, 0x00, 0xff, 0xff, 0x02, 0, 0, 0]
+
+    it('reads the u32 after hw_caps', () => {
+        const pm = parsePersonalityMap(Uint8Array.from([...head, 0x07, 0, 0, 0]))
+        expect(pm.hwCaps).toBe(0x02)
+        expect(pm.functionBits).toBe(Fn.KBD | Fn.CONSUMER | Fn.SYSCTRL)
+    })
+
+    it('leaves it undefined on firmware from before the tail', () => {
+        const pm = parsePersonalityMap(Uint8Array.from(head))
+        expect(pm.hwCaps).toBe(0x02)
+        expect(pm.functionBits).toBeUndefined()
+    })
+
+    it('reads the cluster_id and uid after function_bits', () => {
+        const fns = [...head, 0x07, 0, 0, 0]
+        const id = [0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]
+        const uid = [0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7]
+        const pm = parsePersonalityMap(Uint8Array.from([...fns, ...id, 8, ...uid]))
+        expect(pm.functionBits).toBe(0x07)
+        expect(pm.clusterId).toBe(0x1122334455667788n)
+        expect(Array.from(pm.uid!)).toEqual(uid)
+
+        const none = parsePersonalityMap(Uint8Array.from([...fns, 0, 0, 0, 0, 0, 0, 0, 0, 0]))
+        expect(none.clusterId).toBe(0n)
+        expect(none.uid!.length).toBe(0)
+
+        // Firmware from before the tail, or a uid cut short: no identity.
+        expect(parsePersonalityMap(Uint8Array.from(fns)).clusterId).toBeUndefined()
+        const cut = parsePersonalityMap(Uint8Array.from([...fns, ...id, 8, 0xa0]))
+        expect(cut.clusterId).toBeUndefined()
+        expect(cut.uid).toBeUndefined()
+    })
+
+    it('keeps the firmware bit values (include/remappr/function.h)', () => {
+        expect(Fn).toEqual({ KBD: 0x01, CONSUMER: 0x02, SYSCTRL: 0x04, POINTER: 0x08, GAMEPAD: 0x10 })
+    })
+})
+
+describe('CLUSTER namespace (§7.1)', () => {
+    it('is known at ns_version 1', () => {
+        expect(Namespace.CLUSTER).toBe(0x0c)
+        expect(KNOWN_NS_VERSION[Namespace.CLUSTER]).toBe(1)
+    })
+
+    it('parses GET_CLUSTER_INFO', () => {
+        const d = Uint8Array.from([
+            0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 3, 0, 1, 0x02, 0x01, 3, 2, 1, 0x01,
+        ])
+        const i = parseClusterInfo(d)
+        expect(i.id).toBe(0x1122334455667788n)
+        expect(i.idSource).toBe(3)
+        expect(i.coordinated).toBe(true)
+        expect(i.physical).toBe(true)
+        expect(i.coordinator).toBe(0x0102)
+        expect(i.mySide).toBe(ClusterSide.RIGHT)
+        expect(i.locked).toBe(true)
+        expect(i.skew).toBe(false)
+        expect(() => parseClusterInfo(d.slice(0, 16))).toThrow(/needs 17/)
+    })
+
+    it('parses a GET_LATENCY reply and its percentiles (§11.1)', () => {
+        const counts = [0, 0, 98, 0, 1, 0, 0, 0, 0, 0, 0, 1]
+        const d = Uint8Array.from([1, 2, 0, 1, 12, 7, ...counts.flatMap((c) => [c, 0])])
+        const r = parseClusterLatency(d)
+        expect(r.shortId).toBe(2)
+        expect(r.link).toBe(1)
+        expect(r.buckets[0]).toEqual({ belowUs: 128, count: 0 })
+        expect(r.buckets[11]).toEqual({ belowUs: null, count: 1 })
+        expect(latencyPercentileUs(r.buckets, 50)).toBe(512)
+        expect(latencyPercentileUs(r.buckets, 99)).toBe(2048)
+        expect(latencyPercentileUs(r.buckets, 100)).toBeNull()
+        expect(Array.from(buildClusterLatencyArg(0x0102, true))).toEqual([2, 1, 1])
+        expect(() => parseClusterLatency(d.slice(0, 20))).toThrow(/truncated/)
+    })
+
+    it('parses a GET_MEMBERS page', () => {
+        const rec = [0x05, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 1, 0x0f, 0, 0, 0, 1, 4, 0xff, 1, 2, 3, 0xff, 0xff]
+        const p = parseClusterMembers(Uint8Array.from([3, 1, ...rec]))
+        expect(p.total).toBe(3)
+        expect(p.members).toHaveLength(1)
+        const m = p.members[0]
+        expect(m.shortId).toBe(5)
+        expect(Array.from(m.uid)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+        expect(m.functionBits).toBe(0x0f)
+        expect(m.battery).toBeNull()
+        expect(m.fw).toEqual([1, 2, 3])
+        expect(m.positionBase).toBeNull()
+        expect(() => parseClusterMembers(Uint8Array.from([3, 1, ...rec.slice(0, 22)]))).toThrow(/truncated/)
+    })
+
+    it('builds the identity verb args', () => {
+        expect(Array.from(buildClusterSetIdArg(0x0102030405060708n))).toEqual([8, 7, 6, 5, 4, 3, 2, 1])
+        expect(Array.from(buildClusterSetSideArg(ClusterSide.NONE))).toEqual([0, 0, 0xff])
+        expect(Array.from(buildClusterSplitArg())).toEqual([0, 0])
+        expect(() => buildClusterSetSideArg(256)).toThrow(/out of range/)
+    })
+
+    it('parses a membership event', () => {
+        const e = parseClusterEvent(Uint8Array.from([0x05, 0x00, 2, 0xaa, 0xbb]))
+        expect(e.shortId).toBe(5)
+        expect(Array.from(e.uid)).toEqual([0xaa, 0xbb])
+        expect(() => parseClusterEvent(Uint8Array.from([5, 0, 2, 0xaa]))).toThrow(/truncated/)
+        const r = parseClusterConfigRefused(
+            Uint8Array.from([2, 0, 9, 0x96, 0, 0, 0, 0xd4, 0xc3, 0xb2, 0xa1, ClusterRefuse.TABLE]),
+        )
+        expect(r).toEqual({ shortId: 2, version: 0x96, crc: 0xa1b2c3d4, reason: ClusterRefuse.TABLE })
+        expect(() => parseClusterConfigRefused(Uint8Array.from([2, 0, 9, 1]))).toThrow(/truncated/)
+    })
+})
+
+describe('CLUSTER.RELAY nesting (§7.3, §7.4)', () => {
+    it('nests a member frame for the attached node', () => {
+        const member = buildUniversal(0x0c, 7, buildRequest(0x01, 9, new Uint8Array()), 2)
+        const outer = buildClusterRelay(5, 3, member, 1)
+        const uch = parseUch(outer, 1)
+        expect(uch.namespace).toBe(0x0c)
+        expect(uch.requestId).toBe(5)
+        expect(uch.targetNode).toBe(1) // the dongle pipe of the attached node
+        expect(outer[9]).toBe(0x07) // RELAY
+        expect(outer[11] | (outer[12] << 8)).toBe(member.length)
+        expect(Array.from(outer.subarray(13))).toEqual(Array.from(member))
+        expect(parseUch(outer, 14).targetNode).toBe(2) // the member's short-id
+        expect(outer.length).toBe(member.length + 13)
+    })
+
+    it('refuses a frame too big for one report', () => {
+        expect(() => buildClusterRelay(1, 1, new Uint8Array(CLUSTER_RELAY_FRAME_MAX + 1))).toThrow(/too big/)
+    })
+
+    it('unwraps the member reply by its request id', () => {
+        const reply = buildUniversal(0x0c, 7, Uint8Array.of(0x01, 9, 0, 0, 0, 0))
+        expect(unwrapClusterRelay(reply, 7)).toBe(reply)
+        expect(() => unwrapClusterRelay(reply, 8)).toThrow(/another member request/)
+        expect(() => unwrapClusterRelay(Uint8Array.of(0, 1), 7)).toThrow(/no member frame/)
     })
 })

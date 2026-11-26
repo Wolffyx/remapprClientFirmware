@@ -89,6 +89,12 @@ const limitsBytes = (): Uint8Array =>
         ...le16(0x003f), // feature_bitmask lo (bits 0..5 = all Phase-2 features)
         ...le16(0x0000), // feature_bitmask hi
     ])
+// One NS_DESC (JOYSTICK v0, one sealed mutating verb) and the LIMITS TLV.
+const manifestBytes = (): Uint8Array =>
+    Uint8Array.from([
+        ...le16(1), ...le16(8), Namespace.JOYSTICK, 0, ...le16(1), 0x03, 0x03, ...le16(2),
+        ...le16(2), ...le16(16), ...limitsBytes(),
+    ])
 const personalityBytes = (): Uint8Array =>
     Uint8Array.from([
         0, // role NODE
@@ -140,6 +146,34 @@ describe('createRemapprRpc — legacy plaintext', () => {
         const r = await rpc.callPlain(Cmd.GET_LAYER_STATE)
         expect(r.status).toBe(0)
         expect(got).toEqual({ inputId: 42, pressed: true })
+        await rpc.close({ abortTransport: true })
+    })
+
+    it('skips a late reply and a stray universal fragment', async () => {
+        const rpc = createRemapprRpc(
+            makeTransport((frame, enqueue) => {
+                // A late COMMIT reply (ERR_ACTIVATE) and a leftover universal
+                // fragment arrive first; neither is this request's reply.
+                enqueue(respFrame(Cmd.COMMIT_CONFIG, 0x99, 7, new Uint8Array()))
+                enqueue(uniFrame(Namespace.INPUT, 3, UchFlag.FRAG_MORE, new Uint8Array(8)))
+                enqueue(respFrame(frame[0], frame[1], 0, new Uint8Array()))
+            }),
+        )
+        const r = await rpc.callPlain(Cmd.WRITE_CONFIG_BEGIN)
+        expect(r.cmd).toBe(Cmd.WRITE_CONFIG_BEGIN)
+        expect(r.status).toBe(0)
+        await rpc.close({ abortTransport: true })
+    })
+
+    it('still times out when only stray frames arrive', async () => {
+        const rpc = createRemapprRpc(
+            makeTransport((_frame, enqueue) => {
+                enqueue(respFrame(Cmd.COMMIT_CONFIG, 0x99, 7, new Uint8Array()))
+            }),
+        )
+        await expect(rpc.callPlain(Cmd.WRITE_CONFIG_BEGIN, undefined, 50)).rejects.toThrow(
+            /timeout/,
+        )
         await rpc.close({ abortTransport: true })
     })
 })
@@ -281,7 +315,9 @@ describe('discover()', () => {
                     const data =
                         verb === CommonVerb.GET_PERSONALITY_MAP
                             ? personalityBytes()
-                            : limitsBytes()
+                            : verb === CommonVerb.GET_MANIFEST
+                              ? manifestBytes()
+                              : limitsBytes()
                     enqueue(uniFrame(Namespace.COMMON, uch.requestId, 0, respFrame(verb, 0, 0, data)))
                 }
             }),
@@ -290,7 +326,16 @@ describe('discover()', () => {
         expect(d.protoMax).toBe(2)
         expect(d.personality?.personality).toBe(1)
         expect(d.limits?.maxSealedChunk).toBe(16)
-        expect(universalCalls).toBe(2)
+        // The COMMON verb mask (0x7e) lists GET_MANIFEST (bit 5): it is read.
+        expect(universalCalls).toBe(3)
+        expect(d.manifest?.namespaces).toEqual([
+            {
+                namespace: Namespace.JOYSTICK,
+                nsVersion: 0,
+                verbs: [{ verb: 0x03, flags: 0x03, minArg: 2 }],
+            },
+        ])
+        expect(d.manifest?.limits?.maxConfigBytes).toBe(8192)
         await rpc.close({ abortTransport: true })
     })
 

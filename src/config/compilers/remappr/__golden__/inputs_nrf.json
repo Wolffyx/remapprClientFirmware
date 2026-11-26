@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "kind": "remappr.keymap",
+  "meta": { "name": "Inputs nRF", "target": "zmk" },
+  "keyboard": {
+    "id": "inputs_nrf",
+    "name": "Inputs nRF",
+    "keys": [
+      { "x": 0, "y": 0, "matrix": [0, 0] },
+      { "x": 1, "y": 0, "matrix": [0, 1] },
+      { "x": 0, "y": 1.25, "w": 1.5 },
+      { "x": 2, "y": 1.25, "r": 15 }
+    ]
+  },
+  "layers": [{ "name": "base", "bindings": ["A", "B", "C", "D"] }],
+  "board": {
+    "controller": "nrf52840dk/nrf52840",
+    "matrix": { "diode": "col2row", "rows": ["P0.03"], "cols": ["P1.01", "P1.02"] },
+    "buttons": [
+      { "key": 2, "pin": "P0.26" },
+      { "key": 3, "pin": "P0.27", "code": "INPUT_KEY_ENTER" }
+    ],
+    "encoders": [
+      { "a": "P1.04", "b": "P1.05", "steps": 4, "sampleTimeUs": 1000, "idleTimeoutMs": 100, "idlePollTimeUs": 0 }
+    ],
+    "sliders": [
+      {
+        "adc": {
+          "adc": "adc",
+          "channel": 6,
+          "setup": { "gain": "ADC_GAIN_1_6", "reference": "ADC_REF_INTERNAL", "inputPositive": "NRF_SAADC_AIN6", "resolution": 12 }
+        },
+        "function": "rgb-brightness",
+        "deadband": 3,
+        "pollMs": 30
+      }
+    ]
+  }
+}

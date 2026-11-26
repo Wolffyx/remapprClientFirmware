@@ -20,6 +20,8 @@ export default defineConfig({
         legendIcons: 'src/legendIcons.ts',
         paramLabel: 'src/paramLabel.ts',
         lighting: 'src/lighting.ts',
+        devices: 'src/devices/index.ts',
+        generic: 'src/generic/index.ts',
         config: 'src/config/index.ts',
         catalog: 'src/catalog/index.ts',
         'catalog/types': 'src/catalog/types.ts',

@@ -5,7 +5,10 @@ import { keychronCodec } from '../clients/keychron/codec'
 import { mockCodec } from '../clients/mock/codec'
 import { qmkCodec } from '../clients/qmk/codec'
 import { vialCodec } from '../clients/qmk-vial/codec'
+import { remapprCodec } from '../clients/remappr/codec'
 import { zmkCodec } from '../clients/zmk/codec'
+import type { KeycodeCodec } from '../codec'
+import { CANONICAL_ALIASES } from './aliases'
 import { CATALOG, HID_USAGE_BY_CANONICAL } from './entries'
 import { EXTERNAL_NAMES, EXTERNAL_NAMES_ALLOWLIST } from './external-names'
 import { CATALOG_PAGES, groupForId } from './pages'
@@ -143,5 +146,79 @@ describe('canonical catalog', () => {
             orphan,
             `EXTERNAL_NAMES_ALLOWLIST contains ids not in CATALOG: ${orphan.join(', ')}`,
         ).toEqual([])
+    })
+})
+
+describe('keyboard-page vs media volume keys', () => {
+    const byId = (id: string) => CATALOG.find((e) => e.id === id)!
+
+    it('names the keyboard-page keys as such and points to Media', () => {
+        expect(byId('key.keyboard_volume_up')).toMatchObject({
+            label: 'Kb Vol+',
+            name: 'Volume Up (keyboard page)',
+        })
+        expect(byId('key.keyboard_volume_down').label).toBe('Kb Vol−')
+        expect(byId('key.keyboard_mute').label).toBe('Kb Mute')
+        expect(byId('key.keyboard_volume_up').notes).toMatch(/Media → Volume Increment/)
+    })
+
+    it('gives the media keys their spec names (ZMK C_VOL_UP lands on Media)', () => {
+        expect(byId('media.volume_increment').aliases).toContain('C_VOL_UP')
+        expect(byId('media.volume_decrement').aliases).toContain('C_VOL_DN')
+        expect(byId('media.mute').aliases).toContain('C_MUTE')
+    })
+
+    it('every EXTERNAL_NAMES key is a catalog id (no name filed on a missing key)', () => {
+        const ids = new Set(CATALOG.map((e) => e.id))
+        const missing = Object.keys(EXTERNAL_NAMES).filter(
+            (k) => !ids.has(k) && !(k in CANONICAL_ALIASES),
+        )
+        expect(missing).toEqual([])
+    })
+
+    it('brightness, input-assist and voice names land on their HID keys', () => {
+        const id = (n: string) => CATALOG.find((e) => e.aliases?.includes(n))?.id
+        expect(id('C_BRI_UP')).toBe('consumer.display_brightness_increment')
+        expect(id('KC_BRIU')).toBe('consumer.display_brightness_increment')
+        expect(id('C_KBIA_NEXT')).toBe('consumer.keyboard_input_assist_next')
+        expect(id('C_VOICE_COMMAND')).toBe('media.voice_command')
+        expect(id('KC_ASSISTANT')).toBe('al.al_context_aware_desktop_assistant')
+    })
+
+    it('every EXTERNAL_NAMES key the media page defines uses its media id', () => {
+        const ids = new Set(CATALOG.map((e) => e.id))
+        const misfiled = Object.keys(EXTERNAL_NAMES).filter(
+            (k) => k.startsWith('consumer.') && ids.has(k.replace(/^consumer\./, 'media.')),
+        )
+        expect(misfiled).toEqual([])
+    })
+})
+
+describe('each firmware shows its own key names', () => {
+    it('ZMK, QMK and Remappr name the same keys their own way', () => {
+        expect(zmkCodec.names('media.volume_increment')).toEqual(['C_VOLUME_UP', 'C_VOL_UP'])
+        expect(qmkCodec.names('media.volume_increment')).toEqual(['KC_AUDIO_VOL_UP', 'KC_VOLU'])
+        expect(remapprCodec.names('media.volume_increment')).toEqual(['RC_VOL_UP'])
+        expect(remapprCodec.names('key.keyboard_a')).toEqual(['RK_A'])
+        expect(vialCodec.names('key.keyboard_volume_up')).toEqual(['KC_KB_VOLUME_UP'])
+        expect((mockCodec as KeycodeCodec).names).toBeUndefined()
+    })
+
+    it('Android keyboard-page codes are no alias of the HID keys', () => {
+        const all = new Set(CATALOG.flatMap((e) => e.aliases ?? []))
+        for (const n of ['K_VOLUME_UP2', 'K_VOL_DN2', 'K_MUTE2', 'K_PLAY_PAUSE', 'K_PP', 'K_NEXT', 'K_PREV'])
+            expect(all.has(n), n).toBe(false)
+    })
+
+    it('Play, Pause and Play/Pause are three keys (HID 0xB0, 0xB1, 0xCD)', () => {
+        expect(HID_USAGE_BY_CANONICAL.get('media.play')).toEqual({ page: 12, usage: 0xb0 })
+        expect(HID_USAGE_BY_CANONICAL.get('media.pause')).toEqual({ page: 12, usage: 0xb1 })
+        expect(HID_USAGE_BY_CANONICAL.get('media.transport.play_pause')).toEqual({ page: 12, usage: 0xcd })
+        expect(remapprCodec.decode((12 << 16) | 0xcd)?.canonicalId).toBe('media.transport.play_pause')
+    })
+
+    it('the 4 HID Usage Tables 1.7 consumer usages are in the catalog', () => {
+        for (const u of [0x07, 0x515, 0x516, 0x517])
+            expect(zmkCodec.decode((12 << 16) | u), u.toString(16)).not.toBeNull()
     })
 })

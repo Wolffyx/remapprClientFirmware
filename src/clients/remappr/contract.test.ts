@@ -20,13 +20,21 @@ import { remapprAdapter } from './adapter'
 import { RemapprKeyboardService } from './service'
 import { supportsConfigEditing } from '../../configEditing'
 import { ccmOpen, ccmSeal } from './auth'
-import { REMAPPR_KIND_KEYPRESS, REMAPPR_KIND_TRANSPARENT } from './actions'
+import {
+    REMAPPR_KIND_KEYPRESS,
+    REMAPPR_KIND_LAYER_TAP,
+    REMAPPR_KIND_MACRO,
+    REMAPPR_KIND_MOD_TAP,
+    REMAPPR_KIND_TAP_DANCE,
+    REMAPPR_KIND_TRANSPARENT,
+} from './actions'
 import {
     buildUch,
     Cmd,
     CommonVerb,
     DongleVerb,
     EVENT_TAG,
+    Feature,
     EVT_INPUT,
     FRAME,
     KeyboardVerb,
@@ -116,7 +124,7 @@ const uniFrame = (
     const uch = buildUch(ns, reqId, 0, UchFlag.RESP | flags)
     return Uint8Array.from([UNIVERSAL_TAG, ...uch, ...chunk])
 }
-const limitsBytes = (): Uint8Array =>
+const limitsBytes = (featureBitmask = 0x003f): Uint8Array =>
     Uint8Array.from([
         ...le16(48),
         ...le16(16),
@@ -125,17 +133,20 @@ const limitsBytes = (): Uint8Array =>
         ...le16(8192),
         16,
         1,
-        ...le16(0x003f), // feature_bitmask lo (§7.4.1 Phase-2 features)
-        ...le16(0x0000), // feature_bitmask hi
+        ...le16(featureBitmask & 0xffff), // feature_bitmask lo (§7.4.1)
+        ...le16(featureBitmask >>> 16), // feature_bitmask hi
     ])
-const personalityBytes = (): Uint8Array =>
+// A mouse image also serves the MOUSE namespace (control.c lists it); a
+// fixture can say it does not, to check the motion facade follows the list.
+const personalityBytes = (personality = 1, mouseNs = personality === 2): Uint8Array =>
     Uint8Array.from([
         0, // role NODE
-        1, // personality KEYBOARD_NODE
+        personality, // KEYBOARD_NODE by default
         2, // proto_major
-        1, // ns_count
+        mouseNs ? 2 : 1, // ns_count
         Namespace.COMMON,
         ...le16(0x7e),
+        ...(mouseNs ? [Namespace.MOUSE, ...le16(0x1e)] : []),
         ...le32(0x0001a83f),
     ])
 const boundsBytes = (numPositions: number): Uint8Array =>
@@ -169,9 +180,18 @@ interface FakeRemappr {
     transport: Transport
     pushInput: (inputId: number, pressed: boolean) => void
     getCommitted: () => Uint8Array | null
+    /** True once the host sent CONTROL_AUTH_BEGIN. */
+    sawAuth: () => boolean
 }
 
-function makeFakeRemappr(opts: { protoMax?: number } = {}): FakeRemappr {
+function makeFakeRemappr(
+    opts: {
+        protoMax?: number
+        personality?: number
+        mouseNs?: boolean
+        featureBitmask?: number
+    } = {},
+): FakeRemappr {
     const protoMax = opts.protoMax ?? 1
     let controller!: ReadableStreamDefaultController<Uint8Array>
     const readable = new ReadableStream<Uint8Array>({
@@ -191,6 +211,7 @@ function makeFakeRemappr(opts: { protoMax?: number } = {}): FakeRemappr {
     let devTx = 0
     let staged: number[] = []
     let committed: Uint8Array | null = null
+    let authBegun = false
 
     const onFrame = (frame: Uint8Array): void => {
         const b0 = frame[0]
@@ -205,6 +226,7 @@ function makeFakeRemappr(opts: { protoMax?: number } = {}): FakeRemappr {
             return
         }
         if (b0 === Cmd.CONTROL_AUTH_BEGIN) {
+            authBegun = true
             enqueue(respFrame(b0, frame[1], 0, devPub))
             return
         }
@@ -241,8 +263,9 @@ function makeFakeRemappr(opts: { protoMax?: number } = {}): FakeRemappr {
             const seq = frame[1 + UCH_LEN + 1]
             let data: Uint8Array | null = null
             if (uch.namespace === Namespace.COMMON) {
-                if (verb === CommonVerb.GET_PERSONALITY_MAP) data = personalityBytes()
-                else if (verb === CommonVerb.GET_LIMITS) data = limitsBytes()
+                if (verb === CommonVerb.GET_PERSONALITY_MAP)
+                    data = personalityBytes(opts.personality, opts.mouseNs)
+                else if (verb === CommonVerb.GET_LIMITS) data = limitsBytes(opts.featureBitmask)
             } else if (uch.namespace === Namespace.KEYBOARD) {
                 if (verb === KeyboardVerb.GET_KEYMAP_BOUNDS) {
                     data = boundsBytes(4)
@@ -252,16 +275,15 @@ function makeFakeRemappr(opts: { protoMax?: number } = {}): FakeRemappr {
                     data = keyLayoutChunkBytes(4, start, Math.min(2, 4 - start))
                 }
             }
-            if (data) {
-                enqueue(
-                    uniFrame(
-                        uch.namespace,
-                        uch.requestId,
-                        0,
-                        respFrame(verb, seq, 0, data),
-                    ),
-                )
-            }
+            // A verb the fake does not serve answers ERR_CMD, as the firmware's.
+            enqueue(
+                uniFrame(
+                    uch.namespace,
+                    uch.requestId,
+                    0,
+                    respFrame(verb, seq, data ? 0 : Status.ERR_CMD, data ?? new Uint8Array()),
+                ),
+            )
             return
         }
         if (b0 === SEALED_TAG && devKey) {
@@ -308,6 +330,7 @@ function makeFakeRemappr(opts: { protoMax?: number } = {}): FakeRemappr {
         pushInput: (inputId, pressed) =>
             enqueue(eventFrame(EVT_INPUT, inputEventBytes(pressed, inputId))),
         getCommitted: () => committed,
+        sawAuth: () => authBegun,
     }
 }
 
@@ -449,6 +472,40 @@ describe('RemapprKeyboardService — live config round-trip', () => {
         await svc.disconnect()
     })
 
+    it('advertises every behavior family on firmware that predates the family bits', async () => {
+        const svc = await connectFake(makeFakeRemappr({ protoMax: 2 }))
+        expect(svc.limits?.families).toBeNull()
+        const b = svc.capabilities.behaviors
+        expect([b?.tapHold, b?.combos, b?.macros, b?.sequences, b?.unicode]).toEqual([true, true, true, true, true])
+        expect([b?.conditionals, b?.keyOverrides, b?.leader, b?.autoShift]).toEqual([true, true, true, true])
+        const kinds = (await svc.listActionTypes()).map((t) => t.id)
+        expect(kinds).toContain(REMAPPR_KIND_MOD_TAP)
+        expect(kinds).toContain(REMAPPR_KIND_MACRO)
+        await svc.disconnect()
+    })
+
+    it('hides the behavior families a keyboard was built without', async () => {
+        // Families advertised (bit 13); only combos + Unicode built in.
+        const mask = 0x3f | Feature.BEHAVIOR_FAMILIES | Feature.COMBOS | Feature.UNICODE
+        const svc = await connectFake(makeFakeRemappr({ protoMax: 2, featureBitmask: mask }))
+        expect(svc.limits?.families).toEqual({
+            tapHold: false,
+            combos: true,
+            macros: false,
+            sequences: false,
+            unicode: true,
+            conditionals: false,
+            keyOverrides: false,
+        })
+        const b = svc.capabilities.behaviors
+        expect(b).toMatchObject({ tapHold: false, combos: true, unicode: true, leader: false, autoShift: false })
+        const kinds = (await svc.listActionTypes()).map((t) => t.id)
+        for (const k of [REMAPPR_KIND_MOD_TAP, REMAPPR_KIND_LAYER_TAP, REMAPPR_KIND_MACRO, REMAPPR_KIND_TAP_DANCE])
+            expect(kinds).not.toContain(k)
+        expect(kinds).toContain(REMAPPR_KIND_KEYPRESS)
+        await svc.disconnect()
+    })
+
     it('commits a sealed blob the device can decode (version bumped)', async () => {
         const fake = makeFakeRemappr()
         const svc = await connectFake(fake)
@@ -560,6 +617,47 @@ describe('RemapprAdapter — dongle connect (lands on the node roster)', () => {
         expect(svc.capabilities.readOnly).toBe(true)
         // A dongle is never handshaken (§7.2): the §19 BEGIN/FINISH never ran.
         expect(dongle.sawAuth()).toBe(false)
+        // No GET_LIMITS (older dongle firmware): no config store, no settings.
+        expect(svc.device).toBeUndefined()
+        await svc.disconnect()
+    })
+})
+
+describe('RemapprAdapter — mouse connect (lands on the device editor)', () => {
+    it('detects a mouse by personality and exposes its settings', async () => {
+        const fake = makeFakeRemappr({ protoMax: 2, personality: 2 })
+        const svc = await connectFake(fake)
+        expect(svc.kind).toBe('mouse')
+        expect(svc.deviceInfo.name).toBe('Remappr Mouse')
+        // Editable over USB: the device editor stages edits, Save writes them.
+        expect(svc.capabilities.readOnly).toBeUndefined()
+        expect(svc.capabilities.saveMode).toBe('manual')
+        expect(svc.controls?.setBinding).toBeDefined()
+        expect(svc.device?.draft).toBeDefined()
+        expect(svc.nodes).toBeUndefined()
+        expect(svc.device?.personality).toBe('mouse')
+        expect(svc.device?.writable).toBe(true)
+        expect(svc.motion?.writable).toBe(true)
+        await svc.disconnect()
+    })
+
+    it('leaves the live controls out when the mouse does not serve MOUSE', async () => {
+        const fake = makeFakeRemappr({ protoMax: 2, personality: 2, mouseNs: false })
+        const svc = await connectFake(fake)
+        expect(svc.kind).toBe('mouse')
+        expect(svc.motion).toBeUndefined()
+        await svc.disconnect()
+    })
+})
+
+describe('RemapprAdapter — recovery image (L3.16)', () => {
+    it('connects a recovery image read-only, without a handshake', async () => {
+        const fake = makeFakeRemappr({ protoMax: 2, personality: 3 })
+        const svc = await connectFake(fake)
+        expect(svc.kind).toBe('keyboard')
+        expect(svc.capabilities.readOnly).toBe(true)
+        expect(svc.capabilities.readOnlyReason).toMatch(/recovery image/)
+        expect(fake.sawAuth()).toBe(false)
         await svc.disconnect()
     })
 })

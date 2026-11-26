@@ -8,6 +8,7 @@
 
 import { friendlyName, resolveKeycode, type Modifier } from './keycodes'
 import {
+    cloneParts,
     cloneController,
     cloneFirmwareConfig,
     cloneHardware,
@@ -35,7 +36,8 @@ import type {
 // start-to-finish. External callers (e.g. the inspector) get the universal base.
 let activeDefaults: TargetDefaults = resolveDefaults(null)
 
-const FRIENDLY_MOD: Record<Modifier, string> = {
+/** The surface spelling of a modifier in a chord ("Ctrl" in "Ctrl+C"). */
+export const FRIENDLY_MOD: Record<Modifier, string> = {
     LEFT_CTRL: 'Ctrl',
     LEFT_SHIFT: 'Shift',
     LEFT_ALT: 'Alt',
@@ -122,9 +124,18 @@ export function denormalizeAction(a: CanonAction): Surface {
             }
         }
         case 'layer':
-            return { type: 'layer', mode: a.mode, layer: a.layer }
+            return {
+                type: 'layer',
+                mode: a.mode,
+                layer: a.layer,
+                ...pickDefined(a, ['releaseAfterMs']),
+            }
         case 'sticky_key':
-            return { type: 'sticky_key', key: keyToken(a.key, a._keySrc) }
+            return {
+                type: 'sticky_key',
+                key: keyToken(a.key, a._keySrc),
+                ...pickDefined(a, ['releaseAfterMs']),
+            }
         case 'output':
             return {
                 type: 'output',
@@ -180,11 +191,16 @@ export function denormalizeAction(a: CanonAction): Surface {
                 type: 'auto_shift',
                 key: keyToken(a.key, a._keySrc),
                 mods: [...a.mods],
+                ...pickDefined(a, ['timeoutMs', 'quickTapMs', 'requirePriorIdleMs']),
             }
         case 'layer_mod':
             return { type: 'layer_mod', layer: a.layer, mods: [...a.mods] }
         case 'tap_toggle':
-            return { type: 'tap_toggle', layer: a.layer }
+            return {
+                type: 'tap_toggle',
+                layer: a.layer,
+                ...pickDefined(a, ['tappingTermMs']),
+            }
         case 'set_base_saved':
             return { type: 'set_base_saved', layer: a.layer }
         case 'auto_layer':
@@ -217,6 +233,16 @@ export function denormalizeAction(a: CanonAction): Surface {
     }
 }
 
+/** The fields of `o` among `keys` that are set. */
+function pickDefined<T extends object, K extends keyof T>(
+    o: T,
+    keys: readonly K[],
+): Partial<Pick<T, K>> {
+    const out: Partial<Pick<T, K>> = {}
+    for (const k of keys) if (o[k] !== undefined) out[k] = o[k]
+    return out
+}
+
 const denormalizeEncoder = (
     e: CanonEncoderBinding,
 ): Record<string, unknown> => ({
@@ -229,6 +255,9 @@ const denormalizeSlider = (s: CanonSliderBinding): Record<string, unknown> => ({
     map: s.map,
     ...(s.min !== undefined ? { min: s.min } : {}),
     ...(s.max !== undefined ? { max: s.max } : {}),
+    ...(s.steps !== undefined ? { steps: s.steps } : {}),
+    ...(s.up ? { up: denormalizeAction(s.up) } : {}),
+    ...(s.down ? { down: denormalizeAction(s.down) } : {}),
     ...(s.action ? { action: denormalizeAction(s.action) } : {}),
 })
 
@@ -243,6 +272,7 @@ const denormalizeMacroStep = (s: CanonMacroStep): Record<string, unknown> => {
             ...(s.to !== undefined ? { to: s.to } : {}),
         }
     if (s.type === 'pause_for_release') return { type: s.type }
+    if (s.type === 'call') return { type: s.type, macro: s.macro }
     return { type: s.type, key: keyToken(s.key, s._keySrc) }
 }
 
@@ -296,6 +326,7 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                 ...(k.variant ? { variant: k.variant } : {}),
                 ...(k.pin ? { pin: k.pin } : {}),
                 ...(k.element ? { element: k.element } : {}),
+                ...(k.motor ? { motor: structuredClone(k.motor) } : {}),
                 ...(k.option ? { option: [k.option[0], k.option[1]] } : {}),
             })),
             ...(km.keyboard.encoders
@@ -303,6 +334,16 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                       encoders: km.keyboard.encoders.map((e) => ({
                           x: e.x,
                           y: e.y,
+                          ...(e.key !== undefined ? { key: e.key } : {}),
+                      })),
+                  }
+                : {}),
+            ...(km.keyboard.sliders
+                ? {
+                      sliders: km.keyboard.sliders.map((e) => ({
+                          x: e.x,
+                          y: e.y,
+                          ...(e.key !== undefined ? { key: e.key } : {}),
                       })),
                   }
                 : {}),
@@ -339,6 +380,9 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                       ),
                   }
                 : {}),
+            ...(km.keyboard.features
+                ? { features: [...km.keyboard.features] }
+                : {}),
             ...(km.keyboard.layouts
                 ? { layouts: km.keyboard.layouts.map((l) => ({ ...l })) }
                 : {}),
@@ -353,6 +397,9 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
             ...(km.keyboard.split !== undefined
                 ? { split: km.keyboard.split }
                 : {}),
+            ...(km.keyboard.parts
+                ? { parts: cloneParts(km.keyboard.parts) }
+                : {}),
         },
         layers: km.layers.map((l) => ({
             name: l.name,
@@ -363,23 +410,10 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
             ...(l.encoders
                 ? { encoders: l.encoders.map(denormalizeEncoder) }
                 : {}),
-            ...(l.encoderBindings && Object.keys(l.encoderBindings).length
+            ...(l.sliders?.some((s) => s)
                 ? {
-                      encoderBindings: Object.fromEntries(
-                          Object.entries(l.encoderBindings).map(([k, e]) => [
-                              k,
-                              denormalizeEncoder(e),
-                          ]),
-                      ),
-                  }
-                : {}),
-            ...(l.sliderBindings && Object.keys(l.sliderBindings).length
-                ? {
-                      sliderBindings: Object.fromEntries(
-                          Object.entries(l.sliderBindings).map(([k, s]) => [
-                              k,
-                              denormalizeSlider(s),
-                          ]),
+                      sliders: l.sliders.map((s) =>
+                          s ? denormalizeSlider(s) : null,
                       ),
                   }
                 : {}),
@@ -420,6 +454,7 @@ export function toSurfaceObject(km: ConfigKeymap): Record<string, unknown> {
                       ...(m.description ? { description: m.description } : {}),
                       ...(m.params !== undefined ? { params: m.params } : {}),
                       steps: m.steps.map(denormalizeMacroStep),
+                      ...(m.private ? { private: true } : {}),
                   })),
               }
             : {}),

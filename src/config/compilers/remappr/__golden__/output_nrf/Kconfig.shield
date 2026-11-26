@@ -1,0 +1,2 @@
+config SHIELD_OUTPUT_NRF
+	def_bool $(shields_list_contains,output_nrf)

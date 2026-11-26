@@ -37,6 +37,7 @@ describe('migrate: action string grammar', () => {
         expect(migrateAction('capsword')).toEqual({ type: 'caps_word' })
         expect(migrateAction('repeat')).toEqual({ type: 'key_repeat' })
         expect(migrateAction('reset')).toEqual({ type: 'reset' })
+        expect(migrateAction('battery')).toEqual({ type: 'battery_show' })
     })
 
     it('lowers layer verbs with mode + aliases', () => {
@@ -344,7 +345,7 @@ describe('migrate: studio_unlock is rejected on remappr', () => {
             (d) => d.level === 'error' && /studio_unlock/.test(d.message),
         )
         expect(err).toBeDefined()
-        expect(err?.message).toMatch(/RUCP control/)
+        expect(err?.message).toMatch(/control connection/)
     })
 })
 

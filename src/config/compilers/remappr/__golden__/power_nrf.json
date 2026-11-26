@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "kind": "remappr.keymap",
+  "meta": { "name": "Power nRF", "target": "zmk" },
+  "keyboard": {
+    "id": "power_nrf",
+    "name": "Power nRF",
+    "keys": [
+      { "x": 0, "y": 0, "matrix": [0, 0] },
+      { "x": 1, "y": 0, "matrix": [0, 1] },
+      { "x": 0, "y": 1, "matrix": [1, 0] },
+      { "x": 1, "y": 1, "matrix": [1, 1] }
+    ]
+  },
+  "layers": [{ "name": "base", "bindings": ["A", "B", "C", "D"] }],
+  "board": {
+    "controller": "nrf52840dk/nrf52840",
+    "matrix": {
+      "diode": "col2row",
+      "rows": ["P0.03", "P0.04"],
+      "cols": ["P1.01", "P1.02"]
+    },
+    "battery": {
+      "adc": {
+        "adc": "adc",
+        "channel": 4,
+        "setup": {
+          "gain": "ADC_GAIN_1_6",
+          "reference": "ADC_REF_INTERNAL",
+          "inputPositive": "NRF_SAADC_AIN4",
+          "resolution": 12
+        }
+      },
+      "divider": { "outputOhms": 10000, "fullOhms": 14000 },
+      "charging": "P0.29",
+      "ocvCurve": [[4200, 100], [3900, 70], [3700, 40], [3500, 10], [3300, 0]]
+    },
+    "statusLeds": [
+      { "function": "pairing", "led": "led1", "blinkMs": 250 },
+      { "function": "battery", "pin": "P1.08", "activeLow": true }
+    ],
+    "powerOff": { "partialWake": true, "wakeFirst": ["P0.03"] }
+  }
+}

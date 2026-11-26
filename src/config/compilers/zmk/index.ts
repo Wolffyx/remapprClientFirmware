@@ -23,15 +23,22 @@ import {
     emitModMorphs,
     emitSliderInputs,
     emitTapDances,
+    keymapPositionList,
 } from './behaviors'
+import { keymapPositions, planLayouts } from './layouts'
 import { emitOverlay, emitSplitOverlay } from './overlay'
 import { dtsString, sanitize } from './maps'
 
 function emitKeymap(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
+    // Physical layouts first: with variants, the keymap is written in the
+    // default layout's order.
+    const plan = planLayouts(config, diag)
+    const variants = !!config.keyboard.layouts?.length
     const ctx: Ctx = {
         layerIndex: new Map(config.layers.map((l, i) => [l.name, i])),
         diag,
         genHoldTaps: new Map(),
+        ...(variants ? { positions: keymapPositions(plan) } : {}),
     }
 
     const lines: string[] = []
@@ -59,7 +66,7 @@ function emitKeymap(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     if (config.modMorphs?.length)
         lines.push(...emitModMorphs(config.modMorphs, ctx), ``)
     if (config.holdTaps?.length)
-        lines.push(...emitHoldTapDefs(config.holdTaps), ``)
+        lines.push(...emitHoldTapDefs(config.holdTaps, ctx), ``)
 
     // Encoders: build sensor-rotate behavior nodes (non-keypress pairs) up front,
     // then reference them per layer below.
@@ -81,10 +88,18 @@ function emitKeymap(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
             const layersAttr = c.layers?.length
                 ? `\n            layers = <${c.layers.map((n) => ctx.layerIndex.get(n) ?? 0).join(' ')}>;`
                 : ''
+            const keys = keymapPositionList(c.keys, ctx)
+            if (keys.length < c.keys.length) {
+                diag.warn(
+                    `combo "${c.name}" uses keys outside the default layout; it was left out`,
+                    ['combos', ci, 'keys'],
+                )
+                return
+            }
             lines.push(`        combo_${sanitize(c.name)} {`)
             if (c.timeoutMs !== undefined)
                 lines.push(`            timeout-ms = <${c.timeoutMs}>;`)
-            lines.push(`            key-positions = <${c.keys.join(' ')}>;`)
+            lines.push(`            key-positions = <${keys.join(' ')}>;`)
             lines.push(`            bindings = <${binding}>;${layersAttr}`)
             lines.push(`        };`)
         })
@@ -120,9 +135,13 @@ function emitKeymap(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     lines.push(`    keymap {`)
     lines.push(`        compatible = "zmk,keymap";`)
     config.layers.forEach((layer, li) => {
-        const cells = layer.bindings.map((b, bi) =>
-            emitBinding(b, ctx, ['layers', li, 'bindings', bi]),
-        )
+        const order = variants
+            ? plan.keymapKeys
+            : layer.bindings.map((_, i) => i)
+        const cells = order.map((ki) => {
+            const b = layer.bindings[ki] ?? { type: 'transparent' as const }
+            return emitBinding(b, ctx, ['layers', li, 'bindings', ki])
+        })
         const wrapped: string[] = []
         for (let i = 0; i < cells.length; i += 6) {
             wrapped.push('                ' + cells.slice(i, i + 6).join(' '))
@@ -162,8 +181,8 @@ function emitKeymap(config: ConfigKeymap, diag: DiagnosticBag): ExportedFile[] {
     return [
         keymapFile,
         ...(config.keyboard.split
-            ? emitSplitOverlay(config, diag)
-            : [emitOverlay(config, diag)]),
+            ? emitSplitOverlay(config, diag, plan)
+            : [emitOverlay(config, diag, plan)]),
     ]
 }
 

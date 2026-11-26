@@ -1,9 +1,25 @@
 import type { KeyCatalog } from './catalog/types'
+import type { IdentityApi } from './identity'
 import type { KeycodeCodec } from './codec'
+import type {
+    ControlBinding,
+    ControlInputFrame,
+    ControlsCatalog,
+    ControlsChange,
+    DeviceBindings,
+    DeviceKind,
+    DeviceModel,
+    DeviceProfile,
+    SensorInfo,
+    SensorSettingValue,
+} from './devices/types'
 import type { LightingCatalog } from './lighting'
 import type {
+    AxisConfig,
+    AxisState,
     ClusterDiag,
     Limits,
+    MotionConfig,
     RoleEvent,
     UnicodeModeState,
 } from './clients/remappr/protocol'
@@ -21,22 +37,41 @@ import type {
     KeyOverrideEntry,
     KeyUpdate,
     Layer,
+    SliderAction,
     LockKind,
     LockState,
     UnlockOptions,
     MacroAction,
+    MacroPlayMode,
     TapDanceEntry,
 } from './types'
 
 import type { SideloadApi } from './sideload'
 import type { ConfigKeymap } from './config'
+import type { ConfigDevice } from './config/device'
+import type { ConfigDisplay, ConfigScreenPage, ConfigScreenWidget } from './config/types'
 
 // pattern-check: skip optional behavior-flags field added to existing Capabilities DTO — feature gate per firmware
+// Each flag: `false` = the firmware lacks it (the UI hides it); `true` or absent =
+// present. The family flags mirror a Remappr keyboard's built-in behavior
+// families (GET_LIMITS bits 14-20); firmwares that don't build families out
+// leave them unset.
 export interface FirmwareBehaviorFlags {
     capsWord?: boolean
     leader?: boolean
     autoShift?: boolean
     swapHands?: boolean
+    /** Mod-tap, layer-tap, auto shift, tap-toggle, tapping-term tuning,
+     *  positional hold triggers. */
+    tapHold?: boolean
+    combos?: boolean
+    /** Macros, incl. recording / playing a macro. */
+    macros?: boolean
+    /** Tap-dances and leader sequences. */
+    sequences?: boolean
+    unicode?: boolean
+    conditionals?: boolean
+    keyOverrides?: boolean
 }
 
 export interface Capabilities {
@@ -79,12 +114,19 @@ export interface Capabilities {
      *  relayed-write path is HW-proof-pending. The UI gates editing affordances
      *  on this — never on a firmware name. */
     readOnly?: boolean
+    /** Why `readOnly` is set, when the reason is worth showing: e.g. the
+     *  device's config could not be decoded, so saving would overwrite it. */
+    readOnlyReason?: string
     /** This is a demo / simulated device, not real hardware: it was never
      *  discovered on a bus, so anything keyed to a physical device (preview
      *  snapshots, pinning a compile target, a real switch matrix) must skip it.
      *  Set only by simulated adapters; the UI gates on this, never on a firmware
      *  name. */
     demo?: boolean
+    /** Power hardware the device reports: a battery (so it sleeps, and the
+     *  power timeouts mean something) and whether it can power off and wake
+     *  on an input. Absent when the device does not say. */
+    power?: { battery: boolean; powerOff: boolean }
     /** Extra guidance shown on the "unlock to continue" screen for firmwares
      *  whose unlock has a prerequisite the user must set up themselves (ZMK
      *  needs a studio-unlock binding in the keymap). Omitted when unlocking is
@@ -111,6 +153,20 @@ export interface ConnectNotice {
 }
 
 // Pattern check: Facade (Tier 1) — applied — group related optional methods into 3 cohesive feature facades for renderer single-guard reads
+/** Slider edits: one layer's binding for slider `slot` (the layout's
+ *  `sliders` index; `null` = as on the base layer). Only firmware that models
+ *  sliders offers it. */
+export interface SliderApi {
+    /** The slider maps (config SliderMap ids) this firmware can run; absent =
+     *  every one. */
+    readonly maps?: readonly string[]
+    setSlider(
+        layerId: number,
+        slot: number,
+        slider: SliderAction | null,
+    ): Promise<void>
+}
+
 export interface EncoderApi {
     /** `direction`: 0 = clockwise, 1 = counter-clockwise (matches
      *  EncoderAction.cw / .ccw). Clients map this to their wire flag. */
@@ -152,7 +208,39 @@ export interface MacroApi {
 
     getMacro(idx: number): Promise<MacroAction[]>
 
-    setMacro?(idx: number, actions: MacroAction[]): Promise<void>
+    /** Writes the steps; `playMode`, on firmware that offers {@link playModes},
+     *  is written with them (absent = the macro keeps the mode it has). */
+    setMacro?(
+        idx: number,
+        actions: MacroAction[],
+        playMode?: MacroPlayMode,
+    ): Promise<void>
+
+    /** The play modes each macro can choose from, when the firmware lets every
+     *  macro choose; the UI offers exactly these. Absent = not a setting. */
+    readonly playModes?: readonly MacroPlayMode[]
+
+    /** The mode macro `idx` plays in; present with {@link playModes}. */
+    getPlayMode?(idx: number): Promise<MacroPlayMode>
+
+    /** The action kinds this firmware's macros can hold, for the editor to
+     *  offer. Absent = the basic set (tap, down, up, delay, text). */
+    actionKinds?: readonly MacroAction['kind'][]
+
+    /** The macro names the macro at `idx` may run as a `call` step: never
+     *  itself, nor one that would loop back to it. Absent = any other macro. */
+    callTargets?(idx: number): readonly string[]
+
+    /** The macros left out of {@link callTargets} and why, in plain words
+     *  ("is this macro."), for the editor to explain the missing choices. */
+    excludedCallTargets?(idx: number): readonly { macro: string; reason: string }[]
+
+    /** The macro's own description, when it has one. */
+    description?(idx: number): string | undefined
+
+    /** Why the macro at `idx` can't be edited here (it has steps the editor
+     *  can't show), or null when it can. The editor shows it view-only. */
+    editBlockedReason?(idx: number): string | null
 
     /** Real per-index macro names (e.g. §24 config-blob DT names); index =
      *  pool position. Only firmwares whose macro pool is key-assignable
@@ -194,7 +282,10 @@ export interface ConfigBridgeApi {
      *  Only a firmware whose runtime is a lossy projection of a config it also
      *  owns can do this. Adapters that edit the device directly omit it. */
     raiseKeymap(
-        layers: readonly Pick<Layer, 'name' | 'keys' | 'encoders'>[],
+        layers: readonly Pick<
+            Layer,
+            'name' | 'keys' | 'encoders' | 'sliders'
+        >[],
         prevConfig: ConfigKeymap,
     ): ConfigKeymap
 }
@@ -207,10 +298,16 @@ export interface WirelessLpm {
     timeoutMs: number
 }
 
+/** A battery's charge, 0..100 %, and whether it is charging. */
+export interface BatteryState {
+    level: number
+    charging: boolean
+}
+
 export interface WirelessStatus {
     transport: WirelessTransport
     btSlot?: 1 | 2 | 3
-    battery?: { level: number; charging: boolean }
+    battery?: BatteryState
 }
 
 export interface WirelessApi {
@@ -377,17 +474,31 @@ export interface RgbApi {
 // `service.nodes` once instead of threading the relay RPC; the dongle's adapter
 // owns the wire (listNodes + relayed reads), the consumer just sees views.
 
+/** A node's place in a multi-part keyboard (NodeView.clusterRole). */
+export type NodeClusterRole = 'coordinator' | 'follower' | 'standalone'
+
 /** A node reachable through a dongle, as surfaced to the UI. Decoupled from the
  *  wire NodeRecord so the contract stays firmware-neutral. */
 export interface NodeView {
     /** Short-id used to address the node over the relay (stable per bond). */
     id: number
-    /** Adapter-formatted human label (e.g. "Node 0x0007"). */
+    /** Adapter-formatted human label (e.g. "Joystick 0x0007"; "Node 0x0007"
+     *  when the kind is unknown). */
     label: string
-    /** Firmware personality byte (board kind); 0 when unknown. */
+    /** Raw device-type byte of the roster record; 0 when unknown. */
     personality: number
+    /** What the node is, when the adapter can tell (see devices/types.ts). */
+    kind?: DeviceKind
     /** Link is up right now. */
     online: boolean
+    /** A crypto session is up and the node is online, so the device can seal
+     *  control toward it now. Gate opening and owner-sealed actions (unpair) on
+     *  this, not on `online`: a node can be heard before its session resumes. */
+    secured: boolean
+    /** The node's stable identity as the device reports it (hex), for keying
+     *  per-node state across re-pairs; absent when the device does not know it
+     *  (a bond older than the identity). `id` can change on a re-pair. */
+    deviceId?: string
     /** Node is bonded to the dongle (vs. a transient sighting). */
     bonded: boolean
     /** Last-seen signal strength in dBm (0 when unknown). */
@@ -399,6 +510,14 @@ export interface NodeView {
     isMaster: boolean
     /** Raw §5 election-role low byte (0 = unknown); `isMaster` is the decoded bit. */
     nodeRole: number
+    /** Its place in a multi-part keyboard, decoded from the role the node
+     *  reports: the `coordinator` merges its `follower`s and talks to the host;
+     *  `standalone` works alone. Absent until the node reports a role. A
+     *  coordinator with no follower in the roster is a keyboard on its own. */
+    clusterRole?: NodeClusterRole
+    /** The charge it last reported; absent until it reports one (a node with
+     *  no battery never does). */
+    battery?: BatteryState
 }
 
 export interface NodesApi {
@@ -406,10 +525,11 @@ export interface NodesApi {
      *  directly-attached (non-dongle) device. */
     list(): Promise<NodeView[]>
 
-    /** Open a **read-only** KeyboardService view of one node (relayed read of its
-     *  device-info + active config + geometry). The returned service has
-     *  `capabilities.readOnly === true`; every editing call throws. Editing a
-     *  behind-dongle node is gated on the relayed-write HW-proof. */
+    /** Open a view of one node, every call relayed to it. A mouse or a joystick
+     *  gets the service it has on its own transport, editable through the relay.
+     *  A keyboard is **read-only** (`capabilities.readOnly === true`, every
+     *  editing call throws): its changes need the sealed relay session, which is
+     *  not proven on hardware yet. */
     open(id: number): Promise<KeyboardService>
 
     /** Open (or close) the dongle's pairing window so a new node can bond — the
@@ -438,9 +558,15 @@ export interface NodesApi {
     setNkro(enabled?: boolean): Promise<boolean>
 
     /** Read the dongle's radio link stats: the live hop map with per-channel
-     *  packet-error counters and a generation counter that bumps on every
-     *  adaptive channel swap. Idempotent read for a diagnostics view. */
+     *  packet-error counters, each channel's last verdict and a generation
+     *  counter. Idempotent read for a diagnostics view. */
     getLinkStats(): Promise<RadioLinkStats>
+
+    /** Move every connected node to new channels: the failing ones replaced
+     *  (omit `channels`), or an explicit map. The receiver never changes them
+     *  on its own (nodes remember them); it rolls a change out a channel at a
+     *  time. Rejects while a change runs or on a refused list. */
+    changeChannels(channels?: number[]): Promise<RadioChannelChange>
 
     /** Read the dongle's raw radio pipe table: every pipe bonded or not, plus
      *  the pairing-window state — the diagnosis view behind `list()` (incomplete
@@ -456,19 +582,33 @@ export interface RadioChannelStat {
     channel: number
     ok: number
     fail: number
+    /** Failure % of the last full window, or null before the first verdict. */
+    lastFailPercent: number | null
 }
 
 /** Radio link diagnostics for a multi-node receiver (NodesApi.getLinkStats). */
 export interface RadioLinkStats {
-    /** Hop-map generation — bumps (mod 256) on every adaptive channel swap. */
+    /** Hop-map generation — bumps (mod 256) once per changed channel. */
     mapGeneration: number
     /** Replacement candidates outside the active map. */
     poolCount: number
-    /** Samples per channel before a keep/swap verdict. */
+    /** Samples per channel before a verdict. */
     window: number
-    /** Failure percentage that triggers an adaptive swap. */
+    /** Failure percentage over which a channel counts as bad. */
     failPercent: number
+    /** A channel change is still rolling out. */
+    changeInProgress: boolean
     channels: RadioChannelStat[]
+}
+
+/** A started channel change (NodesApi.changeChannels). */
+export interface RadioChannelChange {
+    /** Channels that will change; 0 = nothing to change. */
+    planned: number
+    /** Map generation once done. */
+    mapGeneration: number
+    /** The map being rolled out. */
+    channels: number[]
 }
 
 // pattern-check: skip — plain DTO interfaces mirroring the pipe-table wire
@@ -546,6 +686,367 @@ export interface UnicodeApi {
     setMode(mode: number): Promise<void>
 }
 
+// pattern-check: skip — DTO + facade interfaces beside NodesApi / UnicodeApi; the
+// remappr adapter is the Facade that backs them.
+/** A device config read back from the device (DeviceConfigApi.read). */
+export interface DeviceConfigSnapshot {
+    /** The active config as a device document; a device with no stored config
+     *  reads as a document with no settings (every field on its default). */
+    config: ConfigDevice
+    /** The active config_version (0 when none is stored). */
+    configVersion: number
+    /** A pushed config is stored and active (false: running on defaults). */
+    stored: boolean
+}
+
+/** The config of a device that is not a keyboard (a dongle or a mouse), read and
+ *  pushed as a `remappr.device` document. */
+export interface DeviceConfigApi {
+    /** Which device this is; a pushed document must name the same one. */
+    readonly personality: ConfigDevice['personality']
+    /** False on a node reached through a dongle: the app does not write through
+     *  the relay yet, so `write` rejects there. */
+    readonly writable: boolean
+    /** Read the active config back from the device. */
+    read(): Promise<DeviceConfigSnapshot>
+    /** Validate, compile and push `config` (write, validate, commit). The device
+     *  applies it at once and drops any live override (SET_NKRO, SET_DPI, …)
+     *  made under the previous config. Resolves to the new config_version. */
+    write(config: ConfigDevice): Promise<number>
+    /** Staged edits of the document, shared by every editor of this device (the
+     *  controls facade and the settings panels): `service.commit()` writes it,
+     *  `discardChanges()` drops it. Absent = edit through `write()` only (or a
+     *  read-only view). */
+    readonly draft?: DeviceConfigDraft
+}
+
+// pattern-check: skip — interface of the staged device document, beside DeviceConfigApi.
+/** The device document as it will be written by the next `commit()`. */
+export interface DeviceConfigDraft {
+    /** The staged document; null until the device has been read. */
+    get(): ConfigDevice | null
+    /** Stage `config` (validated when committed). */
+    set(config: ConfigDevice): void
+    /** The staged document changed (a set, a discard, a commit re-read). */
+    onChanged(cb: (config: ConfigDevice) => void): () => void
+}
+
+/** Re-exported with MouseMotionApi so a consumer imports the facade and its wire
+ *  DTO from one entry point. */
+export type { MotionConfig } from './clients/remappr/protocol'
+
+/** A mouse's live motion controls (MOUSE namespace). A live change holds until
+ *  the next pushed config, and survives a reboot until then. */
+export interface MouseMotionApi {
+    /** False on a read-only view. */
+    readonly writable: boolean
+    /** The sensor's DPI range and step, and the DPI, acceleration profile and
+     *  scroll mode in force. */
+    getConfig(): Promise<MotionConfig>
+    /** Set the DPI; the device refuses one outside its range. */
+    setDpi(dpi: number): Promise<void>
+    /** 0 = flat, 1 = the config's acceleration curve. */
+    setAccelProfile(profile: number): Promise<void>
+    /** 0 = normal, 1 = inverted wheel. */
+    setScrollMode(mode: number): Promise<void>
+}
+
+/** Re-exported with JoystickApi so a consumer imports the facade and its wire
+ *  DTOs from one entry point. */
+export type {
+    AxisConfig,
+    AxisConfigEntry,
+    AxisState,
+} from './clients/remappr/protocol'
+
+/** A CALIBRATE step: begin (sweep the stick round its rim and let it go from
+ *  each side), centre (it rests), finish (apply and store), cancel, reset (the
+ *  board default), undo (back to the calibration the last finish, reset or
+ *  undo replaced, until the joystick restarts). */
+export type JoystickCalStep =
+    'begin' | 'centre' | 'finish' | 'cancel' | 'reset' | 'undo'
+
+/** A stick and the two analog inputs it reads (X, then Y). */
+export interface JoystickStick {
+    readonly controlId: string
+    readonly name: string
+    readonly x: number
+    readonly y: number
+}
+
+/** How a live axis map moves an input: inverted, and radial (with its
+ *  partner input, one round stick). */
+export interface JoystickAxisFlags {
+    readonly invert: boolean
+    readonly radial?: boolean
+}
+
+/** Deadzones a finished calibration suggests for one control, in the device
+ *  editor's units (StickBinding): inner = centre deadzone %, outer =
+ *  saturation % (100 = the whole travel). A field it measured nothing for is
+ *  absent. */
+export interface DeadzoneSuggestion {
+    readonly controlId: string
+    readonly inner?: number
+    readonly outer?: number
+}
+
+// Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as MouseMotionApi above.
+/** A joystick's live controls (JOYSTICK namespace, provisional). The axis map
+ *  and deadzones set here are live tweaks: the next saved config replaces
+ *  them. Calibration belongs to the unit and stays across configs. */
+export interface JoystickApi {
+    /** False on a read-only view. */
+    readonly writable: boolean
+    /** Each analog input's raw count and report value, the buttons, the hat. */
+    getState(): Promise<AxisState>
+    /** Each analog input's axis, curve, deadzones and calibration. */
+    getConfig(): Promise<AxisConfig>
+    /** The sticks the joystick declares, with the inputs each reads. */
+    sticks(): readonly JoystickStick[]
+    /** One calibration step on one input, or on every input when `input` is
+     *  omitted. Rejects a step out of turn (finish before a centre, too
+     *  narrow a sweep). Finish resolves to the deadzones the capture
+     *  suggests, per control ([] for the other steps, or when the firmware
+     *  measures none). */
+    calibrate(
+        step: JoystickCalStep,
+        input?: number,
+    ): Promise<readonly DeadzoneSuggestion[]>
+    /** Live: put `input` on report axis `out` (0..5, null = off). */
+    setAxisMap(
+        input: number,
+        out: number | null,
+        flags: JoystickAxisFlags,
+    ): Promise<void>
+    /** Live: the input's deadzones, percent (inner + outer < 100). */
+    setDeadzone(input: number, inner: number, outer: number): Promise<void>
+}
+
+/** A RUN_PROCEDURE step: begin (phase 1), next (end the phase in hand),
+ *  cancel (stop; a stored result stays), reset (forget the stored result). */
+export type SensorProcedureStep = 'begin' | 'next' | 'cancel' | 'reset' | 'undo'
+
+/** A procedure's progress. `phase` counts from 1 while it runs (0 else);
+ *  `progress` / `total` are what a counting phase has done (0 / 0 when the
+ *  phase does not count). `ok` is the result once done or failed.
+ *  `hasResult` says a result is stored now (one kept from an earlier run
+ *  reads idle with it set), so the options the procedure gates are accepted;
+ *  absent when the device does not say. */
+export interface SensorProcedureStatus {
+    readonly state: 'idle' | 'running' | 'done' | 'failed'
+    readonly phase: number
+    readonly progress: number
+    readonly total: number
+    readonly ok: boolean
+    readonly hasResult?: boolean
+}
+
+/** A live reading, by its {@link SensorMetricSpec} name. */
+export interface SensorReading {
+    readonly name: string
+    readonly value: number
+    readonly max: number
+}
+
+// Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as MouseMotionApi / JoystickApi above.
+/** A device's sensors (SENSOR namespace, provisional): what each has, live
+ *  changes, procedures and readings. A setting set here is a live preview:
+ *  the next saved config replaces it. A procedure's result belongs to the
+ *  unit and stays across configs. Settings and procedures are named as their
+ *  descriptors name them. */
+/** Values this computer shows on the device's screens (time, CPU, media,
+ *  text). Each value expires on the device when it is not refreshed (a few
+ *  seconds; the time a day), so a closed app leaves "--" instead of a stale
+ *  number. Keys are named as the registry names them (`time`, `cpu`,
+ *  `mediaTitle`, `user0`...). */
+export interface HostValuesApi {
+    /** The keys the device's saved screens show: push only those. */
+    keys(): Promise<string[]>
+    /** Push one value: a number, a text (up to 64 bytes), or a time (shown
+     *  in this computer's local time, ticking on by itself). */
+    set(key: string, value: number | string | Date): Promise<void>
+    /** Forget every value. */
+    clear(): Promise<void>
+}
+
+/** One display of the device: its part and its panel as built. */
+export interface ScreenPanel {
+    /** Its part index (a document's `displays[].part`). */
+    readonly part: number
+    readonly model: string
+    /** Pixels as built, before the part's rotation. */
+    readonly width: number
+    readonly height: number
+    /** The part as it describes itself (its settings: brightness, ...). */
+    readonly info: SensorInfo
+}
+
+/** A value a screen widget can show, by its document name. */
+export interface ScreenSourceInfo {
+    readonly name: string
+    readonly label: string
+    /** The device's own value, or one this computer pushes. */
+    readonly from: 'device' | 'host'
+}
+
+/** A value drawn in a preview: a number, a text, or (the time) a Date. */
+export type ScreenPreviewValue = number | string | Date
+
+export interface ScreenRenderOpts {
+    width: number
+    height: number
+    /** The part's rotation code (clockwise quarter turns). */
+    rotation?: number
+    invert?: boolean
+    /** A source's value by document name; undefined draws as the device
+     *  draws a missing value. */
+    values?: (source: string) => ScreenPreviewValue | undefined
+}
+
+export interface ScreenBox {
+    x: number
+    y: number
+    w: number
+    h: number
+}
+
+// Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as HostValuesApi / SensorApi: one surface an adapter may or may not implement, gated by presence.
+/** What the device's displays can show and how they draw it, so an editor
+ *  can offer the right values and preview a page pixel for pixel. */
+export interface ScreensApi {
+    /** The device's displays (none = []). */
+    displays(): Promise<readonly ScreenPanel[]>
+    /** Every value a widget can show. */
+    readonly sources: readonly ScreenSourceInfo[]
+    /** Widest / tallest picture a widget holds. */
+    readonly imageMax: number
+    /** The size widgets see on a w x h panel turned `rotation`. */
+    logicalSize(width: number, height: number, rotation: number): { width: number; height: number }
+    /** A page as the panel shows it: width x height bytes, 1 = lit. */
+    render(page: ConfigScreenPage | undefined, opts: ScreenRenderOpts): Uint8Array
+    /** Panel pixel -> the logical pixel it shows. */
+    panelToLogical(
+        px: number,
+        py: number,
+        opts: { width: number; height: number; rotation: number },
+    ): { x: number; y: number }
+    /** A widget's box -> where it lands on the panel. */
+    panelBox(box: ScreenBox, opts: { width: number; height: number; rotation: number }): ScreenBox
+    /** RGBA pixels -> a picture widget's `image` (1-bit, dithered unless
+     *  `dither` is false; `invert` lights the dark parts). */
+    image(
+        rgba: ArrayLike<number>,
+        width: number,
+        height: number,
+        opts?: { dither?: boolean; invert?: boolean },
+    ): NonNullable<ConfigScreenWidget['image']>
+    /** What the device would refuse, with paths into `displays`. */
+    problems(displays: readonly ConfigDisplay[]): { path: (string | number)[]; message: string }[]
+}
+
+export interface SensorApi {
+    /** False on a read-only view. */
+    readonly writable: boolean
+    /** Each sensor and everything it describes, with the values in force. */
+    getSensors(): Promise<readonly SensorInfo[]>
+    /** Live: set one setting. Resolves to the value the hardware took (an INT
+     *  snaps to what its registers hold). Rejects a value out of range, a
+     *  personality's setting, or an option that needs a procedure first. */
+    setSetting(
+        sensor: number,
+        name: string,
+        value: SensorSettingValue,
+        channel?: number,
+    ): Promise<SensorSettingValue>
+    /** One step of a procedure; resolves to its status after the step.
+     *  Rejects a step out of turn. `channel` 'all' runs a per-channel
+     *  procedure on every channel at once. */
+    runProcedure(
+        sensor: number,
+        name: string,
+        step: SensorProcedureStep,
+        channel?: number | 'all',
+    ): Promise<SensorProcedureStatus>
+    getProcedureStatus(
+        sensor: number,
+        name: string,
+        channel?: number | 'all',
+    ): Promise<SensorProcedureStatus>
+    /** The live readings (of one channel). Rejects while a procedure holds
+     *  the sensor. */
+    getMetrics(
+        sensor: number,
+        channel?: number,
+    ): Promise<readonly SensorReading[]>
+    /** What a finished procedure suggests for the part's own settings, by
+     *  setting name (an axis calibration's deadzones); empty when it measured
+     *  none or the firmware cannot say. */
+    getSuggestions(
+        sensor: number,
+        name: string,
+        channel?: number,
+    ): Promise<readonly { name: string; value: number }[]>
+}
+
+// Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as
+// EncoderApi / MouseMotionApi / SideloadApi above: one surface an adapter may
+// or may not implement, gated by presence.
+/** A device driven as a set of controls (buttons, sticks, triggers, a sensor …)
+ *  rather than a keymap: a mouse, a gamepad, a flight stick, an unknown HID
+ *  device. The app renders `getModel()` and edits through the rest.
+ *
+ *  Capability is presence: a method the adapter leaves out is a thing it cannot
+ *  do (no `setBinding` = read-only device; no `addProfile` = fixed profiles). */
+export interface ControlsApi {
+    /** Where the controls are and what they are. */
+    getModel(): Promise<DeviceModel>
+    /** The actions, outputs and binding fields this adapter honours. */
+    getCatalog(): Promise<ControlsCatalog>
+    /** At least one profile; a device without profiles reports one. */
+    getProfiles(): Promise<{
+        profiles: readonly DeviceProfile[]
+        activeId: string
+    }>
+    getBindings(profileId: string): Promise<DeviceBindings>
+    /** Absent = read-only (a generic HID device, a keyboard behind a dongle). Follows
+     *  `capabilities.saveMode`: 'none' keeps the edit for the session, 'manual'
+     *  stages it until `commit()` (`discardChanges()` reverts it and fires
+     *  onChanged), 'automatic' writes it at once. Names the profile so an undo
+     *  lands on the profile it was made in. */
+    setBinding?(
+        profileId: string,
+        controlId: string,
+        binding: ControlBinding,
+    ): Promise<void>
+    selectProfile?(profileId: string): Promise<void>
+    addProfile?(name: string): Promise<DeviceProfile>
+    renameProfile?(profileId: string, name: string): Promise<void>
+    /** Changes not made through this client's setBinding (discard, reset, a
+     *  profile switched on the device). */
+    onChanged(cb: (change: ControlsChange) => void): () => void
+    /** Live input. The adapter starts reading on the first listener and stops
+     *  after the last one leaves. Absent = no live readout. */
+    onInput?(cb: (frame: ControlInputFrame) => void): () => void
+    /** The drawn layout can be replaced (and is remembered for this device).
+     *  Absent = the device's layout is fixed. */
+    readonly layout?: ControlsLayoutApi
+}
+
+// pattern-check: skip — interface of the layout-override facade, beside ControlsApi.
+/** Replace where a device's controls are drawn — for a device that reports its
+ *  inputs but not their positions. A layout may move, resize, rename and
+ *  reshape the controls; it must keep every control and its kind. Changing it
+ *  fires `onChanged({ type: 'model' })`. */
+export interface ControlsLayoutApi {
+    /** Use `model` as the layout from now on; rejects one that does not fit. */
+    apply(model: DeviceModel): Promise<void>
+    /** Back to the layout the device reported (or the generic one). */
+    reset(): Promise<void>
+    /** A layout was applied (so `reset` has something to undo). */
+    overridden(): boolean
+}
+
 export interface KeyboardService {
     readonly deviceInfo: DeviceInfo
     readonly capabilities: Capabilities
@@ -554,10 +1055,36 @@ export interface KeyboardService {
      *  firmware-capability warnings (see config/capabilityWarnings). Undefined on
      *  other firmwares and pre-limits devices. */
     readonly limits?: Limits
-    /** Device class for the renderer's landing decision. `'dongle'` lands on the
-     *  node roster (no keymap of its own); omitted/`'keyboard'` opens the editor.
-     *  A behind-dongle node view is a keyboard, not a dongle. */
-    readonly kind?: 'keyboard' | 'dongle'
+    /** What the device is, in the firmware personality vocabulary (see
+     *  devices/types.ts). Omitted = keyboard. The app lands a device with
+     *  {@link controls} on the device editor; otherwise `'dongle'` lands on the
+     *  node roster, `'mouse'` on the mouse settings page and a keyboard on the
+     *  keymap editor. A behind-dongle node view takes the node's own kind, never
+     *  `'dongle'`. */
+    readonly kind?: DeviceKind
+    /** The device as a set of controls with per-control bindings — mice,
+     *  gamepads, flight sticks, generic HID devices. Present = the app opens the
+     *  device editor. */
+    readonly controls?: ControlsApi
+    /** Config of a device that is not a keyboard (dongle, mouse): read it back and
+     *  push a new one. Present when the device has a config store. */
+    readonly device?: DeviceConfigApi
+    /** Live mouse controls; present on a mouse. */
+    readonly motion?: MouseMotionApi
+    /** Live joystick controls and calibration; present on a joystick. */
+    readonly joystick?: JoystickApi
+    /** The device's sensors: settings, procedures, readings. Present when the
+     *  firmware serves them. */
+    readonly sensor?: SensorApi
+    /** Values this computer pushes for the device's screens. Present when
+     *  the firmware serves them. */
+    readonly hostValues?: HostValuesApi
+    /** What the device's screens can show and how they draw. Present when
+     *  the firmware draws screens from its config. */
+    readonly screens?: ScreensApi
+    /** Identifiers to match this device against community device items
+     *  (`scheme:value`). Each client declares its own; absent = none. */
+    readonly identity?: IdentityApi
 
     getLockState(): Promise<LockState>
 
@@ -600,6 +1127,7 @@ export interface KeyboardService {
     canSetAction?(action: KeyAction): boolean
 
     encoders?: EncoderApi
+    sliders?: SliderApi
     dynamic?: DynamicEntriesApi
     macros?: MacroApi
     /** Live switch-matrix readout for the Key Test view. Present only when the
@@ -613,7 +1141,7 @@ export interface KeyboardService {
      *  to avoid colliding with adapters' internal keymap `layers`. */
     layerControl?: LayersApi
     /** Behind-dongle node roster (present on dongle devices; `list()` is empty for
-     *  a directly-attached keyboard). Views are read-only today. */
+     *  a directly-attached keyboard). Keyboard views are read-only today. */
     nodes?: NodesApi
     /** Cluster diagnostics + live role-transition events (§N4b-3). Present only on
      *  a directly-attached node whose firmware wired a cluster-diag source

@@ -216,20 +216,360 @@ They do not affect the keymap blob yet; each is consumed by a later phase.
 }
 ```
 
-- `node.personality` picks the node role; a dongle exposes a limited surface, a
-  mouse node carries pointer settings. _(emitted to the blob in a later phase)_
+- `node.personality` picks the node role: `keyboard` and `mouse` are written
+  to the blob (TBL_PERSONALITY); a mouse node carries pointer settings. A
+  dongle or a standalone mouse is configured by its own device document
+  instead (below).
+- `node.mouse` is the pointer block (TBL_MOUSE): `cpi`, `autoLayerTimeoutMs`,
+  `accel` ([speedIn, multX100] points), and from table version 2 `invertX`,
+  `invertY`, `invertWheel`, `invertHwheel`, `swapXY`, `scrollDivisor` (1..16)
+  and `buttonMap` (8 entries, 0..7 or `null` to drop a button). The compiler
+  writes version 1 unless a version-2 field differs from the default, so older
+  firmware still reads it. A keyboard's key-driven pointer uses only the curve.
+- `node.radio` holds the node's own 2.4 GHz link settings and is written to
+  the blob (TBL_RADIO, id 26). Every field is optional; one left out keeps the
+  firmware default, and an empty section writes no table. On a split board the
+  main MCU forwards them to the radio chip.
+
+  ```jsonc
+  "node": {
+    "radio": {
+      "autoPair": true,       // arm pairing while unbonded (default on)
+      "inputRepeats": 3,      // sends per input change, 1..8 (default 3)
+      "keepaliveMs": 40,      // idle re-send period, 20..1000 (default 40)
+      "beaconLossMs": 600     // no dongle beacon this long = link lost,
+                              // 200..10000 (default 600)
+    }
+  }
+  ```
+
+  Keep `keepaliveMs` below the dongle's `failsafeMs` with room for one lost
+  frame, or the dongle releases a key held without change. The two live on
+  different devices, so the compiler cannot check that for you.
+- `node.sensor.defaults` holds the product's defaults for the node's motion
+  sensor, by registry name (the Remappr sensor registry,
+  `include/dt-bindings/remappr/sensor.h`, mirrored in
+  `src/clients/remappr/sensorRegistry.ts`). A BOOL takes a boolean, an INT a
+  number, an ENUM its option name or code. A name the registry does not have
+  is refused; an id with no name yet is written in hex (`"0x16": 1`).
+
+  ```jsonc
+  "node": {
+    "personality": "mouse",
+    "sensor": {
+      "defaults": {
+        "liftCutoff": "2mm",          // 1mm | 2mm | calibrated
+        "angleSnap": false,
+        "angleTune": -5,              // degrees
+        "performanceMode": "corded",  // high | lowPower | office | corded
+        "stayAwake": true
+      }
+    }
+  }
+  ```
+
+  They reach the device twice. The `remappr-board` compiler builds them into
+  the sensor's devicetree node as `remappr,setting-defaults` (with
+  `board.sensor`, below), where they become the defaults the device reports
+  and the app's Reset goes back to. The keymap compiler also writes them into
+  TBL_SENSOR (id 29) for the first sensor, so firmware not built from this
+  JSON runs them too. The device checks TBL_SENSOR strictly: a setting its
+  sensor does not have, or a value out of its range, refuses the whole config.
+  Which settings a sensor has is the device's to say (the SENSOR namespace);
+  no list of them lives here.
 - `firmware.<target>` namespaces settings so every registered firmware target's
   knobs are reachable. _(consumed per-target in a later phase)_
-- `board` feeds the DT/Kconfig generator; `controller` accepts a known Zephyr
-  board id or a custom board on any Zephyr-supported SoC. The `remappr-board`
-  compiler emits a Zephyr shield from it — `boards/shields/<id>/<id>.overlay`
+- `board` feeds the DT/Kconfig generator. The `remappr-board` compiler emits
+  a Zephyr shield from it — `boards/shields/<id>/<id>.overlay`
   (`remappr,kbd-matrix` + `input-keymap` + `remappr,keymap`) plus
   `Kconfig.shield`/`Kconfig.defconfig` (defaults `CONFIG_INPUT` + the settings
-  backend from `storage`). `matrix.rows`/`cols` take raw `&gpioN pin FLAGS`
-  specs (or friendly labels on a known controller); the matrix cells prefer an
-  explicit `keyboard.hardware.transform` and warn when derived from geometry.
-  Get it via `getCompiler('remappr-board')` or `buildProjectBundle(config,
-  'remappr-board')`.
+  backend from `storage`). Get it via `getCompiler('remappr-board')` or
+  `buildProjectBundle(config, 'remappr-board')`. Anything that would give a
+  shield that does not build is an error, not a warning.
+  - `controller` is a Zephyr board id (`"nrf52840dk/nrf52840"`,
+    `"nucleo_u5a5zj_q"`) or a custom board `{ "custom": true, "soc", "name" }`;
+    it falls back to `keyboard.controller.board`. Its SoC decides which pin
+    labels resolve.
+  - Every pin (matrix, encoder, sensor) is a raw `&gpioN pin FLAGS` spec or a
+    label: one of a known board's (`D4` on a nice!nano), or the SoC's port pin
+    — `P0.13` on nRF, `PA3` on STM32, `GP12` on RP2040. A label that does not
+    resolve is an error.
+  - `pinMap` gives the board's own labels, so a board no built-in table knows
+    (any firmware board, an Arduino header) needs no host code:
+    `{ "D10": "&arduino_header 16", "ROW0": "&gpio0 2" }`, label → phandle and
+    pin, with the flags from the pin's role. It is looked up before the
+    built-in tables.
+  - The shield builds for any Zephyr board: keyboard_node's `app.overlay`
+    carries the USB HID and control interfaces for a board with no overlay of
+    its own (remappr-firmware with `dts/remappr/keyboard-hid.dtsi`). Build with
+    `--sysbuild ... -- -D<app>_SHIELD=<id>`, so only the app image takes the
+    shield.
+  - The matrix wiring comes from `matrix.rows`/`cols`, else
+    `keyboard.hardware.kscan` (with its diode direction and debounce), else
+    `keyboard.pins`. A keyboard without matrix pins is an error; a mouse,
+    joystick or dongle without them gets no matrix and no default keymap.
+    Direct-pin wiring is not generated yet.
+  - The cells prefer `keyboard.hardware.transform` or per-key `matrix`, and
+    warn when derived from geometry. A cell past the GPIO counts, two keys on
+    one cell, a pin used twice, or a pin listed in `reservedPins`
+    (`[{ "pin": "PA9", "use": "console UART TX" }]`) is an error. Choices of
+    one layout option (`option: [g, 0]` and `[g, 1]`, an ANSI/ISO Enter) may
+    share a cell; the cell reports the lowest choice's position. An encoder
+    or slider key needs a cell of its own (its push switch in the matrix), or
+    its push switch in `buttons`.
+  - Each key is placed at its own position, size and rotation (whole
+    key-units and degrees; fractional values are rounded, with a warning).
+  - `matrix` also takes the scan timings: `pollMs`, `sleepPollMs`,
+    `settleUs`, `debouncePressMode` (`eager`, the default, or `defer`),
+    `debouncePressMs` (used in `defer` mode only) and `debounceReleaseMs`
+    (these two override `kscan`'s).
+  - `maxLayers` (1..32) is how many layers the app may fill without a reflash;
+    default the authored layers, at least 4.
+  - `encoders` are `gpio-qdec` nodes: `a`, `b`, `steps`, `axis`, and the
+    timings `sampleTimeUs` (2000), `idleTimeoutMs` (200) and `idlePollTimeUs`
+    (5000; 0 leaves it out, so the pins interrupt).
+  - `buttons` are off-matrix keys on their own pins (`[{ "key", "pin",
+    "code"? }]`): a `gpio-keys` child and a `remappr,extra-input` node with the
+    key's rect, in 1/100 key-unit. The button keys must be the last keys of
+    `keyboard.keys`, in `buttons` order, since their engine positions follow
+    the matrix keys'. `code` is an `INPUT_KEY_*`/`INPUT_BTN_*` code, default
+    `INPUT_KEY_F13` onward. A board whose keys are all buttons needs no
+    `matrix`: its keymap node has no scan and lists the button codes as
+    `extra-input-codes`, so its layers and `max-layers` still reach the
+    firmware.
+  - `sliders` are analog sliders (`remappr,slider`) on an ADC channel (`adc`,
+    as for the battery), with optional `function` (`rgb-brightness`),
+    `deadband` and `pollMs`.
+  - A `keyboard.hardware.ws2812` strip goes on an nRF SPIM, or on an STM32 SPI
+    with `ws2812.stm32` (its pinctrl and GPDMA). The bit frames follow
+    `spiMaxFrequency`; a chain over 64 LEDs raises `CONFIG_REMAPPR_RGB_LED_MAX`.
+- `board.sensor` puts a motion sensor on an SPI bus of the board: `part` is its
+  devicetree compatible, `bus` the bus's node label, `motion` (and optionally
+  `cs`, `reset`) its pins, as raw `&gpioN pin FLAGS` specs or friendly labels;
+  `spiMaxHz` defaults to 8 MHz. The shield gets the sensor's node with
+  `node.sensor.defaults` as `remappr,setting-defaults`; its driver turns on
+  from devicetree. `cpi` (`{ "native", "min"?, "max"?, "step"? }`) adds the
+  `remappr,mouse` node: the resolution the sensor reports and the DPI range a
+  config may pick. Without it the device reports no pointer and refuses
+  SET_DPI, so a mouse needs it.
+
+- `board.battery` is the battery (`remappr,battery`): `adc` (`{ adc, channel,
+  setup? }`, with `divider: { outputOhms, fullOhms }`) or `fuelGauge` (the
+  node label of a gauge the board defines), never both; optional `charging`
+  pin (active low with a pull-up; `chargingActiveHigh: true` for a charger
+  that drives it high) and `ocvCurve` (`[[mV, %], ...]`, voltages strictly descending). An ADC
+  `setup` (`gain`, `reference`, `resolution` in bits, optional
+  `acquisitionTime`, `inputPositive`, `oversampling`) writes the channel node on the ADC; leave it
+  out when the board configures the channel. An nRF SAADC channel needs
+  `inputPositive` (`"NRF_SAADC_AIN4"`).
+- `board.statusLeds` are status LEDs (`remappr,status-led`): `function`
+  (`link`, `pairing`, `bonded`, `heartbeat`, `activity`, `battery`) and either
+  `led` (an LED the board declares, `"led0"`) or `pin` (with `activeLow`), on
+  which the shield declares the LED; optional `blinkMs`, `flashMs`.
+- `board.powerOff` is the power-off policy (`remappr,power-off`):
+  `partialWake` and `wakeFirst` (input pins that take their wake-up line
+  first; they are the board's inputs, so they are not new pins). On STM32 it
+  also turns on the PWR wake-up lines.
+
+- `board.haptic` is a haptic actuator (`remappr,haptic`) on a PWM channel:
+  `pwm` (the controller's label), `channel`, `periodNs` (a fact of the
+  actuator, so it has no default), optional `inverted` and `pinctrl`. The
+  haptic service takes its triggers over the node bus, so it is turned on only
+  with a node-bus port.
+- `board.ledZones` slice the WS2812 strip by lighting role
+  (`remappr,led-zone`): `[{ "target", "offset", "length" }]`, `target` one of
+  `underglow`, `backlight`, `per-key`, `indicator`. A zone past the chain, two
+  zones that overlap and two zones for one role are errors.
+- `board.displays` are display parts (`remappr,display`). `panel` is the label
+  of a panel the board has, or a panel the shield declares: `part` (its
+  driver compatible), `bus`, `reg`, `width`, `height`, optional `busHz`, and
+  `props`, the driver's own properties by devicetree name (a number, a cell
+  list, `true` for a flag, or a string). `defaults` are the part's setting
+  defaults by registry name.
+- `board.nodeBus` are the node-bus ports (`remappr,node-bus-port`), one per
+  inter-node UART; a split keyboard is one device over them. Each has `uart`
+  (the UART's node label), `direction` (`downstream`, the default, or
+  `upstream`: at most one, and none on the coordinator), an optional `detect`
+  pin (high while a node is plugged in; `detectActiveLow: true` for one that
+  reads low) and `label`, and what turns the UART on: `currentSpeed`, `pinctrl`
+  phandles and raw `dmas` (its DMA controller is turned on too). A port turns
+  on `CONFIG_REMAPPR_NODE_BUS`; `node.role: "coordinator"` also turns on the
+  static main role. `sideStrap` is the PCB's side strap pin (`side-gpios`:
+  high on the right half; `sideStrapActiveLow: true` for one that reads low
+  there).
+- `board.sides` makes one JSON a split board (universal device model §3.6).
+  Every key carries the `side` it is wired to (`0` left, `1` right, `2`+ for
+  more members), the keys grouped by side in ascending order. Each entry of
+  `board.sides` is `{ "side", ... }` with the board fields that half has of
+  its own (`controller`, `matrix` pins, `nodeBus`, `encoders`, `buttons`, …);
+  every other `board` field is shared. Board-gen emits one shield per side,
+  `<id>_left`, `<id>_right`, `<id>_side2`…, each with its own keys and the
+  whole board's grid. A side with an `upstream` port builds as a follower,
+  the others as the coordinator. Each half's `Kconfig.defconfig` turns on
+  `CONFIG_REMAPPR_NODE_BUS_POSITION_FWD`, which the firmware needs to number
+  a half's keys after the sides before it. A button's `key` is still its whole-board
+  index. The config blob gets the side map (`node.clusterSides`) the sides
+  imply unless one is written; a written one that disagrees is a warning.
+  A part tagged with `side` (one shield for both halves) is refused: the
+  firmware has no side-gated parts yet.
+
+  ```jsonc
+  "keyboard": { "keys": [{ "x": 0, "y": 0, "side": 0 }, { "x": 4, "y": 0, "side": 1 }] },
+  "board": {
+    "sides": [
+      { "side": 0, "controller": "nucleo_u5a5zj_q",
+        "matrix": { "rows": ["PE11"], "cols": ["PF15"] },
+        "nodeBus": [{ "uart": "usart2", "sideStrap": "PB2" }] },
+      { "side": 1, "controller": "nrf52840dk/nrf52840",
+        "matrix": { "rows": ["P0.03"], "cols": ["P1.01"] },
+        "nodeBus": [{ "uart": "uart1", "direction": "upstream", "sideStrap": "P1.04" }] }
+    ]
+  }
+  ```
+- `board.radioLink` is the radio chip on SPI (`remappr,spi-link`): `spi` (the
+  bus label), `dataReady`, optional `cs`, `reset` and `spiMaxHz` (8 MHz). It
+  picks the SPI radio backend.
+- `board.radio.channelSeed` are the RF channels (0..100, no duplicates, at
+  least 8) the dongle seeds its hop map from (the first 8, the rest its
+  replacement pool) and a node hunts (`remappr,radio-config`, label
+  `remappr_radio`). It is read by the dongle and by a node whose radio runs on
+  its own SoC (keyboard_node with `radio_local.conf`). With `board.radioLink`
+  the link runs on the radio chip, so the seed belongs in the chip's or the
+  dongle's JSON and is refused here.
+
+  ```jsonc
+  "node": { "role": "coordinator" },
+  "board": {
+    "nodeBus": [{ "uart": "usart2", "currentSpeed": 1000000,
+                  "pinctrl": ["&usart2_tx_pd5", "&usart2_rx_pd6"] }],
+    "radioLink": { "spi": "spi1", "cs": "PD14", "dataReady": "PD15", "reset": "PF12" }
+  }
+  ```
+
+  ```jsonc
+  "board": {
+    "battery": {
+      "adc": { "adc": "adc", "channel": 4,
+               "setup": { "gain": "ADC_GAIN_1_6", "reference": "ADC_REF_INTERNAL",
+                          "resolution": 12, "inputPositive": "NRF_SAADC_AIN4" } },
+      "divider": { "outputOhms": 10000, "fullOhms": 14000 },
+      "charging": "P0.29"
+    },
+    "statusLeds": [{ "function": "link", "led": "led0" }],
+    "powerOff": { "partialWake": true }
+  }
+  ```
+
+  ```jsonc
+  "board": {
+    "sensor": {
+      "part": "pixart,paw3395",
+      "bus": "arduino_spi",
+      "cs": "&gpio1 12 GPIO_ACTIVE_LOW",   // leave out if the bus lists it first
+      "motion": "&gpio1 10 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)",
+      "reset": "&gpio1 11 GPIO_ACTIVE_LOW"
+    }
+  }
+  ```
+
+## Device documents (non-keyboard devices)
+
+A device that is not a keyboard has no keys or layers, so it is configured by a
+separate, smaller document, `kind: "remappr.device"` (`src/config/device.ts`).
+It covers the 2.4 GHz dongle and the standalone mouse. Each personality takes
+only its own sections; another device's section is refused.
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "kind": "remappr.device",
+  "meta": { "name": "Desk dongle" },
+  "personality": "dongle",      // the device refuses a config for another one
+  "dongle": {                   // every field optional: absent = firmware default
+    "nkro": true,               // NKRO interface (true) or boot 6KRO (false)
+    "pairWindowMs": 60000,      // 5000..600000, default 30000
+    "pairDoneReplayMs": 2000,   // 0..30000
+    "failsafeMs": 150,          // 50..2000, default 100: silent node -> keys up
+    "rosterLiveMs": 2500,       // 100..60000, default 1500, not below failsafe
+    "hidSubmitTimeoutMs": 2     // 0..50
+  }
+}
+```
+
+- `parseDeviceConfig(json)` validates it (the ranges match the firmware, so a
+  config that parses is never refused by the dongle); `isDeviceConfig(json)`
+  tells it apart from a keymap; `buildDeviceJsonSchema()` feeds the editor.
+- `buildRemapprDeviceBlob(config, { configVersion })` writes TBL_PERSONALITY
+  (dongle = 4) plus TBL_DONGLE (id 25). Push it to the dongle itself (target
+  0) with the usual WRITE / VALIDATE / COMMIT verbs.
+- `decodeRemapprDeviceBlob(bytes)` reads one back; it returns `DEVICE` for a
+  blob made for another device and `MISSING` for one that names none.
+- A live NKRO switch (DONGLE `SET_NKRO`) made after a config is saved stands
+  until the next config that sets `nkro`.
+
+A mouse document carries the pointer block (the same fields as `node.mouse`
+above) and the radio block (as `node.radio`):
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "kind": "remappr.device",
+  "meta": { "name": "Travel mouse" },
+  "personality": "mouse",
+  "mouse": {
+    "cpi": 1600,                // within the board's range (GET_MOTION_CONFIG)
+    "accel": [[0, 100], [8, 150], [16, 200]],
+    "invertWheel": true,
+    "scrollDivisor": 2,
+    "buttonMap": [1, 0, 2, 3, 4, 5, 6, null]  // swap left/right, drop button 8
+  },
+  "radio": { "keepaliveMs": 60 },
+  "sensor": { "settings": { "liftCutoff": "2mm", "angleSnap": true } }
+}
+```
+
+- `buildRemapprDeviceBlob` writes TBL_PERSONALITY (mouse = 2), TBL_MOUSE,
+  TBL_RADIO and TBL_SENSOR; `decodeRemapprDeviceBlob` returns `personality`,
+  `mouse`, `radio` and `sensor`. Push it to the mouse over USB, or through the
+  dongle relay.
+- `sensor.settings` holds the values the user set for the sensor, by registry
+  name as `node.sensor.defaults` does; a setting left out stays on the
+  device's default. `sensor.index` picks another of the device's sensors
+  (default 0). Given the device's description of its sensors
+  (`buildRemapprDeviceBlob(config, { configVersion, sensors })`; the mouse's
+  `service.device.write` passes it), a setting the device would refuse is
+  left out of the blob. A name nobody registered is kept in the document but
+  never compiled. Read back, an option comes back as its code.
+- The mouse's DPI range is the board's; the device refuses a `cpi` outside it.
+- The MOUSE verbs (`SET_DPI`, `SET_ACCEL_PROFILE`, `SET_SCROLL_MODE`) are live
+  tweaks that stand until a different config becomes active.
+- The mouse firmware holds at most 8 curve points (`MOUSE_ACCEL_POINTS_MAX`)
+  and refuses a config with more at VALIDATE.
+
+From a connected service (the app's dongle and mouse pages):
+
+- `service.device` reads the active document back (`read()`; a device with no
+  stored config reads as a document with no settings) and pushes a new one
+  (`write(config)`: validated, then WRITE / VALIDATE / COMMIT as universal
+  frames at the next config_version). Present on a dongle or mouse with a
+  config store.
+- `service.motion` holds the live MOUSE verbs and `getConfig()` (DPI range and
+  the values in force). Present on a mouse.
+- `service.sensor` (SENSOR namespace, provisional) describes each sensor
+  (`getSensors()`: its settings with type, range or options, unit, default
+  and the value in force; its procedures and readings), sets a setting live
+  (`setSetting`, until the next saved config), runs a procedure step by step
+  (`runProcedure`, e.g. the lift calibration, whose result the unit keeps)
+  and reads the readings (`getMetrics`). Present when the device lists the
+  namespace. The mouse's device editor offers exactly the settings the
+  sensor describes (`catalog.sensor.settings`) and previews each change
+  live; a discard puts the previewed ones back.
+- A mouse connected over USB comes up as `kind: 'mouse'`. A mouse opened from
+  the dongle's roster is a read-only view: both facades read through the relay
+  and every write rejects.
+- `DONGLE_FIELDS`, `RADIO_FIELDS`, `MOUSE_SCROLL_DIVISOR_FIELD` and
+  `MOUSE_BUTTON_NAMES` (`src/config/deviceFields.ts`) give editors each
+  setting's range, unit and firmware default.
 
 ## Reserved / planned sections
 
