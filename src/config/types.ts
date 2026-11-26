@@ -24,10 +24,7 @@ export type Resolve = 'timeout' | 'prefer-hold' | 'prefer-tap'
 
 /** ZMK hold-tap `flavor` (the devicetree string values). */
 export type HoldTapFlavor =
-    | 'hold-preferred'
-    | 'balanced'
-    | 'tap-preferred'
-    | 'tap-unless-interrupted'
+    'hold-preferred' | 'balanced' | 'tap-preferred' | 'tap-unless-interrupted'
 
 export type LightingTarget = 'underglow' | 'backlight' | 'per_key'
 
@@ -94,8 +91,7 @@ export interface CanonKeyPress {
 }
 
 export type CanonHoldTarget =
-    | { type: 'modifier'; modifier: Modifier }
-    | { type: 'layer'; layer: string }
+    { type: 'modifier'; modifier: Modifier } | { type: 'layer'; layer: string }
 
 // pattern-check: skip — additive optional fields on an existing interface, no abstraction
 export interface CanonTapHold {
@@ -250,9 +246,12 @@ export interface CanonGeometry {
      *  a label never corrupts the electrical transform. */
     pin?: string
     /** Input element this position represents: absent / "key" = a normal switch;
-     *  "encoder" = a rotary encoder; "slider" = an analog slider. Builder
-     *  metadata — compilers treat every entry as a key for now. */
-    element?: 'encoder' | 'slider'
+     *  "encoder" = a rotary encoder; "slider" = an analog slider; "button" = a
+     *  round push button off the key grid. Builder metadata — compilers treat
+     *  every entry as a key for now. */
+    element?: 'encoder' | 'slider' | 'button'
+    /** A slider with a motor (`element: "slider"` only). */
+    motor?: CanonSliderMotor
     /** VIA/Vial layout-option tag `[group, choice]`: this key exists only when
      *  layout-option `group` is set to `choice`. Indexes into
      *  `keyboard.layoutOptions`; absent = present in every variant. Emitted as the
@@ -260,10 +259,19 @@ export interface CanonGeometry {
     option?: [number, number]
 }
 
+/** A knob's turn slot. `key` = the knob key (`element: "encoder"`) it belongs
+ *  to, whose binding is the press; absent = a knob with no keymap position. The
+ *  slot index is the encoder index every firmware uses (see knobs.ts). */
 export interface CanonEncoderSlot {
     x: number
     y: number
+    key?: number
 }
+
+/** A slider's slot. `key` = the slider key (`element: "slider"`) it is;
+ *  absent = a slider with no key of its own (a device's fader, a decoded blob).
+ *  The slot index is the slider index every firmware uses (see sliders.ts). */
+export type CanonSliderSlot = CanonEncoderSlot
 
 export interface CanonEncoderBinding {
     cw: CanonAction
@@ -271,48 +279,62 @@ export interface CanonEncoderBinding {
     press?: CanonAction
 }
 
-/** What an analog slider's position controls. `volume`/`brightness`/`mouse_wheel`
- *  are well-known mapped outputs; `custom` defers to `action`. */
-export type SliderMap = 'volume' | 'brightness' | 'hue' | 'mouse_wheel' | 'custom'
+/** What an analog slider does. A level (`volume`, `brightness` = the computer's
+ *  screen, `backlight` / `rgb_brightness` / `rgb_hue` = the keyboard's own), the
+ *  mouse wheel, or `keys`: `up` / `down` sent once per step. `custom` is the
+ *  older single-`action` form, kept as written. See sliders.ts. */
+export type SliderMap =
+    | 'volume'
+    | 'brightness'
+    | 'backlight'
+    | 'rgb_brightness'
+    | 'rgb_hue'
+    | 'mouse_wheel'
+    | 'keys'
+    | 'custom'
 
 /** A slider's value-mapping: the ADC sweep mapped onto an output. `min`/`max`
  *  bound the output range (firmware defaults when absent); `action` is the
  *  output behavior for `map: "custom"`. Analog input has no first-class keymap
  *  behavior in ZMK/QMK, so compilers emit this as guided scaffolding, not full
- *  codegen — see emitSliderInputs (ZMK) / emitSliderStub (QMK).
- *
- *  On Remappr (TBL_SLIDER) `brightness` and `hue` follow the slider (LEVEL,
- *  min/max 0..255 at the bottom/top); `volume`, `mouse_wheel` and `custom`
- *  fire a behavior per step across the travel (STEPS): `custom` fires
- *  `action` per step up and `downAction` per step down. */
+ *  codegen — see emitSliderInputs (ZMK) / emitSliderStub (QMK). Remappr
+ *  compiles it to TBL_SLIDER (compilers/remappr/slider.ts). */
 export interface CanonSliderBinding {
     map: SliderMap
     min?: number
     max?: number
-    action?: CanonAction
-    /** `custom`: what a step down fires (absent = nothing). */
-    downAction?: CanonAction
-    /** Steps across the travel for a stepping map (1..100, default 20). */
+    /** Steps across the whole travel (a level's resolution, or how many
+     *  `up` / `down` presses a full slide sends). */
     steps?: number
+    /** `keys`: sent once per step sliding up / down. */
+    up?: CanonAction
+    down?: CanonAction
+    action?: CanonAction
+}
+
+/** A motorized slider's motor: where it moves the cap, how the travel feels,
+ *  and its pins (driver inputs + optional touch sense). */
+export interface CanonSliderMotor {
+    /** `level` = the level the slider sets (as it changes elsewhere), `layer` =
+     *  each layer's saved spot, `app` = a value the app sends, `off`. */
+    follow?: 'level' | 'layer' | 'app' | 'off'
+    feel?: 'smooth' | 'notches' | 'spring'
+    /** Touching the cap stops the motor. */
+    touchStops?: boolean
+    pins?: { in1?: string; in2?: string; touch?: string }
 }
 
 export interface CanonLayer {
     name: string
     description?: string
     bindings: CanonAction[]
-    /** Slot-indexed encoder bindings — index-aligned to `keyboard.encoders[]`.
-     *  The original ZMK-style parallel array, kept for boards that declare
-     *  encoder slots separately from keys. */
+    /** Turn bindings, index-aligned to `keyboard.encoders[]`. A slot linked to
+     *  a knob key carries no press (the key's binding is the press). */
     encoders?: CanonEncoderBinding[]
-    /** Per-key encoder bindings, keyed by the position's index in
-     *  `keyboard.keys` (the key must have `element: "encoder"`). The builder's
-     *  element model writes here; lets a single physical position carry both a
-     *  base binding and rotary cw/ccw/press without a parallel slot array. */
-    encoderBindings?: Record<number, CanonEncoderBinding>
-    /** Per-key slider value-mappings, keyed by the position's index in
-     *  `keyboard.keys` (the key must have `element: "slider"`). Parallels
-     *  `encoderBindings` — one analog input element per physical position. */
-    sliderBindings?: Record<number, CanonSliderBinding>
+    /** What each slider does on this layer, index-aligned to
+     *  `keyboard.sliders[]`. `null` = as on the base layer (on the base layer:
+     *  nothing set). */
+    sliders?: (CanonSliderBinding | null)[]
 }
 
 export interface CanonCombo {
@@ -498,6 +520,9 @@ export interface ConfigHardware {
     ws2812?: CanonWs2812
     /** External-power control GPIO — drives the `zmk,ext-power` node. */
     extPowerCtrl?: CanonExtPowerCtrl
+    /** Battery sense pin, for a controller that can't measure the battery
+     *  itself (builder; no compiler emits it yet). */
+    battery?: CanonBattery
     /** Emit the `&zephyr_udc0 studio_acm` CDC-ACM endpoint (Studio over USB). */
     studioAcm?: boolean
 }
@@ -561,6 +586,17 @@ export interface CanonExtPowerCtrl {
     initDelayMs?: number
 }
 
+/** Where the battery is measured: an analog pin behind a resistor divider
+ *  (Vpin = Vcell × outputOhms / fullOhms). */
+export interface CanonBattery {
+    /** Sense pin: a friendly board label ("D21"), like the matrix pins. */
+    pin: string
+    /** The divider's lower leg (pin to ground), Ω. */
+    outputOhms?: number
+    /** The divider's whole path (cell to ground), Ω. */
+    fullOhms?: number
+}
+
 /** Firmware-level feature config — the modeled toggles that derive `.conf` (ZMK
  *  Kconfig) / `config.h` + `rules.mk` (QMK family) flags, plus free-text overrides
  *  for anything unmodeled. **Tri-state booleans**: `undefined` = auto-derive from
@@ -589,6 +625,16 @@ export interface CanonFirmwareConfig {
     underglow?: boolean
     /** CONFIG_ZMK_USB_LOGGING. Default off (commented hint). */
     usbLogging?: boolean
+    /** CONFIG_ZMK_SLEEP. Default = the `battery` design feature. */
+    sleep?: boolean
+    /** CONFIG_EC11 (+ global-thread trigger). Default = the `encoders` design
+     *  feature or an encoder on the board. */
+    encoders?: boolean
+    /** CONFIG_ZMK_DISPLAY. Default = a screen on the board ZMK drives. */
+    display?: boolean
+    /** QMK `keyboard.json` `features` overrides, by feature key (`mousekey`,
+     *  `rgblight`, …); absent keys are auto-derived. */
+    qmkFeatures?: Record<string, boolean>
     /** Extra Kconfig lines appended verbatim after the derived ZMK `.conf` block. */
     kconfig?: string
     /** Extra `#define` lines appended to the QMK keymap `config.h`. */
@@ -623,6 +669,58 @@ export interface CanonLighting {
      *  "#rrggbb" (black/off omitted). Decode-only until Phase 4c wires the emit
      *  path; a per-layer table collapses to layer 0 with a diagnostic. */
     perKey?: Record<number, string>
+}
+
+/** A design feature: what the board does, independent of any firmware. */
+export type DesignFeature =
+    | 'wireless'
+    | 'liveEdit'
+    | 'battery'
+    | 'lighting'
+    | 'pointing'
+    | 'encoders'
+    | 'analog'
+    | 'display'
+
+/** How a screen is connected. */
+export type DisplayBus = 'i2c' | 'spi' | 'uart'
+
+/** A screen: its controller chip, bus and size (see config/displays.ts). */
+export interface CanonDisplay {
+    /** The module tile it was set from; absent = set by hand. */
+    module?: string
+    chip: string
+    bus: DisplayBus
+    width: number
+    height: number
+    /** I²C address. */
+    address?: number
+    /** Clockwise turn of the picture, degrees. */
+    rotation?: 0 | 90 | 180 | 270
+}
+
+/** A part on the board that is not a keymap position. Keys, knobs, sliders
+ *  and buttons are positions (keys with an `element`); these are not. */
+export type PartKind = 'display' | 'stick' | 'hat' | 'trigger'
+
+/** A part placed on the board, in key units like the keys. */
+export interface CanonPart {
+    id: string
+    kind: PartKind
+    name: string
+    x: number
+    y: number
+    w: number
+    h: number
+    /** Clockwise turn about its own centre, degrees. */
+    r?: number
+    variant?: string
+    /** Its pins by what they are for ("cs", "x"…), friendly labels. */
+    pins?: Record<string, string>
+    display?: CanonDisplay
+    /** A screen drawn at a size of the designer's choosing (bezel, custom
+     *  panel); otherwise its size follows the module and stays put. */
+    ownSize?: boolean
 }
 
 /** A named physical-layout variant (keys tag into it via `CanonGeometry.variant`). */
@@ -701,6 +799,9 @@ export interface ConfigKeyboard {
     name: string
     keys: CanonGeometry[]
     encoders?: CanonEncoderSlot[]
+    /** Slider slots (see sliders.ts): the slot index is the slider index every
+     *  firmware uses; `key` = the slider key (`element: "slider"`) it is. */
+    sliders?: CanonSliderSlot[]
     /** Board-level matrix descriptor (dims + diode + scan mode). */
     matrix?: CanonKeyboardMatrix
     /** Controller / MCU identity (board/shield/processor/bootloader/…). */
@@ -717,6 +818,10 @@ export interface ConfigKeyboard {
     lighting?: CanonLighting
     /** Firmware-level feature config — modeled .conf/config.h toggles + overrides. */
     firmwareConfig?: CanonFirmwareConfig
+    /** What the board does, picked as feature cards (new-design step 3).
+     *  Each firmware's switch table turns its own options on from these;
+     *  absent = not picked (switches derive from the keymap only). */
+    features?: DesignFeature[]
     /** Physical-layout variants (builder); keys tag in via `variant`. */
     layouts?: CanonLayout[]
     /** VIA/Vial layout options; keys tag in via `option [group, choice]`. The
@@ -724,6 +829,8 @@ export interface ConfigKeyboard {
     layoutOptions?: CanonLayoutOption[]
     /** Two-piece / split keyboard (builder capability flag; export metadata). */
     split?: boolean
+    /** Parts on the board that are not keymap positions: screens, sticks… */
+    parts?: CanonPart[]
 }
 
 /** Auto-activate `thenLayer` while every layer in `ifLayers` is active. */
@@ -806,8 +913,7 @@ export interface CanonActionBinding {
 // pattern-check: skip — plain data interfaces for new open config sections, no abstraction
 /** A known Zephyr board id, or a custom board on any Zephyr-supported SoC. */
 export type ConfigBoardController =
-    | string
-    | { custom: true; soc: string; name: string; [k: string]: unknown }
+    string | { custom: true; soc: string; name: string; [k: string]: unknown }
 
 /** Build-time board definition (v2) — consumed by the DT/Kconfig generator, never
  *  in the blob. Open shape: extra builder fields are preserved verbatim. */
@@ -1088,61 +1194,6 @@ export interface ConfigNodeSensor {
     [k: string]: unknown
 }
 
-/** What a VALUE / BAR widget shows (screen.h REMAPPR_SCREEN_SRC_*), or a raw
- *  source code (0x40 + k = host value key k). */
-export type DisplaySource =
-    | 'activeLayer'
-    | 'battery'
-    | 'charging'
-    | 'connection'
-    | 'capsLock'
-    | 'numLock'
-    | 'wpm'
-    | 'deviceName'
-    | number
-
-/** A widget's box and look, in the panel's logical pixels (after rotation). */
-export interface DisplayWidgetBox {
-    x: number
-    y: number
-    w: number
-    h: number
-    /** The 5x7 font at scale 1 (6x8 cells, the default) or 2. */
-    font?: 'small' | 'large'
-    align?: 'left' | 'centre' | 'right'
-    /** The widget's box inverted after drawing. */
-    invert?: boolean
-    /** A one-pixel outline around the box (a RECT: an outline, not filled). */
-    frame?: boolean
-}
-
-/** One widget on a display page (TBL_DISPLAY, display part design §3). */
-export type ConfigDisplayWidget = DisplayWidgetBox &
-    (
-        | { kind: 'text'; text: string }
-        | { kind: 'value'; source: DisplaySource }
-        /** `full` = the value that fills the bar. */
-        | { kind: 'bar'; source: DisplaySource; full: number }
-        /** 1-bit rows as hex, bit 7 = leftmost, whole bytes per row. */
-        | { kind: 'image'; width: number; height: number; bitmap: string }
-        | { kind: 'clock'; format: 'hm' | 'hms' | 'date' }
-        | { kind: 'rect' }
-    )
-
-/** One page of a display: drawn on the DISPLAY part `part` (by part index). */
-export interface ConfigDisplayPage {
-    part: number
-    /** Shown first on its display. */
-    default?: boolean
-    widgets: ConfigDisplayWidget[]
-}
-
-/** What the node's displays show (TBL_DISPLAY). An empty page list clears the
- *  device's screens. */
-export interface ConfigDisplay {
-    pages: ConfigDisplayPage[]
-}
-
 /** Pointer/mouse-node settings compiled to TBL_MOUSE (§4b). */
 export interface ConfigMouse {
     /** Sensor resolution, counts/inch. Omit to keep the firmware default. */
@@ -1181,10 +1232,18 @@ export interface ConfigMouse {
 
 /** What a mouse button can do besides report a button: a DEVICE action
  *  (firmware action.h enum remappr_device_action; `dpi` is required for
- *  dpiSet and sniper), or batteryShow (SYSTEM: show the charge on the
+ *  dpiSet and sniper), or a SYSTEM verb: unpair (forget the dongle and pair
+ *  afresh) or batteryShow (show the charge on the
  *  mouse's LEDs / display). */
 export interface MouseButtonAction {
-    action: 'dpiCycle' | 'dpiUp' | 'dpiDown' | 'dpiSet' | 'sniper' | 'batteryShow'
+    action:
+        | 'dpiCycle'
+        | 'dpiUp'
+        | 'dpiDown'
+        | 'dpiSet'
+        | 'sniper'
+        | 'batteryShow'
+        | 'unpair'
     dpi?: number
 }
 
@@ -1224,6 +1283,7 @@ export type JoystickButtonAction =
     | { action: 'hat'; dir: number }
     | { action: 'axis'; axis: JoystickAxisId; value: number }
     | { action: 'batteryShow' }
+    | { action: 'unpair' }
 
 /** Joystick settings compiled to TBL_JOYSTICK + TBL_ACTION_BINDING
  *  (input-layout plan §4). Calibration belongs to the unit and is never here. */
@@ -1348,6 +1408,49 @@ export interface ConfigAutocorrect {
 // pattern-check: skip adding well-known optional fields to an existing wire-DTO
 /** Per-personality node configuration (v2). Open shape; `personality` and the
  *  `mouse` pointer block are well-known, the rest is preserved for later phases. */
+/** One widget of a screen page (display part design §3, TBL_DISPLAY): a box in
+ *  the panel's logical pixels (after its rotation) and what it shows. */
+export interface ConfigScreenWidget {
+    kind: 'text' | 'value' | 'bar' | 'image' | 'clock' | 'rect'
+    x: number
+    y: number
+    w: number
+    h: number
+    /** small = 6x8 cells, large = 12x16 (default small). */
+    font?: 'small' | 'large'
+    align?: 'left' | 'centre' | 'right'
+    /** The box inverted after drawing. */
+    invert?: boolean
+    /** A one-pixel outline around the box (rect: outline only). */
+    frame?: boolean
+    /** text: what it says (printable ASCII). */
+    text?: string
+    /** value / bar: a device value (`battery`, `activeLayer`, ...) or a host
+     *  value (`host.cpu`, `host.user0`, ...) — screenRegistry.ts. */
+    source?: string
+    /** bar: the value that fills it. */
+    max?: number
+    /** clock: hm (14:05), hms (14:05:09) or date (2026-11-12). */
+    format?: 'hm' | 'hms' | 'date'
+    /** image: 1-bit rows (bit 7 = leftmost, rows of whole bytes), base64. */
+    image?: { width: number; height: number; data: string }
+}
+
+export interface ConfigScreenPage {
+    /** Shown first on its display (else the display's first page). */
+    default?: boolean
+    widgets: ConfigScreenWidget[]
+}
+
+/** What one display shows: its DISPLAY part (by part index) and its pages. */
+export interface ConfigDisplay {
+    part: number
+    pages: ConfigScreenPage[]
+    /** The display part's own settings by registry name (brightness, invert,
+     *  rotation, ...), written to TBL_PART for that part. */
+    settings?: Record<string, ConfigSensorValue>
+}
+
 export interface ConfigNode {
     personality?: 'keyboard' | 'mouse' | 'joystick' | 'dongle'
     /** Pointer settings (§4b, TBL_MOUSE) — present on mouse / hybrid nodes. */
@@ -1388,8 +1491,8 @@ export interface ConfigNode {
     /** The sensor's product defaults (TBL_SENSOR, the board's
      *  remappr,setting-defaults). */
     sensor?: ConfigNodeSensor
-    /** What the node's displays show (TBL_DISPLAY). */
-    display?: ConfigDisplay
+    /** What the device's displays show (TBL_DISPLAY). */
+    displays?: ConfigDisplay[]
     [k: string]: unknown
 }
 

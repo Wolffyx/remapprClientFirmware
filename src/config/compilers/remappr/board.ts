@@ -49,6 +49,7 @@ import { layoutOrigin, type Origin, placementTokens } from './boardPlacement'
 import { emitBattery, emitPowerOff, emitStatusLeds } from './boardPower'
 import { sideSuffix, sideViews } from './boardSides'
 import { dtComment } from './dtText'
+import { emitBattery as emitPartBattery, emitScreen } from '../zephyrParts'
 
 /** HID Usage Page 0x07 (Keyboard/Keypad) — the only page a `&key` action emits. */
 const HID_PAGE_KEYBOARD = 7
@@ -109,8 +110,8 @@ function actionToken(
         case 'key_press': {
             if (a.mods && a.mods.length > 0) {
                 diag.warn(
-                    `modified keypress not lowered to the default keymap ` +
-                        `(config blob carries it)`,
+                    `A key press with modifiers isn't put in the built-in ` +
+                        `keymap; the saved settings file carries it.`,
                     path,
                 )
                 return '&pass'
@@ -118,8 +119,8 @@ function actionToken(
             const u = HID_USAGE_BY_CANONICAL.get(a.key)
             if (!u || u.page !== HID_PAGE_KEYBOARD) {
                 diag.warn(
-                    `key "${a.key}" has no keyboard-page HID usage for the ` +
-                        `default keymap`,
+                    `The key "${a.key}" isn't a keyboard key, so it isn't put ` +
+                        `in the built-in keymap.`,
                     path,
                 )
                 return '&pass'
@@ -132,8 +133,8 @@ function actionToken(
             return '&block'
         default:
             diag.warn(
-                `binding "${a.type}" not lowered to the default keymap ` +
-                    `(config blob carries it)`,
+                `"${a.type}" isn't put in the built-in keymap; the saved ` +
+                    `settings file carries it.`,
                 path,
             )
             return '&pass'
@@ -511,6 +512,9 @@ function emitShield(
         emitHaptic(config, diag),
         emitLedZones(config, diag),
         emitDisplays(config, diag),
+        // The design tool's screen part and battery sense pin, where the board
+        // JSON does not describe its own (board.displays / board.battery win).
+        ...designParts(config, diag),
     ]
 
     const overlay: string[] = [
@@ -564,6 +568,37 @@ function emitShield(
         { filename: `${dir}/${slug}.overlay`, mime: 'text/plain', content: overlay.join('\n') },
         { filename: `${dir}/Kconfig.shield`, mime: 'text/plain', content: kconfigShield },
         { filename: `${dir}/Kconfig.defconfig`, mime: 'text/plain', content: kconfigDefconfig },
+    ]
+}
+
+/** The screen (keyboard.parts) and battery sense pin (keyboard.hardware.battery)
+ *  the design tool places, as fragments; none where the board JSON has its own
+ *  board.displays / board.battery, which the generator writes instead. */
+function designParts(config: ConfigKeymap, diag: DiagnosticBag): PeripheralFragment[] {
+    const out: PeripheralFragment[] = []
+    if (!config.board?.displays?.length) {
+        const screen = emitScreen(config, 'remappr', diag, '\t')
+        out.push({ ...screen, kconfig: screenKconfig(config, screen.nodes.length > 0) })
+    }
+    if (!config.board?.battery) {
+        out.push({ ...emitPartBattery(config, 'remappr', diag, '\t'), kconfig: [] })
+    }
+    return out
+}
+
+/** The OLED service draws the chosen screen (rig oled_enc.conf); its bus
+ *  driver comes on with it. The service needs the node bus. */
+function screenKconfig(config: ConfigKeymap, written: boolean): string[] {
+    const bus = config.keyboard.parts?.find((p) => p.display)?.display?.bus
+    if (!written || !bus) return []
+    return [
+        ``,
+        `# The screen (zephyr,display) — drawn by the Remappr OLED service,`,
+        `# which needs the node bus (REMAPPR_NODE_BUS).`,
+        `config REMAPPR_OLED`,
+        `\tdefault y`,
+        `config ${bus === 'spi' ? 'SPI' : 'I2C'}`,
+        `\tdefault y`,
     ]
 }
 

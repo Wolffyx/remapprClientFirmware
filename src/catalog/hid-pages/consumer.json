@@ -36,6 +36,12 @@
         "Label": "Graphic Equalizer"
     },
     {
+        "Id": 7,
+        "Name": "Keyboard Backlight",
+        "Kinds": ["CA"],
+        "Label": "Keyboard Backlight"
+    },
+    {
         "Id": 32,
         "Name": "+10",
         "Kinds": ["OSC"],
@@ -700,5 +706,23 @@
         "Name": "Privacy Screen Level Maximum",
         "Kinds": ["OSC"],
         "Label": "Privacy Screen Level Maximum"
+    },
+    {
+        "Id": 1301,
+        "Name": "Keyboard Brightness Next",
+        "Kinds": ["OSC"],
+        "Label": "Keyboard Brightness Next"
+    },
+    {
+        "Id": 1302,
+        "Name": "Keyboard Brightness Previous",
+        "Kinds": ["OSC"],
+        "Label": "Keyboard Brightness Previous"
+    },
+    {
+        "Id": 1303,
+        "Name": "Keyboard Backlight Level Suggestion",
+        "Kinds": ["SV"],
+        "Label": "Keyboard Backlight Level Suggestion"
     }
 ]

@@ -30,6 +30,20 @@ describe('demo devices', () => {
         expect(m.controls.filter((c) => c.shape === 'key')).toHaveLength(9)
     })
 
+    it('offers the Deck 9 in three layouts with the same keys and knobs', async () => {
+        const svc = await connectDemoDevice('deck9')
+        const { layouts } = await svc.getPhysicalLayouts()
+        expect(layouts.map((l) => l.name)).toEqual([
+            'Deck 9',
+            'Deck 9 row',
+            'Deck 9 knobs left',
+        ])
+        for (const l of layouts) {
+            expect(l.keys).toHaveLength(9)
+            expect(l.encoders).toHaveLength(2)
+        }
+    })
+
     it('previews the Corne from the demo seed', () => {
         const m = demoDeviceModel('corne')
         expect(m.controls.filter((c) => c.shape === 'key')).toHaveLength(36)

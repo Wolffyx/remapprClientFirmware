@@ -93,6 +93,37 @@ describe('configBridge.configToPhysicalLayout', () => {
         })
     })
 
+    it('carries a key\'s element and the parts on the board', () => {
+        const keys = config.keyboard.keys.map((k, i) =>
+            i === 0 ? { ...k, element: 'button' as const } : k,
+        )
+        const layout = configToPhysicalLayout({
+            ...config,
+            keyboard: {
+                ...config.keyboard,
+                keys,
+                parts: [
+                    {
+                        id: 'display-1',
+                        kind: 'display',
+                        name: 'Screen',
+                        x: 12.5,
+                        y: 0,
+                        w: 3,
+                        h: 1.5,
+                        display: { chip: 'SH1106', bus: 'i2c', width: 128, height: 64 },
+                    },
+                ],
+            },
+        })
+        expect(layout.keys[0].element).toBe('button')
+        expect(layout.keys[1].element).toBeUndefined()
+        expect(layout.parts).toEqual([
+            { id: 'display-1', name: 'Screen', shape: 'screen', x: 1250, y: 0, w: 300, h: 150, glyph: '128×64' },
+        ])
+        expect(configToPhysicalLayout(config).parts).toBeUndefined()
+    })
+
     it('carries rotation (degrees → centi-degrees) only when present', () => {
         const rotated = {
             ...config,

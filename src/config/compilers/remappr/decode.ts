@@ -41,6 +41,7 @@ import type {
     ConfigLinkProfile,
     ConfigLinkProfileOverride,
     ConfigPowerSettings,
+    ConfigDisplay,
     ConfigRadioSettings,
     ConfigMouse,
     ConfigNode,
@@ -95,11 +96,14 @@ import {
     bytesToHex,
     type BehaviorRecord,
 } from './blobWriter'
-import { readDisplayTable } from './display'
 import { readPower } from './power'
 import { needsWire, recordToWire } from './wire'
 import { readRadio } from './radio'
 import { readMouseTable } from './mouse'
+import { matrixDefaultsFromParts } from './matrix'
+import { readPartEntries } from './sensor'
+import { readDisplayTable, withDisplaySettings } from './display'
+import { readSliders } from './slider'
 
 const HID_PAGE_KEYBOARD = 7
 const HID_PAGE_CONSUMER = 12
@@ -885,6 +889,21 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
         matrixPollPeriodMs = lr.u16()
     }
     if (numLayers === 0 || numPositions === 0) return fail(DecodeCode.BOUNDS)
+    // Matrix timing a MATRIX part holds (TBL_PART) wins over the tail, as on
+    // the device (compilers/remappr/matrix.ts).
+    const partT = table(TableId.Sensor)
+    const partEntries = partT
+        ? readPartEntries(bytes, partT.start, partT.end)
+        : []
+    if (typeof partEntries === 'string') diag.warn(`part table: ${partEntries}`)
+    const matrix =
+        typeof partEntries === 'string'
+            ? {}
+            : matrixDefaultsFromParts(partEntries)
+    matrixPressDebounceMs = matrix.matrixPressDebounceMs ?? matrixPressDebounceMs
+    matrixReleaseDebounceMs =
+        matrix.matrixReleaseDebounceMs ?? matrixReleaseDebounceMs
+    matrixPollPeriodMs = matrix.matrixPollPeriodMs ?? matrixPollPeriodMs
 
     // ── BEHAVIOR (required) ──
     const behT = table(TableId.Behavior)
@@ -998,6 +1017,10 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
     const encoderT = table(TableId.Encoder)
     if (encoderT) readEncoders(bytes, encoderT, decoded, layers, diag)
 
+    // ── SLIDER (optional, slider part design §4b) → layer.sliders[] in place ──
+    const sliderT = table(TableId.Slider)
+    if (sliderT) readSliders(bytes, sliderT, decoded, layers, diag)
+
     // ── RGB (optional, id 7) → per-key colors (decode-only; preps Phase 4c emit) ──
     const rgbT = table(TableId.Rgb)
     const perKey = rgbT
@@ -1027,16 +1050,20 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
     const radioT = table(TableId.Radio)
     const radio = radioT ? readRadioTable(bytes, radioT, diag) : undefined
 
+    // ── DISPLAY (optional, id 31, display part design §3) → node.displays. A
+    //    table this client cannot show in full stays out of the config, and a
+    //    save carries it as read (carry.ts). ──
+    const displayT = table(TableId.Display)
+    const shown = displayT ? readDisplays(bytes, displayT, diag) : undefined
+    // Their parts' own settings ride in TBL_PART.
+    const displays =
+        shown && typeof partEntries !== 'string'
+            ? withDisplaySettings(shown, partEntries)
+            : shown
+
     // ── POWER (optional, id 30, sleep-wake design) → node.power ──
     const powerT = table(TableId.Power)
     const power = powerT ? readPowerTable(bytes, powerT, diag) : undefined
-
-    // ── DISPLAY (optional, id 31) → node.display. A table this client cannot
-    //    show in full stays out of the config, and a save carries it as read. ──
-    const displayT = table(TableId.Display)
-    const shown = displayT?.version === 1 ? readDisplayTable(bytes, displayT) : undefined
-    if (typeof shown === 'string') diag.warn(`${shown} — kept as read`)
-    const display = typeof shown === 'object' ? shown : undefined
 
     // ── ACTION_BINDING (optional, id 17, §F) → top-level actionBindings[] ──
     const actionT = table(TableId.ActionBinding)
@@ -1065,7 +1092,7 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
         linkProfile ||
         radio ||
         power ||
-        display
+        displays
             ? {
                   ...(pers.personality ? { personality: pers.personality } : {}),
                   ...(pers.role ? { role: pers.role } : {}),
@@ -1078,7 +1105,7 @@ function decodeBlobTables(bytes: Uint8Array): DecodeResult {
                   ...(linkProfile ? { linkProfile } : {}),
                   ...(radio ? { radio } : {}),
                   ...(power ? { power } : {}),
-                  ...(display ? { display } : {}),
+                  ...(displays ? { displays } : {}),
               }
             : undefined
 
@@ -1426,6 +1453,25 @@ function readRadioTable(
         return undefined
     }
     return readRadio(bytes, t.start)
+}
+
+// pattern-check: skip frame checks around the shared display reader
+// TBL_DISPLAY (id 31): the pages per display (compilers/remappr/display.ts).
+function readDisplays(
+    bytes: Uint8Array,
+    t: TableFrame,
+    diag: DiagnosticBag,
+): ConfigDisplay[] | undefined {
+    if (t.version !== 1) {
+        diag.warn(`display table version ${t.version} not supported — kept as read`)
+        return undefined
+    }
+    const displays = readDisplayTable(bytes, t.start, t.end)
+    if (typeof displays === 'string') {
+        diag.warn(`${displays} — kept as read`)
+        return undefined
+    }
+    return displays
 }
 
 // pattern-check: skip frame checks around the shared power reader

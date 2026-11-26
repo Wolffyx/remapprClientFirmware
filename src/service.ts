@@ -1,4 +1,5 @@
 import type { KeyCatalog } from './catalog/types'
+import type { IdentityApi } from './identity'
 import type { KeycodeCodec } from './codec'
 import type {
     ControlBinding,
@@ -36,16 +37,19 @@ import type {
     KeyOverrideEntry,
     KeyUpdate,
     Layer,
+    SliderAction,
     LockKind,
     LockState,
     UnlockOptions,
     MacroAction,
+    MacroPlayMode,
     TapDanceEntry,
 } from './types'
 
 import type { SideloadApi } from './sideload'
 import type { ConfigKeymap } from './config'
 import type { ConfigDevice } from './config/device'
+import type { ConfigDisplay, ConfigScreenPage, ConfigScreenWidget } from './config/types'
 
 // pattern-check: skip optional behavior-flags field added to existing Capabilities DTO — feature gate per firmware
 // Each flag: `false` = the firmware lacks it (the UI hides it); `true` or absent =
@@ -149,6 +153,20 @@ export interface ConnectNotice {
 }
 
 // Pattern check: Facade (Tier 1) — applied — group related optional methods into 3 cohesive feature facades for renderer single-guard reads
+/** Slider edits: one layer's binding for slider `slot` (the layout's
+ *  `sliders` index; `null` = as on the base layer). Only firmware that models
+ *  sliders offers it. */
+export interface SliderApi {
+    /** The slider maps (config SliderMap ids) this firmware can run; absent =
+     *  every one. */
+    readonly maps?: readonly string[]
+    setSlider(
+        layerId: number,
+        slot: number,
+        slider: SliderAction | null,
+    ): Promise<void>
+}
+
 export interface EncoderApi {
     /** `direction`: 0 = clockwise, 1 = counter-clockwise (matches
      *  EncoderAction.cw / .ccw). Clients map this to their wire flag. */
@@ -190,7 +208,20 @@ export interface MacroApi {
 
     getMacro(idx: number): Promise<MacroAction[]>
 
-    setMacro?(idx: number, actions: MacroAction[]): Promise<void>
+    /** Writes the steps; `playMode`, on firmware that offers {@link playModes},
+     *  is written with them (absent = the macro keeps the mode it has). */
+    setMacro?(
+        idx: number,
+        actions: MacroAction[],
+        playMode?: MacroPlayMode,
+    ): Promise<void>
+
+    /** The play modes each macro can choose from, when the firmware lets every
+     *  macro choose; the UI offers exactly these. Absent = not a setting. */
+    readonly playModes?: readonly MacroPlayMode[]
+
+    /** The mode macro `idx` plays in; present with {@link playModes}. */
+    getPlayMode?(idx: number): Promise<MacroPlayMode>
 
     /** The action kinds this firmware's macros can hold, for the editor to
      *  offer. Absent = the basic set (tap, down, up, delay, text). */
@@ -251,7 +282,10 @@ export interface ConfigBridgeApi {
      *  Only a firmware whose runtime is a lossy projection of a config it also
      *  owns can do this. Adapters that edit the device directly omit it. */
     raiseKeymap(
-        layers: readonly Pick<Layer, 'name' | 'keys' | 'encoders'>[],
+        layers: readonly Pick<
+            Layer,
+            'name' | 'keys' | 'encoders' | 'sliders'
+        >[],
         prevConfig: ConfigKeymap,
     ): ConfigKeymap
 }
@@ -730,12 +764,7 @@ export type {
  *  board default), undo (back to the calibration the last finish, reset or
  *  undo replaced, until the joystick restarts). */
 export type JoystickCalStep =
-    | 'begin'
-    | 'centre'
-    | 'finish'
-    | 'cancel'
-    | 'reset'
-    | 'undo'
+    'begin' | 'centre' | 'finish' | 'cancel' | 'reset' | 'undo'
 
 /** A stick and the two analog inputs it reads (X, then Y). */
 export interface JoystickStick {
@@ -826,6 +855,96 @@ export interface SensorReading {
  *  the next saved config replaces it. A procedure's result belongs to the
  *  unit and stays across configs. Settings and procedures are named as their
  *  descriptors name them. */
+/** Values this computer shows on the device's screens (time, CPU, media,
+ *  text). Each value expires on the device when it is not refreshed (a few
+ *  seconds; the time a day), so a closed app leaves "--" instead of a stale
+ *  number. Keys are named as the registry names them (`time`, `cpu`,
+ *  `mediaTitle`, `user0`...). */
+export interface HostValuesApi {
+    /** The keys the device's saved screens show: push only those. */
+    keys(): Promise<string[]>
+    /** Push one value: a number, a text (up to 64 bytes), or a time (shown
+     *  in this computer's local time, ticking on by itself). */
+    set(key: string, value: number | string | Date): Promise<void>
+    /** Forget every value. */
+    clear(): Promise<void>
+}
+
+/** One display of the device: its part and its panel as built. */
+export interface ScreenPanel {
+    /** Its part index (a document's `displays[].part`). */
+    readonly part: number
+    readonly model: string
+    /** Pixels as built, before the part's rotation. */
+    readonly width: number
+    readonly height: number
+    /** The part as it describes itself (its settings: brightness, ...). */
+    readonly info: SensorInfo
+}
+
+/** A value a screen widget can show, by its document name. */
+export interface ScreenSourceInfo {
+    readonly name: string
+    readonly label: string
+    /** The device's own value, or one this computer pushes. */
+    readonly from: 'device' | 'host'
+}
+
+/** A value drawn in a preview: a number, a text, or (the time) a Date. */
+export type ScreenPreviewValue = number | string | Date
+
+export interface ScreenRenderOpts {
+    width: number
+    height: number
+    /** The part's rotation code (clockwise quarter turns). */
+    rotation?: number
+    invert?: boolean
+    /** A source's value by document name; undefined draws as the device
+     *  draws a missing value. */
+    values?: (source: string) => ScreenPreviewValue | undefined
+}
+
+export interface ScreenBox {
+    x: number
+    y: number
+    w: number
+    h: number
+}
+
+// Pattern check: Facade (Tier 1) — extended — same optional-facade idiom as HostValuesApi / SensorApi: one surface an adapter may or may not implement, gated by presence.
+/** What the device's displays can show and how they draw it, so an editor
+ *  can offer the right values and preview a page pixel for pixel. */
+export interface ScreensApi {
+    /** The device's displays (none = []). */
+    displays(): Promise<readonly ScreenPanel[]>
+    /** Every value a widget can show. */
+    readonly sources: readonly ScreenSourceInfo[]
+    /** Widest / tallest picture a widget holds. */
+    readonly imageMax: number
+    /** The size widgets see on a w x h panel turned `rotation`. */
+    logicalSize(width: number, height: number, rotation: number): { width: number; height: number }
+    /** A page as the panel shows it: width x height bytes, 1 = lit. */
+    render(page: ConfigScreenPage | undefined, opts: ScreenRenderOpts): Uint8Array
+    /** Panel pixel -> the logical pixel it shows. */
+    panelToLogical(
+        px: number,
+        py: number,
+        opts: { width: number; height: number; rotation: number },
+    ): { x: number; y: number }
+    /** A widget's box -> where it lands on the panel. */
+    panelBox(box: ScreenBox, opts: { width: number; height: number; rotation: number }): ScreenBox
+    /** RGBA pixels -> a picture widget's `image` (1-bit, dithered unless
+     *  `dither` is false; `invert` lights the dark parts). */
+    image(
+        rgba: ArrayLike<number>,
+        width: number,
+        height: number,
+        opts?: { dither?: boolean; invert?: boolean },
+    ): NonNullable<ConfigScreenWidget['image']>
+    /** What the device would refuse, with paths into `displays`. */
+    problems(displays: readonly ConfigDisplay[]): { path: (string | number)[]; message: string }[]
+}
+
 export interface SensorApi {
     /** False on a read-only view. */
     readonly writable: boolean
@@ -856,7 +975,10 @@ export interface SensorApi {
     ): Promise<SensorProcedureStatus>
     /** The live readings (of one channel). Rejects while a procedure holds
      *  the sensor. */
-    getMetrics(sensor: number, channel?: number): Promise<readonly SensorReading[]>
+    getMetrics(
+        sensor: number,
+        channel?: number,
+    ): Promise<readonly SensorReading[]>
     /** What a finished procedure suggests for the part's own settings, by
      *  setting name (an axis calibration's deadzones); empty when it measured
      *  none or the firmware cannot say. */
@@ -954,6 +1076,15 @@ export interface KeyboardService {
     /** The device's sensors: settings, procedures, readings. Present when the
      *  firmware serves them. */
     readonly sensor?: SensorApi
+    /** Values this computer pushes for the device's screens. Present when
+     *  the firmware serves them. */
+    readonly hostValues?: HostValuesApi
+    /** What the device's screens can show and how they draw. Present when
+     *  the firmware draws screens from its config. */
+    readonly screens?: ScreensApi
+    /** Identifiers to match this device against community device items
+     *  (`scheme:value`). Each client declares its own; absent = none. */
+    readonly identity?: IdentityApi
 
     getLockState(): Promise<LockState>
 
@@ -996,6 +1127,7 @@ export interface KeyboardService {
     canSetAction?(action: KeyAction): boolean
 
     encoders?: EncoderApi
+    sliders?: SliderApi
     dynamic?: DynamicEntriesApi
     macros?: MacroApi
     /** Live switch-matrix readout for the Key Test view. Present only when the

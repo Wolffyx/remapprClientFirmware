@@ -15,5 +15,12 @@ export default defineConfig({
     },
     test: {
         include: ['src/**/*.test.ts'],
+        server: {
+            deps: {
+                // Its ESM build imports without file extensions; let Vite
+                // resolve them instead of Node.
+                inline: ['@zmkfirmware/zmk-studio-ts-client'],
+            },
+        },
     },
 })

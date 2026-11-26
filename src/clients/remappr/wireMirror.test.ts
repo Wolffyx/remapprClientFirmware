@@ -6,26 +6,26 @@ import { describe, expect, it } from 'vitest'
 import { establishSession } from './adapter'
 import { loadDeviceConfig, readConfigBlob, universalChunk, UNIVERSAL_CHUNK_DEFAULT } from './configRead'
 import { type DiscoveryResult, servesNamespace } from './discovery'
-import { clearHostValues, getHostKeys, servesHost, setHostInt, setHostText, setHostTime } from './host'
+import {
+    buildHostSetArgs,
+    buildHostValuesApi,
+    HOST_DATA_MAX,
+    HOST_TEXT_MAX,
+    HostVerb,
+    parseHostKeys,
+    servesHost,
+} from './hostValues'
 import { inputLayoutModel } from './inputLayout'
 import { servesJoystick } from './joystick'
 import {
-    buildHostNumberArg,
-    buildHostTextArgs,
     Cap,
     Feature,
-    HOST_DATA_MAX,
-    HOST_TEXT_MAX,
-    HostKey,
-    HostType,
-    HostVerb,
     INPUT_NONE,
     InputClass,
     InputForm,
     InputShape,
     KeyboardVerb,
     Namespace,
-    parseHostKeys,
     parseManifest,
     Status,
 } from './protocol'
@@ -35,37 +35,25 @@ import { SealedDevice, type Reply } from './sealedDevice.fixture'
 const le16 = (v: number): number[] => [v & 0xff, (v >> 8) & 0xff]
 const ok = (data: Uint8Array = new Uint8Array()): Reply => ({ status: Status.OK, data })
 
-describe('HOST namespace (L3.10)', () => {
-    it('builds INT and TIME values as the firmware reads them', () => {
-        expect([...buildHostNumberArg(HostKey.CPU, HostType.INT, -2)]).toEqual([
-            0x02, 0, 0, 4, 0xfe, 0xff, 0xff, 0xff,
-        ])
-        expect([...buildHostNumberArg(HostKey.TIME, HostType.TIME, 0x01020304)]).toEqual([
-            0x01, 2, 0, 4, 4, 3, 2, 1,
-        ])
-        expect(() => buildHostNumberArg(0, HostType.INT, 1)).toThrow(/out of range/)
-        expect(() => buildHostNumberArg(0x40, HostType.INT, 1)).toThrow(/out of range/)
-        expect(() => buildHostNumberArg(1, HostType.TEXT, 1)).toThrow(/not a number/)
-    })
+// The HOST facade is hostValues.ts (review-fixes); these cases are the wire
+// rules the audit mirrors on it.
+const KEY = { TIME: 0x01, CPU: 0x02, RAM: 0x03, MEDIA_TITLE: 0x04, NOTIFICATION: 0x07 }
 
+describe('HOST namespace (L3.10)', () => {
     it('splits TEXT into in-order pieces of at most HOST_DATA_MAX bytes', () => {
-        const text = 'x'.repeat(45)
-        const pieces = buildHostTextArgs(HostKey.MEDIA_TITLE, text)
+        const pieces = buildHostSetArgs(KEY.MEDIA_TITLE, 'text', 'x'.repeat(45))
         expect(pieces.map((p) => [...p.subarray(0, 4)])).toEqual([
             [0x04, 1, 0, 45],
             [0x04, 1, 20, 45],
             [0x04, 1, 40, 45],
         ])
         expect(pieces.map((p) => p.length - 4)).toEqual([HOST_DATA_MAX, HOST_DATA_MAX, 5])
-        expect(buildHostTextArgs(0x10, '')).toEqual([Uint8Array.of(0x10, 1, 0, 0)])
     })
 
     it('cuts TEXT to HOST_TEXT_MAX bytes without splitting a character', () => {
         const text = 'a'.repeat(63) + 'é' // 63 + 2 bytes
-        const pieces = buildHostTextArgs(HostKey.NOTIFICATION, text)
-        expect(pieces[0][3]).toBe(63) // total: the 2-byte é no longer fits
-        const all = buildHostTextArgs(HostKey.NOTIFICATION, 'b'.repeat(100))
-        expect(all[0][3]).toBe(HOST_TEXT_MAX)
+        expect(buildHostSetArgs(KEY.NOTIFICATION, 'text', text)[0][3]).toBe(63)
+        expect(buildHostSetArgs(KEY.NOTIFICATION, 'text', 'b'.repeat(100))[0][3]).toBe(HOST_TEXT_MAX)
     })
 
     it('parses GET_KEYS and refuses a short or newer reply', () => {
@@ -79,7 +67,7 @@ describe('HOST namespace (L3.10)', () => {
         const dev = new SealedDevice({
             serve: (ns, cmd, arg) => {
                 if (ns !== Namespace.HOST) return { status: Status.ERR_CMD, data: new Uint8Array() }
-                if (cmd === HostVerb.GET_KEYS) return ok(Uint8Array.of(1, 2, HostKey.TIME, HostKey.CPU))
+                if (cmd === HostVerb.GET_KEYS) return ok(Uint8Array.of(1, 2, KEY.TIME, KEY.CPU))
                 if (cmd === HostVerb.SET_VALUE) sets.push(Uint8Array.from(arg))
                 return ok()
             },
@@ -90,11 +78,12 @@ describe('HOST namespace (L3.10)', () => {
     it('reads keys in plaintext and seals SET_VALUE and CLEAR once a session is bound', async () => {
         const { dev, rpc, sets } = hostDevice()
         rpc.bindSession({ session: await establishSession(rpc), renew: () => establishSession(rpc) })
-        expect(await getHostKeys(rpc)).toEqual([HostKey.TIME, HostKey.CPU])
-        await setHostInt(rpc, HostKey.CPU, 42)
-        await setHostTime(rpc, HostKey.TIME, 1_800_000_000)
-        await setHostText(rpc, HostKey.MEDIA_TITLE, 'y'.repeat(30))
-        await clearHostValues(rpc)
+        const host = buildHostValuesApi(rpc)
+        expect(await host.keys()).toEqual(['time', 'cpu'])
+        await host.set('cpu', 42)
+        await host.set('time', new Date(1_800_000_000_000))
+        await host.set('mediaTitle', 'y'.repeat(30))
+        await host.clear()
         expect(dev.served.map((s) => [s.form, s.cmd])).toEqual([
             ['universal', HostVerb.GET_KEYS],
             ['direct-sealed', HostVerb.SET_VALUE],
@@ -109,7 +98,7 @@ describe('HOST namespace (L3.10)', () => {
 
     it('goes plaintext to a device with auth off', async () => {
         const { dev, rpc } = hostDevice()
-        await setHostInt(rpc, HostKey.VOLUME, 70)
+        await buildHostValuesApi(rpc).set('volume', 70)
         expect(dev.served.at(-1)).toMatchObject({ form: 'universal', ns: Namespace.HOST })
         await rpc.close({ abortTransport: true })
     })
@@ -118,7 +107,12 @@ describe('HOST namespace (L3.10)', () => {
         const rpc = {
             callMutation: async (): Promise<UniversalReply> => ({ status: Status.ERR_STATE, data: new Uint8Array() }),
         } as unknown as RemapprRpc
-        await expect(setHostInt(rpc, HostKey.RAM, 1)).rejects.toThrow(/SET_VALUE key 0x3 → ERR_STATE/)
+        await expect(buildHostValuesApi(rpc).set('ram', 1)).rejects.toThrow(/SET_HOST_VALUE ram → ERR_STATE/)
+    })
+
+    it('refuses a key the device cannot store', async () => {
+        const rpc = { callMutation: async () => ok() } as unknown as RemapprRpc
+        await expect(buildHostValuesApi(rpc).set('0x40', 'x')).rejects.toThrow(/out of range/)
     })
 })
 
@@ -208,7 +202,7 @@ describe('caps, features and the DISPLAY input class (L3.11)', () => {
             { name: 'Pad', fallbackForm: 'macropad' },
         )
         expect(m.controls).toHaveLength(2)
-        expect(m.controls[1]).toMatchObject({ kind: 'display', shape: 'screen', name: 'Display' })
+        expect(m.controls[1]).toMatchObject({ kind: 'display', shape: 'screen', name: 'Screen' })
     })
 })
 

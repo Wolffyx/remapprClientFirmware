@@ -355,16 +355,28 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     'key.keyboard_copy': ['K_COPY', 'KC_COPY'],
     'key.keyboard_paste': ['K_PASTE', 'KC_PASTE', 'KC_PSTE'],
     'key.keyboard_find': ['K_FIND', 'K_FIND2', 'KC_FIND'],
+    // ZMK's K_MUTE2 / K_VOLUME_UP2 / K_VOLUME_DOWN2 are keyboard-page 0xEF /
+    // 0xED / 0xEE (zmk keys.h; codes Android defines, unassigned in HID Usage
+    // Tables 1.7), not these usages, so they are not aliases here.
     'key.keyboard_mute': [
-        'K_MUTE', 'K_MUTE2', 'KC_KB_MUTE',
+        'K_MUTE', 'KC_KB_MUTE',
+        // Its label before it read as the keyboard-page variant: saved configs
+        // that spell it this way keep sending the same key.
+        'Mute',
     ],
     'key.keyboard_volume_up': [
-        'K_VOLUME_UP', 'K_VOL_UP', 'K_VOLUME_UP2', 'K_VOL_UP2',
+        'K_VOLUME_UP', 'K_VOL_UP',
         'KC_KB_VOLUME_UP',
+        // Its label before it read as the keyboard-page variant: saved configs
+        // that spell it this way keep sending the same key.
+        'Volume Up',
     ],
     'key.keyboard_volume_down': [
-        'K_VOLUME_DOWN', 'K_VOL_DN', 'K_VOLUME_DOWN2', 'K_VOL_DN2',
+        'K_VOLUME_DOWN', 'K_VOL_DN',
         'KC_KB_VOLUME_DOWN',
+        // Its label before it read as the keyboard-page variant: saved configs
+        // that spell it this way keep sending the same key.
+        'Volume Down',
     ],
     'key.keyboard_alternate_erase': [
         'ALT_ERASE', 'KC_ALTERNATE_ERASE', 'KC_ERAS',
@@ -485,28 +497,33 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     ],
 
     // ─────────────────────────────────────────────────────────────
-    // Consumer keys (HID 12) — selected coverage
+    // Consumer keys (HID 12) — selected coverage. Usages the media page
+    // (hid-pages/media.json) defines carry its `media.` id.
     // ─────────────────────────────────────────────────────────────
     'consumer.consumer_control': ['Consumer Control'],
-    'consumer.volume_increment': ['C_VOLUME_UP', 'C_VOL_UP'],
-    'consumer.volume_decrement': ['C_VOLUME_DOWN', 'C_VOL_DN'],
-    'consumer.mute': ['C_MUTE'],
-    'consumer.bass_boost': ['C_BASS_BOOST'],
-    'consumer.alternate_audio_increment': [
+    'media.volume_increment': [
+        'C_VOLUME_UP', 'C_VOL_UP', 'KC_AUDIO_VOL_UP', 'KC_VOLU',
+    ],
+    'media.volume_decrement': [
+        'C_VOLUME_DOWN', 'C_VOL_DN', 'KC_AUDIO_VOL_DOWN', 'KC_VOLD',
+    ],
+    'media.mute': ['C_MUTE', 'KC_AUDIO_MUTE', 'KC_MUTE'],
+    'media.bass_boost': ['C_BASS_BOOST'],
+    'media.alternate_audio_increment': [
         'C_ALTERNATE_AUDIO_INCREMENT', 'C_ALT_AUDIO_INC',
     ],
-    'consumer.brightness_increment': [
+    'consumer.display_brightness_increment': [
         'C_BRIGHTNESS_INC', 'C_BRI_INC', 'C_BRI_UP',
         'KC_BRIGHTNESS_UP', 'KC_BRIU',
     ],
-    'consumer.brightness_decrement': [
+    'consumer.display_brightness_decrement': [
         'C_BRIGHTNESS_DEC', 'C_BRI_DEC', 'C_BRI_DN',
         'KC_BRIGHTNESS_DOWN', 'KC_BRID',
     ],
-    'consumer.minimum_brightness': ['C_BRIGHTNESS_MINIMUM', 'C_BRI_MIN'],
-    'consumer.maximum_brightness': ['C_BRIGHTNESS_MAXIMUM', 'C_BRI_MAX'],
-    'consumer.auto_brightness': ['C_BRIGHTNESS_AUTO', 'C_BRI_AUTO'],
-    'consumer.backlight_toggle': ['C_BACKLIGHT_TOGGLE', 'C_BKLT_TOG'],
+    'consumer.display_set_brightness_to_minimum': ['C_BRIGHTNESS_MINIMUM', 'C_BRI_MIN'],
+    'consumer.display_set_brightness_to_maximum': ['C_BRIGHTNESS_MAXIMUM', 'C_BRI_MAX'],
+    'consumer.display_set_auto_brightness': ['C_BRIGHTNESS_AUTO', 'C_BRI_AUTO'],
+    'consumer.display_backlight_toggle': ['C_BACKLIGHT_TOGGLE', 'C_BKLT_TOG'],
     'consumer.aspect': ['C_ASPECT'],
     'consumer.picture_in_picture_toggle': ['C_PIP'],
     'consumer.menu': ['C_MENU'],
@@ -525,12 +542,12 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     'consumer.channel_increment': ['C_CHANNEL_INC', 'C_CHAN_INC'],
     'consumer.channel_decrement': ['C_CHANNEL_DEC', 'C_CHAN_DEC'],
     'consumer.recall_last': ['C_RECALL_LAST', 'C_CHAN_LAST'],
-    'consumer.media_select_program_guide': ['C_MEDIA_GUIDE'],
-    'consumer.media_select_home': ['C_MEDIA_HOME'],
-    'consumer.media_select_tv': ['C_MEDIA_TV'],
-    'consumer.media_select_www': ['C_MEDIA_WWW'],
-    'consumer.media_select_telephone': ['C_MEDIA_PHONE'],
-    'consumer.application_launch_button_configuration_tool': [
+    'media.media_select_program_guide': ['C_MEDIA_GUIDE'],
+    'media.media_select_home': ['C_MEDIA_HOME'],
+    'media.media_select_tv': ['C_MEDIA_TV'],
+    'media.media_select_www': ['C_MEDIA_WWW'],
+    'media.media_select_telephone': ['C_MEDIA_PHONE'],
+    'al.al_consumer_control_configuration': [
         'C_AL_CCC',
     ],
     'consumer.power': [
@@ -542,16 +559,15 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
         'C_SLEEP', 'KC_SYSTEM_SLEEP', 'KC_SLEP',
     ],
     'consumer.sleep_mode': ['C_SLEEP_MODE'],
-    'consumer.record': ['C_RECORD', 'C_REC'],
-    'consumer.eject': [
+    'media.record': ['C_RECORD', 'C_REC'],
+    'media.eject': [
         'C_EJECT',
         'KC_MEDIA_EJECT', 'KC_EJCT',
     ],
-    'consumer.stop_eject': ['C_STOP_EJECT'],
-    'consumer.slow': ['C_SLOW'],
-    'consumer.repeat': ['C_REPEAT'],
-    'consumer.random_play': ['C_RANDOM_PLAY', 'C_SHUFFLE'],
-    'consumer.closed_caption_toggle': [
+    'media.slow': ['C_SLOW'],
+    'media.repeat': ['C_REPEAT'],
+    'media.random_play': ['C_RANDOM_PLAY', 'C_SHUFFLE'],
+    'consumer.closed_caption': [
         'C_CAPTIONS', 'C_SUBTITLES',
     ],
     'consumer.data_on_screen': ['C_DATA_ON_SCREEN'],
@@ -602,28 +618,29 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
         'C_AC_DESKTOP_SHOW_ALL_APPLICATIONS',
         'KC_LAUNCHPAD', 'KC_LPAD',
     ],
-    'ac.ac_voice_command': [
-        'C_VOICE_COMMAND', 'KC_ASSISTANT', 'KC_ASST',
-    ],
+    // ZMK C_VOICE_COMMAND is Consumer 0xCF Voice Command; QMK KC_ASSISTANT
+    // sends 0x1CB AL Context-aware Desktop Assistant (tmk report.h).
+    'media.voice_command': ['C_VOICE_COMMAND'],
+    'al.al_context_aware_desktop_assistant': ['KC_ASSISTANT', 'KC_ASST'],
     'ac.ac_next_keyboard_layout_select': [
         'C_AC_NEXT_KEYBOARD_LAYOUT_SELECT', 'GLOBE',
     ],
-    'ac.ac_keyboard_input_assist_next': [
+    'consumer.keyboard_input_assist_next': [
         'C_KEYBOARD_INPUT_ASSIST_NEXT', 'C_KBIA_NEXT',
     ],
-    'ac.ac_keyboard_input_assist_previous': [
+    'consumer.keyboard_input_assist_previous': [
         'C_KEYBOARD_INPUT_ASSIST_PREVIOUS', 'C_KBIA_PREV',
     ],
-    'ac.ac_keyboard_input_assist_next_group': [
+    'consumer.keyboard_input_assist_next_group': [
         'C_KEYBOARD_INPUT_ASSIST_NEXT_GROUP', 'C_KBIA_NEXT_GRP',
     ],
-    'ac.ac_keyboard_input_assist_previous_group': [
+    'consumer.keyboard_input_assist_previous_group': [
         'C_KEYBOARD_INPUT_ASSIST_PREVIOUS_GROUP', 'C_KBIA_PREV_GRP',
     ],
-    'ac.ac_keyboard_input_assist_accept': [
+    'consumer.keyboard_input_assist_accept': [
         'C_KEYBOARD_INPUT_ASSIST_ACCEPT', 'C_KBIA_ACCEPT',
     ],
-    'ac.ac_keyboard_input_assist_cancel': [
+    'consumer.keyboard_input_assist_cancel': [
         'C_KEYBOARD_INPUT_ASSIST_CANCEL', 'C_KBIA_CANCEL',
     ],
 
@@ -668,13 +685,13 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
         'C_AL_CALCULATOR', 'C_AL_CALC',
         'KC_CALCULATOR', 'KC_CALC',
     ],
-    'al.al_news': ['C_AL_NEWS'],
+    'al.al_newsreader': ['C_AL_NEWS'],
     'al.al_database_app': ['C_AL_DATABASE', 'C_AL_DB'],
     'al.al_voicemail': ['C_AL_VOICEMAIL'],
-    'al.al_consumer_finance': ['C_AL_FINANCE'],
+    'al.al_checkbook_finance': ['C_AL_FINANCE'],
     'al.al_task_project_manager': ['C_AL_TASK_MANAGER'],
     'al.al_log_journal_timecard': ['C_AL_JOURNAL'],
-    'al.al_av_capture_playback': ['C_AL_AV_CAPTURE_PLAYBACK'],
+    'al.al_a_v_capture_playback': ['C_AL_AV_CAPTURE_PLAYBACK'],
     'al.al_spell_check': ['C_AL_SPELLCHECK', 'C_AL_SPELL'],
     'al.al_screen_saver': ['C_AL_SCREEN_SAVER'],
     'al.al_keyboard_layout': ['C_AL_KEYBOARD_LAYOUT'],
@@ -690,20 +707,25 @@ export const EXTERNAL_NAMES: Record<CanonicalKeyId, string[]> = {
     // ─────────────────────────────────────────────────────────────
     // Media transport (consolidates HID + ZMK static + QMK media keys)
     // ─────────────────────────────────────────────────────────────
+    // ZMK's K_PLAY_PAUSE / K_PREVIOUS / K_NEXT are keyboard-page 0xE8 / 0xEA /
+    // 0xEB (zmk keys.h; Android codes, unassigned in HID Usage Tables 1.7),
+    // so they are not names of these consumer keys.
     'media.transport.play_pause': [
-        'C_PLAY_PAUSE', 'C_PP', 'K_PLAY_PAUSE', 'K_PP',
-        'C_PLAY', 'C_PAUSE',
+        'C_PLAY_PAUSE', 'C_PP',
         'KC_MEDIA_PLAY_PAUSE', 'KC_MPLY',
     ],
+    'media.play': ['C_PLAY'],
+    'media.pause': ['C_PAUSE'],
+    'media.stop_eject': ['C_STOP_EJECT'],
     'media.transport.stop': [
         'C_STOP', 'KC_MEDIA_STOP', 'KC_MSTP',
     ],
     'media.transport.next': [
-        'C_NEXT', 'K_NEXT', 'C_SCAN_NEXT_TRACK',
+        'C_NEXT', 'C_SCAN_NEXT_TRACK',
         'KC_MEDIA_NEXT_TRACK', 'KC_MNXT',
     ],
     'media.transport.prev': [
-        'C_PREVIOUS', 'C_PREV', 'K_PREVIOUS', 'K_PREV',
+        'C_PREVIOUS', 'C_PREV',
         'C_SCAN_PREVIOUS_TRACK',
         'KC_MEDIA_PREV_TRACK', 'KC_MPRV',
     ],
@@ -1067,6 +1089,13 @@ export const EXTERNAL_NOTES: Partial<Record<CanonicalKeyId, string>> = {
         'macOS / iOS: ignores quick presses; long-press shows prompt',
     'consumer.power':
         'Linux / macOS / iOS supported; Windows ignored',
+    // HID Keyboard-page 0x7F-0x81, not the Consumer-page keys most keyboards send.
+    'key.keyboard_mute':
+        'Keyboard-page Mute (0x7F). For the usual mute key use Media → Mute.',
+    'key.keyboard_volume_up':
+        'Keyboard-page Volume Up (0x80). For the usual volume key use Media → Volume Increment.',
+    'key.keyboard_volume_down':
+        'Keyboard-page Volume Down (0x81). For the usual volume key use Media → Volume Decrement.',
 }
 
 // Canonical ids that intentionally have no spec-name mapping. Coverage

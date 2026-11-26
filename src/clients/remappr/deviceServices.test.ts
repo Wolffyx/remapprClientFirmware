@@ -1,9 +1,10 @@
 // pattern-check: skip vitest cases over the service wiring
 //
 // The device editor reads and writes a mouse's or a joystick's settings with
-// the device's own part list: a joystick's shaping sits on its AXES parts
-// (TBL_JOYSTICK v2 + TBL_PART), placed by that list. Without it the service
-// writes the legacy v1 table and reads shaping as one AXES part.
+// the device's own parts: a mouse's settings sit on its pointer part (the part
+// list), a joystick's shaping on its AXES parts (TBL_JOYSTICK v2 + TBL_PART,
+// placed by the AXES layout). Without it the service writes the legacy v1
+// table.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DeviceConfigTarget } from './deviceConfig'
 import type { DeviceSite } from './deviceServices'
@@ -44,11 +45,11 @@ describe('device services hand the part list to the config API', () => {
         targets.length = 0
     })
 
-    it('a joystick that serves SENSOR reads its parts for the config', async () => {
+    it('a joystick that serves SENSOR reads its AXES layout for the config', async () => {
         await buildJoystickService(site([Namespace.JOYSTICK, Namespace.SENSOR]))
         expect(targets).toHaveLength(1)
         expect(targets[0].personality).toBe('joystick')
-        expect(await targets[0].sensors?.()).toBe(PARTS)
+        expect(typeof targets[0].axes).toBe('function')
     })
 
     it('a mouse that serves SENSOR reads its parts for the config', async () => {
@@ -56,8 +57,8 @@ describe('device services hand the part list to the config API', () => {
         expect(await targets[0].sensors?.()).toBe(PARTS)
     })
 
-    it('a joystick without SENSOR has no part list (legacy v1 table)', async () => {
+    it('a joystick without SENSOR has no AXES layout (legacy v1 table)', async () => {
         await buildJoystickService(site([Namespace.JOYSTICK]))
-        expect(targets[0].sensors).toBeUndefined()
+        expect(targets[0].axes).toBeUndefined()
     })
 })

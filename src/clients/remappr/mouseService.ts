@@ -9,7 +9,10 @@
 // ones back. A view through the dongle is read-only.
 import type { ConfigDevice } from '../../config/device'
 import { ProtocolError } from '../../errors'
-import { withBatteryShow } from '../../devices/battery'
+import {
+    type SystemActionName,
+    withSystemActions,
+} from '../../devices/systemActions'
 import { KeylessServiceBase } from '../../devices/keylessService'
 import {
     createLayoutOverride,
@@ -29,6 +32,8 @@ import type {
     DeviceConfigApi,
     DeviceConfigDraft,
     MouseMotionApi,
+    HostValuesApi,
+    ScreensApi,
     SensorApi,
 } from '../../service'
 import type { DeviceInfo, ExportedFile } from '../../types'
@@ -42,6 +47,7 @@ import {
 } from './mouseControls'
 import type { InputLayout } from './inputLayout'
 import {
+    HwCap,
     type Limits,
     type MotionConfig,
     powerCapability,
@@ -60,6 +66,11 @@ export interface MouseServiceDeps {
     /** The sensor's settings, procedures and readings; absent when the
      *  firmware does not serve the SENSOR namespace. */
     sensor?: SensorApi
+    /** Values this computer pushes for the screens; absent when the
+     *  firmware does not serve the HOST namespace. */
+    hostValues?: HostValuesApi
+    /** What the screens can show and how they draw. */
+    screens?: ScreensApi
     /** False for a read-only view. */
     writable: boolean
     /** GET_PERSONALITY_MAP hw_caps (0 / absent = not reported). */
@@ -101,6 +112,8 @@ export class RemapprMouseService extends KeylessServiceBase {
     readonly limits?: Limits
     readonly motion?: MouseMotionApi
     readonly sensor?: SensorApi
+    readonly hostValues?: HostValuesApi
+    readonly screens?: ScreensApi
     readonly device?: DeviceConfigApi
     readonly controls: ControlsApi
 
@@ -125,6 +138,8 @@ export class RemapprMouseService extends KeylessServiceBase {
         this.limits = deps.limits
         this.motion = deps.motion
         this.sensor = deps.sensor
+        this.hostValues = deps.hostValues
+        this.screens = deps.screens
         // Drawn as the mouse reports itself, else generic; a layout drawn in
         // the Builder is remembered per mouse and wins while it fits.
         this.layout = createLayoutOverride(
@@ -391,15 +406,18 @@ export class RemapprMouseService extends KeylessServiceBase {
         }
     }
 
-    /** Show-battery is offered when the mouse has a battery, or a button
-     *  already binds it (so the bound action keeps its label). */
-    private offersBatteryShow(): boolean {
-        return (
-            !!this.capabilities.power?.battery ||
-            !!this.draft?.mouse?.buttonActions?.some(
-                (a) => a?.action === 'batteryShow',
-            )
-        )
+    /** The system actions offered: show-battery when the mouse has a
+     *  battery, unpair when it has a radio, and either one a button already
+     *  binds (so the bound action keeps its label). */
+    private systemActions(): SystemActionName[] {
+        const bound = (name: SystemActionName): boolean =>
+            !!this.draft?.mouse?.buttonActions?.some((a) => a?.action === name)
+        const radio = ((this.deps.hwCaps ?? 0) & HwCap.RADIO_2G4) !== 0
+        const offered: Record<SystemActionName, boolean> = {
+            batteryShow: !!this.capabilities.power?.battery || bound('batteryShow'),
+            unpair: radio || bound('unpair'),
+        }
+        return (Object.keys(offered) as SystemActionName[]).filter((n) => offered[n])
     }
 
     private readControls(): ControlsApi {
@@ -413,9 +431,7 @@ export class RemapprMouseService extends KeylessServiceBase {
                     this.draft?.mouse,
                     this.sensorInfo,
                 )
-                return this.offersBatteryShow()
-                    ? withBatteryShow(catalog)
-                    : catalog
+                return withSystemActions(catalog, this.systemActions())
             },
             getProfiles: () =>
                 Promise.resolve({ profiles: [PROFILE], activeId: PROFILE.id }),

@@ -35,3 +35,10 @@ export {
     type DeviceLayoutDoc,
     type LayoutParse,
 } from './schema'
+export {
+    addVariant,
+    inVariant,
+    removeVariant,
+    renameVariant,
+    variantControls,
+} from './variants'

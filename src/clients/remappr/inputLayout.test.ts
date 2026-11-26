@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import {
     fetchInputLayout,
     inputLayoutModel,
+    keyboardInputs,
+    withInputLayout,
     readInputLayout,
     servesInputLayout,
     type InputLayout,
@@ -319,5 +321,127 @@ describe('the Remappr mouse from its own layout', () => {
         expect(
             mouseModel('Empty', undefined, { form: 3, entries: [] }).defaulted,
         ).toBe(true)
+    })
+})
+
+/** The nucleo rig: 18 keys, then its knob (push = key 15), screen and fader. */
+const RIG: InputLayout = {
+    form: InputForm.PERSONALITY,
+    entries: [
+        entry({ cls: InputClass.KEY, inputId: 0x0000, position: 0 }),
+        entry({
+            cls: InputClass.SLIDER,
+            shape: InputShape.PILL,
+            inputId: 0x0900,
+            x: 650,
+            w: 50,
+            h: 400,
+        }),
+        entry({
+            cls: InputClass.DISPLAY,
+            shape: InputShape.SCREEN,
+            inputId: 0x0a00,
+            x: 450,
+            w: 155,
+            h: 78,
+        }),
+        entry({
+            cls: InputClass.ENCODER,
+            shape: InputShape.KNOB,
+            inputId: 0x0200,
+            position: 15,
+            x: 478,
+            y: 115,
+        }),
+    ],
+}
+
+describe('keyboardInputs', () => {
+    it('puts each slider at the slot its id names (the part rank), else in list order', () => {
+        const slider = (inputId: number, x: number) =>
+            entry({ cls: InputClass.SLIDER, shape: InputShape.PILL, inputId, x, w: 50, h: 400 })
+        const named = { ...RIG, entries: [slider(0x0901, 700), slider(0x0900, 600)] }
+        expect(keyboardInputs(named).sliders.map((s) => s.x)).toEqual([600, 700])
+        // Duplicate ordinals: the device did not name its parts, keep the list order.
+        const dup = { ...RIG, entries: [slider(0x0900, 700), slider(0x0900, 600)] }
+        expect(keyboardInputs(dup).sliders.map((s) => s.x)).toEqual([700, 600])
+    })
+
+    it('gives a knob its push key, a slider a slot and draws the rest as parts', () => {
+        const { encoders, sliders, parts } = keyboardInputs(RIG)
+        expect(encoders).toEqual([{ x: 478, y: 115, key: 15 }])
+        expect(sliders).toEqual([{ x: 650, y: 0, w: 50, h: 400 }])
+        expect(parts).toEqual([
+            {
+                id: 'in:2560',
+                name: 'Screen',
+                shape: 'screen',
+                x: 450,
+                y: 0,
+                w: 155,
+                h: 78,
+            },
+        ])
+    })
+
+    it('leaves out keys, bound buttons and classes it does not know', () => {
+        const { parts, encoders } = keyboardInputs({
+            form: 0,
+            entries: [
+                entry({ cls: InputClass.BUTTON, position: 3 }),
+                entry({ cls: 42 }),
+                entry({ cls: InputClass.ENCODER }),
+            ],
+        })
+        expect(parts).toEqual([])
+        expect(encoders).toEqual([{ x: 0, y: 0 }])
+    })
+
+    it('turns a rotated part about its pivot into a turn about its centre', () => {
+        const { parts } = keyboardInputs({
+            form: 0,
+            entries: [
+                entry({
+                    cls: InputClass.DISPLAY,
+                    w: 200,
+                    h: 100,
+                    rot: 9000,
+                    rotx: 0,
+                    roty: 0,
+                }),
+            ],
+        })
+        expect(parts[0]).toMatchObject({
+            x: -150,
+            y: 50,
+            w: 200,
+            h: 100,
+            r: 9000,
+        })
+    })
+})
+
+describe('withInputLayout', () => {
+    const keys = {
+        id: 0,
+        name: 'Remappr',
+        keys: [{ x: 0, y: 0, w: 100, h: 100 }],
+    }
+
+    it('adds knobs, sliders and parts beside the keys', () => {
+        const l = withInputLayout(keys, RIG)
+        expect(l.keys).toBe(keys.keys)
+        expect(l.encoders).toHaveLength(1)
+        expect(l.sliders).toHaveLength(1)
+        expect(l.parts?.map((p) => p.name)).toEqual(['Screen'])
+    })
+
+    it('is the key layout without an input layout or with keys only', () => {
+        expect(withInputLayout(keys, undefined)).toBe(keys)
+        const keysOnly = withInputLayout(keys, {
+            form: 0,
+            entries: [entry({ cls: InputClass.KEY, position: 0 })],
+        })
+        expect(keysOnly).toEqual(keys)
     })
 })

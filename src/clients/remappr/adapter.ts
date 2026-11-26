@@ -29,6 +29,8 @@ import { warmRemapprIdentity } from './identity'
 import { buildClusterApi } from './clusterView'
 import { buildNodesApi } from './nodeView'
 import { buildSensorApi, servesSensor } from './sensor'
+import { buildHostValuesApi, servesHost } from './hostValues'
+import { buildScreensApi } from './screens'
 import { buildUnicodeApi } from './unicodeView'
 import {
     BLE_CONTROL_CHAR_UUID,
@@ -317,6 +319,10 @@ export const remapprAdapter: FirmwareAdapter = {
             }
 
             const loaded = await loadDeviceConfig(rpc, discovery)
+            // Its parts (the battery part above all) where it serves SENSOR.
+            const sensor = servesSensor(discovery)
+                ? buildSensorApi(rpc, { writable: !recovery })
+                : undefined
 
             return new RemapprKeyboardService({
                 rpc,
@@ -336,10 +342,15 @@ export const remapprAdapter: FirmwareAdapter = {
                 ...(loaded.deviceBlob ? { deviceBlob: loaded.deviceBlob } : {}),
                 limits: discovery.limits,
                 hwCaps: discovery.personality?.hwCaps,
-                // Its parts (the battery part above all) where it serves SENSOR.
-                sensor: servesSensor(discovery)
-                    ? buildSensorApi(rpc, { writable: !recovery })
-                    : undefined,
+                sensor,
+                // A firmware that draws screens from its config serves the
+                // host values they show.
+                ...(servesHost(discovery)
+                    ? {
+                          hostValues: buildHostValuesApi(rpc),
+                          screens: buildScreensApi(sensor),
+                      }
+                    : {}),
                 // A dongle relays to bonded nodes; a direct keyboard returns an
                 // empty roster. Read-only views today (relayed-write HW-pending).
                 nodes: buildNodesApi(rpc),

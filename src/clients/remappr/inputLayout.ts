@@ -18,8 +18,15 @@ import type {
     DeviceModel,
     DeviceShell,
 } from '../../devices/types'
+import type {
+    EncoderSlot,
+    PhysicalLayout,
+    PhysicalLayoutPart,
+    SliderSlot,
+} from '../../types'
 import {
     INPUT_NONE,
+    InputClass,
     InputVerb,
     Namespace,
     parseInputLayoutPage,
@@ -130,7 +137,7 @@ const CLASSES: readonly {
     { kind: 'hat', shape: 'hat', name: 'Hat' },
     { kind: 'axis', shape: 'ring', name: 'Axis' },
     { kind: 'axis', shape: 'pill', name: 'Slider' },
-    { kind: 'display', shape: 'screen', name: 'Display' },
+    { kind: 'display', shape: 'screen', name: 'Screen' },
 ]
 
 /** enum remappr_input_shape by value; 0 (auto) = the class default. */
@@ -257,5 +264,110 @@ export function inputLayoutModel(
         name: opts.name,
         shell: SHELLS[form],
         controls,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Layout → a keyboard's knobs and parts
+// ---------------------------------------------------------------------------
+
+/** How a keyboard draws an input that is not one of its keys, by class: the
+ *  device classes' shape and name (a screen is drawn, never bound). */
+const PART_LOOKS: readonly (
+    { shape: ControlShape; name: string } | undefined
+)[] = CLASSES.map(({ shape, name }) => ({ shape, name }))
+
+/** Entries of one class in the order the device counts them: by the ordinal
+ *  in their input id (a slider's part rank: the index its config uses) when
+ *  every one has a distinct ordinal below their count, else as listed. */
+function byOrdinal<T extends { inputId: number }>(entries: readonly T[]): T[] {
+    const ordinals = entries.map((e) =>
+        e.inputId === INPUT_NONE ? -1 : e.inputId & 0xff,
+    )
+    const distinct = new Set(ordinals)
+    const usable =
+        distinct.size === entries.length &&
+        ordinals.every((o) => o >= 0 && o < entries.length)
+    if (!usable) return [...entries]
+    return entries
+        .map((e, i) => ({ e, o: ordinals[i]! }))
+        .sort((a, b) => a.o - b.o)
+        .map(({ e }) => e)
+}
+
+/** A keyboard's knobs, sliders and parts from its input layout. Its keys
+ *  (class KEY, or any input with a binding position) come from the key layout
+ *  and are left out; an encoder keeps its position as `key`, the key that is
+ *  its push. Sliders are slots in the order the device counts its sliders in
+ *  (the slider index its config uses): their input ids' ordinals. */
+export function keyboardInputs(
+    layout: InputLayout,
+): Required<Pick<PhysicalLayout, 'encoders' | 'sliders' | 'parts'>> {
+    const encoders: EncoderSlot[] = layout.entries
+        .filter((e) => e.cls === InputClass.ENCODER)
+        .map((e) => ({
+            x: e.x,
+            y: e.y,
+            ...(e.position !== INPUT_NONE ? { key: e.position } : {}),
+        }))
+    const sliders: SliderSlot[] = byOrdinal(
+        layout.entries.filter((e) => e.cls === InputClass.SLIDER),
+    ).map((e) => {
+            const at = placement(e)
+            return {
+                x: Math.round(at.x * U),
+                y: Math.round(at.y * U),
+                w: Math.round(at.w * U),
+                h: Math.round(at.h * U),
+                ...(at.r ? { r: Math.round(at.r * U) } : {}),
+                ...(e.position !== INPUT_NONE ? { key: e.position } : {}),
+            }
+        })
+    const drawn = layout.entries.filter(
+        (e) =>
+            e.cls !== InputClass.KEY &&
+            e.cls !== InputClass.ENCODER &&
+            e.cls !== InputClass.SLIDER &&
+            e.position === INPUT_NONE &&
+            PART_LOOKS[e.cls] !== undefined,
+    )
+    const perClass = new Map<number, number>()
+    for (const e of drawn) perClass.set(e.cls, (perClass.get(e.cls) ?? 0) + 1)
+    const seen = new Map<number, number>()
+    const parts = drawn.map((e, i): PhysicalLayoutPart => {
+        const look = PART_LOOKS[e.cls]!
+        const ordinal = seen.get(e.cls) ?? 0
+        seen.set(e.cls, ordinal + 1)
+        const at = placement(e)
+        return {
+            id: genericId(e, i),
+            name:
+                (perClass.get(e.cls) ?? 0) === 1
+                    ? look.name
+                    : `${look.name} ${ordinal + 1}`,
+            shape: SHAPES[e.shape] ?? look.shape,
+            x: Math.round(at.x * U),
+            y: Math.round(at.y * U),
+            w: Math.round(at.w * U),
+            h: Math.round(at.h * U),
+            ...(at.r ? { r: Math.round(at.r * U) } : {}),
+        }
+    })
+    return { encoders, sliders, parts }
+}
+
+/** `layout` with the knobs and parts its device declares; unchanged without
+ *  an input layout, or when the device declares none. */
+export function withInputLayout(
+    layout: PhysicalLayout,
+    input: InputLayout | undefined,
+): PhysicalLayout {
+    if (!input) return layout
+    const { encoders, sliders, parts } = keyboardInputs(input)
+    return {
+        ...layout,
+        ...(encoders.length ? { encoders } : {}),
+        ...(sliders.length ? { sliders } : {}),
+        ...(parts.length ? { parts } : {}),
     }
 }

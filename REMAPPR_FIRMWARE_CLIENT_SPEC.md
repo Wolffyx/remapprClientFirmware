@@ -210,7 +210,8 @@ COMMON verbs that exist only on the universal route: 0x04
 
 #### 3.3.1 HOST — host values
 
-The host pushes values the device's screens draw (`host.ts`):
+The host pushes values the device's screens draw (`hostValues.ts`, the
+`HostValuesApi` facade, keys by name from `screenRegistry.ts`):
 
 | Verb | Arg | Reply |
 |---|---|---|
@@ -670,10 +671,11 @@ v1: u8 hat_ways (0 = 8) | u8 axis_count
 In v2 an input's shaping is its AXES part's, in TBL_PART on that part's
 channel: 0x40 invert, 0x41 radial, 0x42 curve, 0x43 inner deadzone, 0x44 outer
 deadzone. Inputs are numbered across the AXES parts (class analog) in part
-order. The compiler writes v2 plus all five settings for each listed input
-when it has the device's part list. Without the list, or when an input has no
-AXES part, it writes v1. The decoder reads both, and lets TBL_PART shaping win
-over a v1 entry, as the device does. Emitted only when something differs from
+order (`axesLayout.ts`). The compiler writes v2 plus all five settings for
+each listed input when it has the device's AXES layout (GET_PARTS, PART
+`ns_version` ≥ 1). Without it, or when an input has no AXES part, it writes v1.
+The decoder reads both, and lets TBL_PART shaping win over a v1 entry, a 0
+included, as the device does. Emitted only when something differs from
 the defaults.
 
 ### 5.5 TBL_ACTION_BINDING (17) v1 and action kinds

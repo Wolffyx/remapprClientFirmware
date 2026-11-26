@@ -22,6 +22,7 @@ import type { SensorInfo } from '../../devices/types'
 import type { DeviceConfigApi, DeviceConfigSnapshot } from '../../service'
 
 import { readConfigBlob } from './configRead'
+import type { AxesLayout } from './axesLayout'
 import {
     BLOB_ALIGN,
     Cmd,
@@ -152,6 +153,10 @@ export interface DeviceConfigTarget {
      *  serves them: `write` leaves out a sensor setting the device would
      *  refuse (it validates TBL_SENSOR strictly). */
     sensors?: () => Promise<readonly SensorInfo[]>
+    /** Where the device keeps its analog inputs (its AXES parts), when it
+     *  has any: a joystick's shaping is then written to and read from those
+     *  parts' settings (TBL_PART) rather than TBL_JOYSTICK v1. */
+    axes?: () => Promise<AxesLayout | undefined>
     /** GET_LIMITS max_unsealed_chunk: the read and write chunk size. */
     maxUnsealedChunk?: number
 }
@@ -219,10 +224,13 @@ export function buildDeviceConfigApi(
             }
         }
         // A joystick's axis shaping sits on its AXES parts, a mouse's settings
-        // on its pointer part: the device's part list places both.
+        // on its pointer part: the device's part layout places both.
         const sensors =
-            target.personality === 'dongle' ? undefined : await target.sensors?.()
-        const decoded = decodeRemapprDeviceBlob(blob, { sensors })
+            target.personality === 'mouse' ? await target.sensors?.() : undefined
+        const decoded = decodeRemapprDeviceBlob(blob, {
+            axes: await target.axes?.(),
+            ...(sensors ? { sensors } : {}),
+        })
         // A stored config this client cannot read is refused rather than shown
         // as defaults: saving over it would drop settings nobody saw.
         if (decoded.code !== DecodeCode.OK) {
@@ -235,7 +243,7 @@ export function buildDeviceConfigApi(
                 `the device holds a ${decoded.personality} config, not a ${target.personality} one`,
             )
         }
-        const { dongle, mouse, radio, joystick, sensor, power } = decoded
+        const { dongle, mouse, radio, joystick, sensor, power, displays } = decoded
         return {
             config: {
                 ...emptyDeviceConfig(target.personality, target.name),
@@ -245,6 +253,7 @@ export function buildDeviceConfigApi(
                 ...(joystick ? { joystick } : {}),
                 ...(sensor ? { sensor } : {}),
                 ...(power ? { power } : {}),
+                ...(displays ? { displays } : {}),
             },
             configVersion: decoded.configVersion ?? info.configVersion,
             stored: true,
@@ -292,12 +301,14 @@ export function buildDeviceConfigApi(
         // that does not move it forward, and another tool may have pushed since.
         const info = await deviceInfo()
         const version = (info.hasActive ? info.configVersion : 0) + 1
-        const sensors =
-            parsed.data.sensor || parsed.data.joystick
-                ? await target.sensors?.()
-                : undefined
+        const sensors = parsed.data.sensor ? await target.sensors?.() : undefined
+        const axes = parsed.data.joystick ? await target.axes?.() : undefined
         const blob = padToAlign(
-            buildRemapprDeviceBlob(parsed.data, { configVersion: version, sensors }),
+            buildRemapprDeviceBlob(parsed.data, {
+                configVersion: version,
+                sensors,
+                axes,
+            }),
         )
 
         await push(blob, version)

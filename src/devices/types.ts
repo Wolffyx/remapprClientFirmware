@@ -88,6 +88,19 @@ export interface DeviceControl {
     /** On the underside (paddles): drawn dashed. */
     readonly back?: boolean
     readonly label?: CalloutSide
+    /** The layout variant this control belongs to (an id from
+     *  `DeviceModel.layouts`); absent = in every variant. */
+    readonly variant?: string
+}
+
+/** A named layout variant: one possible arrangement of the device, e.g. with
+ *  or without back paddles. A variant is the controls with no `variant` plus
+ *  the ones tagged into it — the same as one ZMK physical layout or one QMK
+ *  `LAYOUT_*`. Controls keep their id across variants, so a shared control
+ *  keeps its binding when the variant changes. */
+export interface DeviceVariant {
+    readonly id: string
+    readonly name: string
 }
 
 /** The body is not drawn by hand: it is fitted around the controls, so moving a
@@ -117,6 +130,10 @@ export interface DeviceModel {
     readonly name: string
     readonly shell: DeviceShell
     readonly controls: readonly DeviceControl[]
+    /** Layout variants; controls tag in with `variant`. The first one is the
+     *  default (ZMK's `chosen` physical layout, QMK's default `LAYOUT`).
+     *  Absent = one fixed layout. */
+    readonly layouts?: readonly DeviceVariant[]
     /** The device did not report a layout: positions are a generic arrangement
      *  built from what it did report (see defaultLayout). */
     readonly defaulted?: boolean
@@ -200,6 +217,10 @@ export type SensorSettingValue = number | boolean
 export interface SensorBinding {
     /** DPI per stage; the DPI button cycles them. */
     readonly stages: readonly number[]
+    /** Y-axis DPI per stage, when it differs from `stages` (the X axis);
+     *  absent = both axes take `stages`. Only on a sensor whose spec says
+     *  {@link SensorSpec.separateXY}. */
+    readonly stagesY?: readonly number[]
     readonly active: number
     /** Polling rate, Hz. */
     readonly poll: number
@@ -424,6 +445,8 @@ export interface SensorSpec {
     readonly dpiMax: number
     readonly dpiStep: number
     readonly maxStages: number
+    /** Each stage can take a different DPI on the Y axis (stagesY). */
+    readonly separateXY?: boolean
     readonly pollRates: readonly number[]
     /** The sensor's own settings (not the DPI or the rate), as it describes
      *  them; empty when it describes none. */

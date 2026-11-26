@@ -5,15 +5,16 @@
 // keymap tables. The firmware refuses a blob whose personality is not its own,
 // so the personality is always emitted. The dongle reads TBL_DONGLE (id 25);
 // the mouse reads TBL_MOUSE (id 8), its button actions from TBL_ACTION_BINDING
-// (id 17), TBL_RADIO (id 26) and its sensor's TBL_SENSOR (id 29); the joystick
-// reads TBL_JOYSTICK (id 28) v2 with its axes' shaping in TBL_PART (id 29) and
+// (id 17), TBL_RADIO (id 26) and its sensor's TBL_SENSOR (id 29); the joystick reads TBL_JOYSTICK (id 28) and
 // its button actions from TBL_ACTION_BINDING. Mouse and joystick both read
 // TBL_POWER (id 30). Byte layout mirrors
 // firmware include/remappr/config_blob.h, lib/config_blob/decode_dongle.c and
 // include/remappr/radio_settings.h.
+import type { AxesLayout } from '../../../clients/remappr/axesLayout'
 import type { SensorInfo } from '../../../devices/types'
 import type { ConfigDevice, ConfigDeviceSensor, DongleSettings } from '../../device'
 import type {
+    ConfigDisplay,
     ConfigJoystick,
     ConfigMouse,
     ConfigPowerSettings,
@@ -47,16 +48,26 @@ import {
     readMouseTable,
 } from './mouse'
 import { powerRecord, readPower } from './power'
-import { radioRecord, readRadio } from './radio'
-import { deviceSensorEntries, readSensorEntries, readSensorTable } from './sensor'
 import {
-    applyAxisShaping,
-    isAxisSetting,
+    displaySettingEntries,
+    encodeDisplays,
+    readDisplayTable,
+    withDisplaySettings,
+} from './display'
+import { radioRecord, readRadio } from './radio'
+import {
+    deviceSensorEntries,
+    mergePartEntries,
+    readPartEntries,
+    readSensorTable,
+} from './sensor'
+import {
     JOYSTICK_ACTION_POSITIONS,
     joystickActionRecords,
-    joystickRecords,
+    joystickTables,
     readJoystickActions,
     readJoystickTable,
+    withAxisParts,
 } from './joystick'
 
 type DevicePersonality = ConfigDevice['personality']
@@ -85,45 +96,52 @@ function addDongle(builder: BlobBuilder, d: DongleSettings): void {
     })
 }
 
-/** The joystick's tables; returns its axes' TBL_PART entries (v2 shaping). */
+/** Adds the joystick's tables; resolves to its TBL_PART entries (the
+ *  inputs' shaping, for firmware with AXES parts). */
 function addJoystick(
     builder: BlobBuilder,
     j: ConfigJoystick,
-    sensors: readonly SensorInfo[] | undefined,
+    axes: AxesLayout | undefined,
 ): SensorTableEntry[] {
-    const rec = joystickRecords(j, sensors)
-    if (rec?.version === 2) builder.joystickTableV2(rec.table)
-    if (rec?.version === 1) builder.joystickTable(rec.table)
+    const { table, parts } = joystickTables(j, axes)
+    if (table) builder.joystickTable(table)
     const actions = joystickActionRecords(j)
     if (actions.length) {
         builder.actionBindingTable(JOYSTICK_ACTION_POSITIONS, actions)
     }
-    return rec?.parts ?? []
+    return parts
 }
 
-/** One TBL_PART from the sensor section and the joystick's shaping; a shaping
- *  entry wins over a sensor-section one for the same part, setting and channel. */
-function mergePartEntries(
-    sensor: readonly SensorTableEntry[],
-    axes: readonly SensorTableEntry[],
-): SensorTableEntry[] {
-    const key = (e: SensorTableEntry): string => `${e.sensor}:${e.id}:${e.ch ?? 0}`
-    const taken = new Set(axes.map(key))
-    return [...sensor.filter((e) => !taken.has(key(e))), ...axes]
+
+/** A device document's displays -> TBL_DISPLAY payload. The schema checks
+ *  the shapes; what it cannot (an unknown value, bad image data, more than a
+ *  device holds) is thrown, so a write never drops a display silently. */
+function displayPayload(displays: readonly ConfigDisplay[]): Uint8Array {
+    const { payload, problems } = encodeDisplays(displays)
+    if (!payload) {
+        throw new Error(
+            problems.map((p) => `displays.${p.path.join('.')}: ${p.message}`).join('; '),
+        )
+    }
+    return payload
 }
 
 /**
  * Device config -> RMBC blob. `configVersion` must be above the device's active
  * one (the firmware refuses a stale commit). The config is assumed validated
  * (parseDeviceConfig / DeviceConfigSchema). `sensors`, the device's own
- * description of its sensors (parts), leaves out a sensor setting it would
- * refuse (compilers/remappr/sensor.ts; the document keeps it) and places a
- * joystick's inputs on their AXES parts for TBL_JOYSTICK v2; without it a
- * joystick gets the legacy v1 table.
+ * description of its sensors, leaves out a sensor setting it would refuse
+ * (compilers/remappr/sensor.ts); the document keeps it. `axes`, where the
+ * device keeps its analog inputs (its AXES parts), puts a joystick's shaping
+ * into TBL_PART beside a v2 TBL_JOYSTICK (compilers/remappr/joystick.ts).
  */
 export function buildRemapprDeviceBlob(
     config: ConfigDevice,
-    opts: { configVersion: number; sensors?: readonly SensorInfo[] },
+    opts: {
+        configVersion: number
+        sensors?: readonly SensorInfo[]
+        axes?: AxesLayout
+    },
 ): Uint8Array {
     const builder = new BlobBuilder().personalityTable(
         Personality[config.personality],
@@ -135,14 +153,16 @@ export function buildRemapprDeviceBlob(
     if (actions.length) builder.actionBindingTable(MOUSE_ACTION_POSITIONS, actions)
     const radio = config.radio ? radioRecord(config.radio) : undefined
     if (radio) builder.radioTable(radio)
-    const axes = config.joystick
-        ? addJoystick(builder, config.joystick, opts.sensors)
-        : []
     const sensor = deviceSensorEntries(config.sensor, opts.sensors).entries
-    const parts = mergePartEntries(sensor, axes)
+    const axes = config.joystick
+        ? addJoystick(builder, config.joystick, opts.axes)
+        : []
+    const shown = displaySettingEntries(config.displays, opts.sensors).entries
+    const parts = mergePartEntries(sensor, shown, axes)
     if (parts.length) builder.sensorTable(parts)
     const power = config.power ? powerRecord(config.power) : undefined
     if (power) builder.powerTable(power)
+    if (config.displays?.length) builder.displayTable(displayPayload(config.displays))
     return builder.finalize(
         config.schemaVersion,
         BLOB_READER_VERSION,
@@ -152,6 +172,8 @@ export function buildRemapprDeviceBlob(
 
 export interface DeviceDecodeResult {
     code: DecodeCodeValue
+    /** What the device's displays show (a blob that carries TBL_DISPLAY). */
+    displays?: ConfigDisplay[]
     /** Which device the blob is for, present iff `code === OK`. */
     personality?: DevicePersonality
     /** The dongle's settings (a dongle blob). */
@@ -205,10 +227,56 @@ const PERSONALITY_BY_CODE: Record<number, DevicePersonality> = {
 }
 
 type Frames = (id: number) => TableFrame | undefined
+
+/** What decoding may know about the device beside the blob. */
+export interface DeviceDecodeOpts {
+    /** Where the device keeps its analog inputs (its AXES parts). */
+    axes?: AxesLayout
+    /** The device's described parts: a mouse document then reads its
+     *  pointer part's settings (else the first part TBL_PART lists). */
+    sensors?: readonly SensorInfo[]
+}
 type DeviceTables = Pick<
     DeviceDecodeResult,
-    'dongle' | 'mouse' | 'radio' | 'joystick' | 'sensor' | 'power'
+    'dongle' | 'mouse' | 'radio' | 'joystick' | 'sensor' | 'power' | 'displays'
 >
+
+/** TBL_DISPLAY, or a decode code; {} when absent. */
+function decodeDisplays(
+    bytes: Uint8Array,
+    table: Frames,
+): Pick<DeviceTables, 'displays'> | DecodeCodeValue {
+    const t = table(TableId.Display)
+    if (!t) return {}
+    if (t.version !== 1) return DecodeCode.TABLE_VER
+    const displays = readDisplayTable(bytes, t.start, t.end)
+    if (typeof displays === 'string') return DecodeCode.TABLE_FRAME
+    // Their parts' own settings ride in TBL_PART.
+    const pt = table(TableId.Sensor)
+    const entries = pt ? readPartEntries(bytes, pt.start, pt.end) : []
+    if (typeof entries === 'string') return DecodeCode.TABLE_FRAME
+    return { displays: withDisplaySettings(displays, entries) }
+}
+
+/** The parts TBL_DISPLAY names (their TBL_PART entries are the displays'). */
+function displayParts(bytes: Uint8Array, table: Frames): ReadonlySet<number> {
+    const t = table(TableId.Display)
+    const displays = t ? readDisplayTable(bytes, t.start, t.end) : []
+    return new Set(typeof displays === 'string' ? [] : displays.map((d) => d.part))
+}
+
+/** A device's own tables beside TBL_POWER and TBL_DISPLAY, or a code. */
+function withShared(
+    bytes: Uint8Array,
+    table: Frames,
+    own: DeviceTables,
+): DeviceTables | DecodeCodeValue {
+    const power = decodePowerTable(bytes, table)
+    if (typeof power === 'number') return power
+    const displays = decodeDisplays(bytes, table)
+    if (typeof displays === 'number') return displays
+    return { ...own, ...power, ...displays }
+}
 
 /** TBL_POWER of a mouse or joystick blob, or a decode code; {} when absent. */
 function decodePowerTable(
@@ -236,7 +304,7 @@ function decodeDongleTables(
 function decodeMouseTables(
     bytes: Uint8Array,
     table: Frames,
-    sensors: readonly SensorInfo[] | undefined,
+    opts: DeviceDecodeOpts,
 ): DeviceTables | DecodeCodeValue {
     const out: DeviceTables = {}
     const mt = table(TableId.Mouse)
@@ -264,63 +332,56 @@ function decodeMouseTables(
         if (st.version < 1 || st.version > 2) return DecodeCode.TABLE_VER
         // The document holds the pointer part's settings: that part when the
         // device's parts are known, else the first part the table lists.
-        const pointer = sensors?.find((x) => x.cls === 'pointer')?.index
-        const sensor = readSensorTable(bytes, st.start, st.end, pointer)
+        const pointer = opts.sensors?.find((x) => x.cls === 'pointer')?.index
+        const sensor = readSensorTable(
+            bytes,
+            st.start,
+            st.end,
+            displayParts(bytes, table),
+            pointer,
+        )
         if (typeof sensor === 'string') return DecodeCode.TABLE_FRAME
         if (sensor.settings) out.sensor = sensor
     }
-    const power = decodePowerTable(bytes, table)
-    if (typeof power === 'number') return power
-    return { ...out, ...power }
+    return withShared(bytes, table, out)
 }
 
-/** A joystick blob's TBL_PART: its axes' shaping onto `joystick`. A joystick
- *  document has no sensor section, so the table's other entries are not read
- *  (and the compiler never writes any). */
-function decodeJoystickParts(
+/** TBL_JOYSTICK, with (v2) its inputs' shaping from TBL_PART; undefined
+ *  when absent. */
+function decodeJoystickTable(
     bytes: Uint8Array,
     table: Frames,
-    joystick: ConfigJoystick | undefined,
-    sensors: readonly SensorInfo[] | undefined,
-): Pick<DeviceTables, 'joystick'> | DecodeCodeValue {
-    const st = table(TableId.Sensor)
-    if (!st) return joystick ? { joystick } : {}
-    if (st.version < 1 || st.version > 2) return DecodeCode.TABLE_VER
-    const entries = readSensorEntries(bytes, st.start, st.end)
+    opts: DeviceDecodeOpts,
+): ConfigJoystick | undefined | DecodeCodeValue {
+    const jt = table(TableId.Joystick)
+    if (!jt) return undefined
+    if (jt.version < 1 || jt.version > 2) return DecodeCode.TABLE_VER
+    const j = readJoystickTable(bytes, jt.start, jt.end, jt.version)
+    if (typeof j === 'string') return DecodeCode.TABLE_FRAME
+    // TBL_PART shaping wins over a v1 table's own, as on the device.
+    const pt = table(TableId.Sensor)
+    if (!pt) return j
+    if (pt.version < 1 || pt.version > 2) return DecodeCode.TABLE_VER
+    const entries = readPartEntries(bytes, pt.start, pt.end)
     if (typeof entries === 'string') return DecodeCode.TABLE_FRAME
-    const shaping = entries.filter((e) => isAxisSetting(e.id))
-    const shaped = shaping.length
-        ? applyAxisShaping(joystick ?? {}, shaping, sensors)
-        : joystick
-    return shaped ? { joystick: shaped } : {}
+    return withAxisParts(j, entries, opts.axes)
 }
 
 function decodeJoystickTables(
     bytes: Uint8Array,
     table: Frames,
-    sensors: readonly SensorInfo[] | undefined,
+    opts: DeviceDecodeOpts,
 ): DeviceTables | DecodeCodeValue {
-    let joystick: ConfigJoystick | undefined
-    const jt = table(TableId.Joystick)
-    if (jt) {
-        if (jt.version < 1 || jt.version > 2) return DecodeCode.TABLE_VER
-        const j = readJoystickTable(bytes, jt.start, jt.end, jt.version)
-        if (typeof j === 'string') return DecodeCode.TABLE_FRAME
-        joystick = j
-    }
-    // TBL_PART shaping wins over a v1 table's own, as on the device.
-    const parts = decodeJoystickParts(bytes, table, joystick, sensors)
-    if (typeof parts === 'number') return parts
+    let joystick = decodeJoystickTable(bytes, table, opts)
+    if (typeof joystick === 'number') return joystick
     const at = table(TableId.ActionBinding)
     if (at) {
         if (at.version !== 1) return DecodeCode.TABLE_VER
         const buttonActions = readJoystickActions(bytes, at)
         if (typeof buttonActions === 'string') return DecodeCode.TABLE_FRAME
-        if (buttonActions) parts.joystick = { ...parts.joystick, buttonActions }
+        if (buttonActions) joystick = { ...joystick, buttonActions }
     }
-    const power = decodePowerTable(bytes, table)
-    if (typeof power === 'number') return power
-    return { ...parts, ...power }
+    return withShared(bytes, table, joystick ? { joystick } : {})
 }
 
 const TABLES_BY_PERSONALITY: Record<
@@ -328,7 +389,7 @@ const TABLES_BY_PERSONALITY: Record<
     (
         bytes: Uint8Array,
         table: Frames,
-        sensors: readonly SensorInfo[] | undefined,
+        opts: DeviceDecodeOpts,
     ) => DeviceTables | DecodeCodeValue
 > = {
     dongle: decodeDongleTables,
@@ -341,12 +402,11 @@ const TABLES_BY_PERSONALITY: Record<
  * header like the firmware, requires a device personality (DecodeCode.DEVICE
  * for a keyboard or unknown one, MISSING when it names none) and well-framed
  * tables. Ranges are not re-checked here; parse the result with the schemas
- * for that. `opts.sensors` (the device's parts) maps a joystick's TBL_PART
- * shaping back to its inputs; without it a single AXES part is assumed.
+ * for that.
  */
 export function decodeRemapprDeviceBlob(
     bytes: Uint8Array,
-    opts: { sensors?: readonly SensorInfo[] } = {},
+    opts: DeviceDecodeOpts = {},
 ): DeviceDecodeResult {
     const parsed = readBlobFrames(bytes)
     if (parsed.code !== DecodeCode.OK) return { code: parsed.code }
@@ -360,7 +420,7 @@ export function decodeRemapprDeviceBlob(
 
     let tables: ReturnType<(typeof TABLES_BY_PERSONALITY)[typeof personality]>
     try {
-        tables = TABLES_BY_PERSONALITY[personality](bytes, table, opts.sensors)
+        tables = TABLES_BY_PERSONALITY[personality](bytes, table, opts)
     } catch (e) {
         if (e instanceof FrameOverrun) return { code: DecodeCode.TABLE_FRAME }
         throw e

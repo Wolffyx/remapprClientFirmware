@@ -5,12 +5,22 @@
 // decoding its blob, changing the config and compiling it again, so a table
 // the decoder does not read into the config would be dropped by the first save.
 // carryUnmodeledTables appends those tables, byte for byte, from the blob read
-// off the device to the freshly compiled one.
+// off the device to the freshly compiled one. TBL_PART is the keymap's only in
+// part (matrix timing, the shown displays' settings), so it is kept per entry.
 
 import type { DiagnosticBag } from '../../diagnostics'
-import { BLOB_HEADER_LEN, CLUSTER_PSK_LEN, crc32, TableId } from './blobWriter'
+import {
+    BLOB_HEADER_LEN,
+    CLUSTER_PSK_LEN,
+    crc32,
+    type SensorTableEntry,
+    TableId,
+} from './blobWriter'
 import { DecodeCode, readBlobFrames, type TableFrame } from './decode'
 import { readDisplayTable } from './display'
+import { MATRIX_TIMING_IDS } from './matrix'
+import { mergePartEntries, readPartEntries } from './sensor'
+import { sliderTableReadable } from './slider'
 
 /** Tables the keymap decoder reads into the config and the compiler writes back
  *  from it. Every other table, the reserved and unknown ids included, is
@@ -38,6 +48,7 @@ const MODELED_TABLES: ReadonlySet<number> = new Set([
     TableId.ActionBinding,
     TableId.Autocorrect,
     TableId.Display,
+    TableId.Slider,
 ])
 
 /** TBL_RGB flags bit 0: one color map per layer. The config models only a
@@ -48,13 +59,17 @@ const RGB_FLAG_PER_LAYER = 0x01
 export function isCarriedTable(blob: Uint8Array, t: TableFrame): boolean {
     if (!MODELED_TABLES.has(t.id)) return true
     if (t.id === TableId.Display) return !isShownDisplay(blob, t)
+    if (t.id === TableId.Slider) return !sliderTableReadable(blob, t)
     return t.id === TableId.Rgb && t.end - t.start >= 2 && isPerLayerRgb(blob, t)
 }
 
-/** A TBL_DISPLAY the decoder read into `node.display`; any other (a newer
- *  version, a widget this client cannot show) is carried as read. */
+/** A TBL_DISPLAY the decoder read into `node.displays`; any other (a newer
+ *  version, a widget this client cannot show) is carried as read. So is an
+ *  empty table (it clears the screens): `node.displays: []` writes none. */
 function isShownDisplay(blob: Uint8Array, t: TableFrame): boolean {
-    return t.version === 1 && typeof readDisplayTable(blob, t) === 'object'
+    if (t.version !== 1) return false
+    const shown = readDisplayTable(blob, t.start, t.end)
+    return typeof shown === 'object' && shown.length > 0
 }
 
 function isPerLayerRgb(blob: Uint8Array, t: TableFrame): boolean {
@@ -88,7 +103,9 @@ function carryRefusal(
             'would replace it with zeros'
         )
     }
-    // Slider steps name BEHAVIOR-table indices, which a recompile renumbers.
+    // Slider steps name BEHAVIOR-table indices, which a recompile renumbers
+    // (only a table the decoder could not read into layers[].sliders is
+    // carried).
     if (t.id === TableId.Slider && !behaviorsMatch) {
         return (
             'the device has slider bindings, which name keymap behaviors by ' +
@@ -125,39 +142,110 @@ export function carryUnmodeledTables(
         behaviors(blob, to.frames),
     )
 
-    const carried: TableFrame[] = []
+    const extra: Uint8Array[] = []
     for (const t of from.frames) {
+        if (t.id === TableId.Sensor) continue // per entry, below
         if (!isCarriedTable(original, t) || written.has(t.id)) continue
         const refusal = carryRefusal(original, t, behaviorsMatch)
         if (refusal) {
             diag.error(`table ${t.id}: ${refusal}`)
             continue
         }
-        carried.push(t)
+        extra.push(frameBytes(original, t))
     }
-    return carried.length > 0 ? appendFrames(blob, original, carried) : blob
+    const part = partTableCarry(original, from.frames, blob, to.frames)
+    const kept = part ? to.frames.filter((f) => f.id !== TableId.Sensor) : to.frames
+    if (part) extra.push(part)
+    return extra.length > 0 ? withFrames(blob, kept, extra) : blob
 }
 
-/** `blob` with the given frames of `source` appended, header length and CRC
- *  recomputed. */
-function appendFrames(
+const frameBytes = (b: Uint8Array, t: TableFrame): Uint8Array =>
+    b.subarray(t.start - 8, t.end) // header + payload
+
+/** The parts whose channel-0 settings the decoder reads into `node.displays`:
+ *  those a shown TBL_DISPLAY names. */
+function shownDisplayParts(blob: Uint8Array, frames: TableFrame[]): Set<number> {
+    const t = frames.find((f) => f.id === TableId.Display)
+    if (!t || !isShownDisplay(blob, t)) return new Set()
+    const shown = readDisplayTable(blob, t.start, t.end)
+    return new Set(typeof shown === 'string' ? [] : shown.map((d) => d.part))
+}
+
+/** An entry the keymap reads back and writes again: matrix timing, or a
+ *  shown display part's setting. A save leaves those to the compile. */
+function isModeledPartEntry(e: SensorTableEntry, displays: ReadonlySet<number>): boolean {
+    if ((e.ch ?? 0) !== 0) return false
+    return MATRIX_TIMING_IDS.has(e.id) || displays.has(e.sensor)
+}
+
+/**
+ * The TBL_PART frame a save writes, or undefined to leave the compiled blob's
+ * as it is. The device's entries the keymap does not model (a sensor's
+ * defaults, eager-press, a part's other channels) are kept beside the
+ * compiled ones; a compiled entry wins for the same part, setting and
+ * channel. A table this client cannot read is carried whole when the compile
+ * wrote none.
+ */
+function partTableCarry(
+    original: Uint8Array,
+    from: TableFrame[],
     blob: Uint8Array,
-    source: Uint8Array,
-    frames: TableFrame[],
-): Uint8Array {
-    const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength)
-    const bodyLen = dv.getUint32(12, true)
-    const extra = frames.reduce((n, t) => n + 8 + (t.end - t.start), 0)
-    const out = new Uint8Array(BLOB_HEADER_LEN + bodyLen + extra)
-    out.set(blob.subarray(0, BLOB_HEADER_LEN + bodyLen), 0)
-    let off = BLOB_HEADER_LEN + bodyLen
-    for (const t of frames) {
-        const frame = source.subarray(t.start - 8, t.end) // header + payload
-        out.set(frame, off)
-        off += frame.length
+    to: TableFrame[],
+): Uint8Array | undefined {
+    const ot = from.find((f) => f.id === TableId.Sensor)
+    if (!ot) return undefined
+    const ct = to.find((f) => f.id === TableId.Sensor)
+    const all = readPartEntries(original, ot.start, ot.end)
+    if (typeof all === 'string') return ct ? undefined : frameBytes(original, ot)
+    const displays = shownDisplayParts(original, from)
+    const keep = all.filter((e) => !isModeledPartEntry(e, displays))
+    if (!ct) {
+        if (keep.length === 0) return undefined
+        // Nothing dropped: the device's table as read, byte for byte.
+        if (keep.length === all.length) return frameBytes(original, ot)
+        return partFrame(keep, ot.version)
     }
-    const odv = new DataView(out.buffer)
-    odv.setUint32(12, bodyLen + extra, true)
-    odv.setUint32(16, crc32(out.subarray(BLOB_HEADER_LEN)), true)
+    const compiled = readPartEntries(blob, ct.start, ct.end)
+    if (typeof compiled === 'string' || keep.length === 0) return undefined
+    return partFrame(mergePartEntries(keep, compiled), Math.max(ot.version, ct.version))
+}
+
+/** A TBL_PART frame (header + payload) holding `entries`. */
+function partFrame(entries: readonly SensorTableEntry[], version: number): Uint8Array {
+    const channels = entries.some((e) => (e.ch ?? 0) !== 0)
+    const len = 2 + entries.length * 8
+    const out = new Uint8Array(8 + len)
+    const dv = new DataView(out.buffer)
+    dv.setUint16(0, TableId.Sensor, true)
+    dv.setUint16(2, Math.max(version, channels ? 2 : 1), true)
+    dv.setUint32(4, len, true)
+    dv.setUint16(8, entries.length, true)
+    entries.forEach((e, i) => {
+        const at = 10 + i * 8
+        out.set([e.sensor, e.id, e.ch ?? 0, 0], at)
+        dv.setUint32(at + 4, e.value >>> 0, true)
+    })
+    return out
+}
+
+/** `blob`'s header with its `frames` (in order) and then `extra` (whole
+ *  frames), body length and CRC recomputed. */
+function withFrames(
+    blob: Uint8Array,
+    frames: readonly TableFrame[],
+    extra: readonly Uint8Array[],
+): Uint8Array {
+    const parts = [...frames.map((t) => frameBytes(blob, t)), ...extra]
+    const bodyLen = parts.reduce((n, f) => n + f.length, 0)
+    const out = new Uint8Array(BLOB_HEADER_LEN + bodyLen)
+    out.set(blob.subarray(0, BLOB_HEADER_LEN), 0)
+    let off = BLOB_HEADER_LEN
+    for (const f of parts) {
+        out.set(f, off)
+        off += f.length
+    }
+    const dv = new DataView(out.buffer)
+    dv.setUint32(12, bodyLen, true)
+    dv.setUint32(16, crc32(out.subarray(BLOB_HEADER_LEN)), true)
     return out
 }

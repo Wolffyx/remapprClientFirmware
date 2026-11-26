@@ -9,9 +9,15 @@
 import type { ExportedFile } from '../../../types'
 import type { DiagnosticBag } from '../../diagnostics'
 import { resolveController, zmkSplitShields } from '../../controller'
-import { deriveMatrix, matrixSplit } from '../../matrix'
+import { deriveMatrix, matrixDiodeDirection, matrixSplit } from '../../matrix'
 import type { ConfigKeymap } from '../../types'
-import { dtsString, sanitize } from './maps'
+import {
+    physicalLayoutNode,
+    type ZmkLayout,
+    type ZmkLayoutPlan,
+} from './layouts'
+import { sanitize } from './maps'
+import { emitBattery, emitScreen } from '../zephyrParts'
 import {
     emitBacklightPwm,
     emitChosen,
@@ -32,52 +38,54 @@ function denseRank(values: number[]): Map<number, number> {
     return new Map(sorted.map((v, i) => [v, i]))
 }
 
-// Emit a `zmk,matrix-transform`. With a builder-supplied electrical transform
+interface MatrixCells {
+    /** One RC per config key, in key order. */
+    cells: { row: number; col: number }[]
+    rows: number
+    columns: number
+    note: string
+}
+
+// The `zmk,matrix-transform` cells. With a builder-supplied electrical transform
 // (`keyboard.hardware.transform`) the real kscan wiring is used verbatim. Without
 // one, the map is DERIVED from physical geometry: dense-rank distinct y → row and
 // distinct x → col so the matrix is contiguous (no gaps). The derived map is a
 // scaffold, not the true electrical matrix (ZMK does not expose kscan wiring over
 // the connection) — so it is warned. Either way the map order matches the keymap
 // binding order (physical-layout key order), which is what ZMK requires.
-function emitMatrixTransform(
-    config: ConfigKeymap,
-    diag: DiagnosticBag,
-): { lines: string[]; label: string } {
+function matrixCells(config: ConfigKeymap, diag: DiagnosticBag): MatrixCells {
     const real = config.keyboard.hardware?.transform
-    let cells: { row: number; col: number }[]
-    let rows: number
-    let columns: number
-    let note: string
-
     if (real) {
-        cells = real.map.map(([row, col]) => ({ row, col }))
-        rows = real.rows
-        columns = real.columns
-        note = '/* From the board electrical wiring (builder). */'
-    } else {
-        const rowRank = denseRank(
-            config.keyboard.keys.map((k) => Math.round(k.y)),
-        )
-        const colRank = denseRank(
-            config.keyboard.keys.map((k) => Math.round(k.x)),
-        )
-        cells = config.keyboard.keys.map((k) => ({
+        return {
+            cells: real.map.map(([row, col]) => ({ row, col })),
+            rows: real.rows,
+            columns: real.columns,
+            note: '/* From the board electrical wiring (builder). */',
+        }
+    }
+    const rowRank = denseRank(config.keyboard.keys.map((k) => Math.round(k.y)))
+    const colRank = denseRank(config.keyboard.keys.map((k) => Math.round(k.x)))
+    diag.warn(
+        'matrix-transform RC() values are derived from physical key position, ' +
+            'not the board kscan wiring (ZMK does not expose it over the ' +
+            'connection). Verify/replace them against your board before flashing.',
+        ['keyboard', 'keys'],
+    )
+    return {
+        cells: config.keyboard.keys.map((k) => ({
             row: rowRank.get(Math.round(k.y)) ?? 0,
             col: colRank.get(Math.round(k.x)) ?? 0,
-        }))
-        rows = rowRank.size
-        columns = colRank.size
-        note = '/* DERIVED from key geometry — confirm against your kscan. */'
-        diag.warn(
-            'matrix-transform RC() values are derived from physical key position, ' +
-                'not the board kscan wiring (ZMK does not expose it over the ' +
-                'connection). Verify/replace them against your board before flashing.',
-            ['keyboard', 'keys'],
-        )
+        })),
+        rows: rowRank.size,
+        columns: colRank.size,
+        note: '/* DERIVED from key geometry — confirm against your kscan. */',
     }
+}
 
-    // One line per matrix row: break whenever the row index changes (keymap
-    // order is row-major for the common case), mirroring a hand-written map.
+// One `zmk,matrix-transform` node for `layout`: its keys' cells, one line per
+// matrix row (break whenever the row index changes — keymap order is row-major
+// for the common case), mirroring a hand-written map.
+function transformNode(layout: ZmkLayout, m: MatrixCells): string[] {
     const lines: string[] = []
     let current = -1
     let line: string[] = []
@@ -85,7 +93,8 @@ function emitMatrixTransform(
         if (line.length) lines.push('            ' + line.join(' '))
         line = []
     }
-    for (const c of cells) {
+    for (const ki of layout.keys) {
+        const c = m.cells[ki] ?? { row: 0, col: 0 }
         if (c.row !== current) {
             flush()
             current = c.row
@@ -93,31 +102,33 @@ function emitMatrixTransform(
         line.push(`RC(${c.row},${c.col})`)
     }
     flush()
-
-    return {
-        label: 'default_transform',
-        lines: [
-            `    default_transform: keymap_transform_0 {`,
-            `        compatible = "zmk,matrix-transform";`,
-            `        ${note}`,
-            `        columns = <${columns}>;`,
-            `        rows = <${rows}>;`,
-            `        map = <`,
-            ...lines,
-            `        >;`,
-            `    };`,
-        ],
-    }
+    return [
+        `    ${layout.transformLabel}: ${layout.transformNode} {`,
+        `        compatible = "zmk,matrix-transform";`,
+        `        ${m.note}`,
+        `        columns = <${m.columns}>;`,
+        `        rows = <${m.rows}>;`,
+        `        map = <`,
+        ...lines,
+        `        >;`,
+        `    };`,
+    ]
 }
 
-const keyAttrLines = (config: ConfigKeymap): string[] => {
-    const cu = (n: number): number => Math.round(n * 100) // key units -> centi-units
-    return config.keyboard.keys.map((k, i) => {
-        const attrs =
-            `<&key_physical_attrs ${cu(k.w)} ${cu(k.h)} ${cu(k.x)} ${cu(k.y)} ` +
-            `${cu(k.r)} ${cu(k.rx ?? 0)} ${cu(k.ry ?? 0)}>`
-        return `            ${i === 0 ? '=' : ','} ${attrs}`
-    })
+// Every physical layout + its transform, then the position map (variants only).
+function layoutNodes(
+    config: ConfigKeymap,
+    plan: ZmkLayoutPlan,
+    m: MatrixCells,
+): string[] {
+    const blocks = [
+        ...plan.layouts.flatMap((l) => [
+            physicalLayoutNode(config, l),
+            transformNode(l, m),
+        ]),
+        ...(plan.positionMap.length ? [[...plan.positionMap]] : []),
+    ]
+    return blocks.flatMap((b, i) => (i ? [``, ...b] : b))
 }
 
 // Emit the `zmk,physical-layout` node from the config geometry + a
@@ -128,11 +139,10 @@ const keyAttrLines = (config: ConfigKeymap): string[] => {
 export function emitOverlay(
     config: ConfigKeymap,
     diag: DiagnosticBag,
+    plan: ZmkLayoutPlan,
 ): ExportedFile {
     const hw = config.keyboard.hardware
-    const keyLines = keyAttrLines(config)
-
-    const transform = emitMatrixTransform(config, diag)
+    const matrix = matrixCells(config, diag)
     // Real kscan wins; else synthesize one from friendly pin labels.
     const explicitKscan = hw?.kscan ? emitKscan(hw.kscan) : null
     const synthKscan = explicitKscan ? null : emitSynthKscan(config, diag)
@@ -174,7 +184,7 @@ export function emitOverlay(
 
     // Full-parity peripheral nodes (gated on the builder's hardware fields).
     const extPowerNode = hw?.extPowerCtrl
-        ? emitExtPowerGeneric(hw.extPowerCtrl, diag)
+        ? emitExtPowerGeneric(hw.extPowerCtrl, diag, ctrl.board)
         : []
     const bl = hw?.backlightPwm
         ? emitBacklightPwm(hw.backlightPwm, diag, ctrl.board)
@@ -195,34 +205,27 @@ export function emitOverlay(
         ...(ws ? [``, ...ws.block] : []),
         ...(studio.length ? [``, ...studio] : []),
     ]
-    const chosen = emitChosen(hasKscan, hw)
+    const chosen = emitChosen(hasKscan, hw, plan.layouts[0]!.label)
+    const parts = partBlocks(config, diag)
 
     const lines = [
         ...header,
         `#include <physical_layouts.dtsi>`,
         `#include <dt-bindings/zmk/matrix_transform.h>`,
-        ...(hasKscan || hw?.extPowerCtrl
+        ...(hasKscan || hw?.extPowerCtrl || parts.length
             ? [`#include <dt-bindings/gpio/gpio.h>`]
             : []),
         ...(hw?.ws2812 ? [`#include <zephyr/dt-bindings/led/led.h>`] : []),
         ``,
         `/ {`,
         ...(chosen.length ? [...chosen, ``] : []),
-        `    physical_layout_default: physical_layout_default {`,
-        `        compatible = "zmk,physical-layout";`,
-        `        display-name = "${dtsString(config.keyboard.name)}";`,
-        `        transform = <&${transform.label}>;`,
-        `        keys`,
-        ...keyLines,
-        `            ;`,
-        `    };`,
-        ``,
-        ...transform.lines,
+        ...layoutNodes(config, plan, matrix),
         ...(kscanLines ? [``, ...kscanLines] : []),
         ...rootPeripherals,
         `};`,
         ...pinctrlBlock,
         ...peripheralBlocks,
+        ...parts,
         ``,
         ...notGeneratedBlock(hasKscan, hw),
         ``,
@@ -234,6 +237,14 @@ export function emitOverlay(
     }
 }
 
+/** The board's screen and battery divider, each after a blank line (the
+ *  overlay header includes gpio.h whenever there are any). */
+function partBlocks(config: ConfigKeymap, diag: DiagnosticBag): string[] {
+    return [emitScreen(config, 'zmk', diag), emitBattery(config, 'zmk', diag)].flatMap((f) =>
+        f.nodes.length ? ['', ...f.nodes] : [],
+    )
+}
+
 // Emit a real ZMK SPLIT shield: a shared `<base>.dtsi` (physical-layout + unified
 // matrix-transform + a rows-only kscan + chosen + peripherals) and two thin
 // overlays `<base>_left.overlay` / `<base>_right.overlay` that #include it and set
@@ -243,10 +254,11 @@ export function emitOverlay(
 export function emitSplitOverlay(
     config: ConfigKeymap,
     diag: DiagnosticBag,
+    plan: ZmkLayoutPlan,
 ): ExportedFile[] {
     const split = zmkSplitShields(config)
     const groups = matrixSplit(config.keyboard.keys)
-    if (!split || groups.length !== 2) return [emitOverlay(config, diag)]
+    if (!split || groups.length !== 2) return [emitOverlay(config, diag, plan)]
     const [left, right] = groups
     const L = left.columns
     const hw = config.keyboard.hardware
@@ -256,37 +268,24 @@ export function emitSplitOverlay(
     // emitKscan already does). Forcing col2row on a row2col board emits a wrong
     // kscan that won't register keys. The pin roles flip with the direction:
     // col2row → rows are inputs / cols outputs; row2col → rows outputs / cols inputs.
-    const diodeDirection =
-        hw?.kscan?.type === 'matrix' ? hw.kscan.diodeDirection : 'col2row'
+    const diodeDirection = matrixDiodeDirection(config)
     const rowRole = diodeDirection === 'col2row' ? 'input' : 'output'
     const colRole = diodeDirection === 'col2row' ? 'output' : 'input'
 
     // Unified transform from the SAME derivation as the split groups, so the
     // right half's col-offset (= left column count) lines up with the map.
     const dm = deriveMatrix(config.keyboard.keys)
-    const mapLines: string[] = []
-    let curRow = -1
-    let row: string[] = []
-    const flushRow = (): void => {
-        if (row.length) mapLines.push('            ' + row.join(' '))
-        row = []
-    }
-    for (const [r, c] of dm.map) {
-        if (r !== curRow) {
-            flushRow()
-            curRow = r
-        }
-        row.push(`RC(${r},${c})`)
-    }
-    flushRow()
     diag.warn(
         'split matrix-transform RC() values are derived from physical key position, ' +
             'not the board kscan wiring — verify them against your halves before flashing.',
         ['keyboard', 'keys'],
     )
-    const transformLabel = 'default_transform'
-
-    const keyLines = keyAttrLines(config)
+    const matrix: MatrixCells = {
+        cells: dm.map.map(([row, col]) => ({ row, col })),
+        rows: dm.rows,
+        columns: dm.columns,
+        note: '/* DERIVED from key geometry — confirm against your kscan. */',
+    }
 
     // Per-half col labels: slice the unified col pins; an under-filled right half
     // reuses the left's (identical-half boards share the same column pins). Pad to
@@ -320,7 +319,7 @@ export function emitSplitOverlay(
     // Peripherals live in the shared dtsi → present on both halves (correct for
     // underglow/backlight/ext-power; the studio CDC is only used by the half on USB).
     const extPowerNode = hw?.extPowerCtrl
-        ? emitExtPowerGeneric(hw.extPowerCtrl, diag)
+        ? emitExtPowerGeneric(hw.extPowerCtrl, diag, board)
         : []
     const bl = hw?.backlightPwm
         ? emitBacklightPwm(hw.backlightPwm, diag, board)
@@ -340,7 +339,8 @@ export function emitSplitOverlay(
         ...(ws ? [``, ...ws.block] : []),
         ...(studio.length ? [``, ...studio] : []),
     ]
-    const chosen = emitChosen(true, hw)
+    const chosen = emitChosen(true, hw, plan.layouts[0]!.label)
+    const parts = partBlocks(config, diag)
 
     const dtsi = [
         `/* Generated by remappr — SHARED split base for ${config.keyboard.name}.`,
@@ -354,30 +354,14 @@ export function emitSplitOverlay(
         ``,
         `/ {`,
         ...(chosen.length ? [...chosen, ``] : []),
-        `    physical_layout_default: physical_layout_default {`,
-        `        compatible = "zmk,physical-layout";`,
-        `        display-name = "${dtsString(config.keyboard.name)}";`,
-        `        transform = <&${transformLabel}>;`,
-        `        keys`,
-        ...keyLines,
-        `            ;`,
-        `    };`,
-        ``,
-        `    ${transformLabel}: keymap_transform_0 {`,
-        `        compatible = "zmk,matrix-transform";`,
-        `        /* DERIVED from key geometry — confirm against your kscan. */`,
-        `        columns = <${dm.columns}>;`,
-        `        rows = <${dm.rows}>;`,
-        `        map = <`,
-        ...mapLines,
-        `        >;`,
-        `    };`,
+        ...layoutNodes(config, plan, matrix),
         ``,
         ...kscanRows,
         ...rootPeripherals,
         `};`,
         ...pinctrlBlock,
         ...peripheralBlocks,
+        ...parts,
         ``,
         ...notGeneratedBlock(true, hw),
         ``,
@@ -397,10 +381,12 @@ export function emitSplitOverlay(
         ` * ${right.columns} columns into the right block of the ${dm.columns}-column transform. */`,
         `#include "${split.base}.dtsi"`,
         ``,
-        `&${transformLabel} {`,
-        `    col-offset = <${L}>;`,
-        `};`,
-        ``,
+        ...plan.layouts.flatMap((l) => [
+            `&${l.transformLabel} {`,
+            `    col-offset = <${L}>;`,
+            `};`,
+            ``,
+        ]),
         `&kscan0 {`,
         ...resolvedGpioListProp('col-gpios', rightCols, board, colRole, diag),
         `};`,
